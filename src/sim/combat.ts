@@ -1,14 +1,17 @@
 /**
- * The combat model. Small-arms fire is probabilistic but physical: rounds take
- * real travel time, misses land somewhere and suppress, cover comes from the
- * actual terrain (trench, parapet state, shell holes), and night/fog/gas-mask
- * all degrade shooting. Explosions damage BOTH sides, deform the terrain, and
- * knock down parapets — your own mortars can bury your own charge.
+ * The combat model. Small-arms fire is fully physical: every round is a
+ * simulated bullet that leaves a muzzle, drops under gravity, and stops on
+ * whatever it actually strikes — parapet, mud, man or armour. Marksmanship
+ * (accuracy, veterancy, suppression, night, fog, respirators) sets the
+ * angular spread of the shot; the world decides the rest. Explosions damage
+ * BOTH sides, deform the terrain, and knock down parapets — your own mortars
+ * can bury your own charge.
  */
 import type { Enemy, Soldier, Team, Unit, Vehicle } from '../core/types'
-import { ARMOUR_MULT, COMBAT, ENEMY_DEFS, UNIT_DEFS, VET_ACC_BONUS } from '../core/config'
-import { dist2, fx, snd, type Ctx, type PendingShot } from './sim'
+import { COMBAT, ENEMY_DEFS, UNIT_DEFS, VET_ACC_BONUS } from '../core/config'
+import { dist2, fx, snd, type Ctx } from './sim'
 import { damageParapet, parapetFactor, sectionAt } from './trench'
+import { fireBullet, muzzlePos, standSurface, G } from './ballistics'
 
 // ---------------------------------------------------------------------------
 // Geometry / perception helpers
@@ -21,10 +24,6 @@ export function stanceHeight(st: Soldier['stance']): number {
     case 'prone': return 0.4
     case 'dead': return 0.2
   }
-}
-
-export function eyePos(ctx: Ctx, s: Soldier): { x: number; y: number; z: number } {
-  return { x: s.pos.x, y: ctx.terrain.heightAt(s.pos.x, s.pos.z) + stanceHeight(s.stance), z: s.pos.z }
 }
 
 /** Is this point illuminated right now? (day, flare overhead, searchlight beam) */
@@ -88,106 +87,59 @@ export function fireSmallArms(ctx: Ctx, spec: ShotSpec): void {
   const tgt = spec.target.ref
   const tx = spec.target.kind === 'soldier' ? tgt.pos.x : (tgt as Vehicle).pos.x
   const tz = spec.target.kind === 'soldier' ? tgt.pos.z : (tgt as Vehicle).pos.z
-  const d = Math.sqrt(dist2(sh.pos.x, sh.pos.z, tx, tz))
+  const d = Math.max(0.5, Math.sqrt(dist2(sh.pos.x, sh.pos.z, tx, tz)))
 
-  // -- hit probability ------------------------------------------------------
-  let p = spec.accuracy
-  p *= Math.max(0.08, 1.12 - 0.62 * Math.pow(d / Math.max(1, spec.range), 1.5))
-  if (spec.vetLevel) p *= 1 + spec.vetLevel * VET_ACC_BONUS
-  // Shooter state
-  p *= 1 - Math.min(0.6, sh.suppression * 0.65)
-  if (sh.masked) p *= ctx.mods.maskAccPenalty
-  // Visibility
+  // -- marksmanship → angular spread ----------------------------------------
+  // Everything that used to shave hit probability now widens the shot group.
+  let q = spec.accuracy
+  if (spec.vetLevel) q *= 1 + spec.vetLevel * VET_ACC_BONUS
+  q *= 1 - Math.min(0.6, sh.suppression * 0.65)
+  if (sh.masked) q *= ctx.mods.maskAccPenalty
   const w = ctx.weather.state
-  if (w.night && !litAt(ctx, tx, tz)) p *= COMBAT.nightAccMult
+  if (w.night && !litAt(ctx, tx, tz)) q *= COMBAT.nightAccMult
   if (w.fog > 0.15) {
     const effRange = spec.range * (1 - 0.45 * w.fog)
-    if (d > effRange) p *= 0.25
+    if (d > effRange) q *= 0.4
   }
-  // Target protection
-  if (spec.target.kind === 'soldier') {
-    p *= 1 - coverFor(ctx, tgt as Soldier)
-  } else {
-    p = Math.min(0.95, p * 1.9) // a tank is hard to miss
-  }
+  // Range strain beyond what pure dispersion gives (breathing, rangefinding).
+  q *= Math.max(0.35, 1.05 - 0.4 * (d / Math.max(1, spec.range)))
+  const spread = COMBAT.baseSpreadRad / Math.max(0.1, q)
 
-  const hit = ctx.rand() < p
+  // -- muzzle, aim point, gravity holdover ------------------------------------
+  const from = muzzlePos(ctx, sh)
+  // Aim at what is actually visible: head-and-shoulders for a man behind a
+  // parapet, centre of mass in the open.
+  const inTrench = ctx.terrain.trenchAt(tx, tz) > 0.45
+  const aimY = spec.target.kind === 'soldier'
+    ? standSurface(ctx, tx, tz) + stanceHeight((tgt as Soldier).stance) * (inTrench ? 0.85 : 0.62)
+    : ctx.terrain.heightAt(tx, tz) + 1.5
+  const tof = d / COMBAT.bulletSpeed
+  const holdover = 0.5 * G * tof * tof // trained shooters compensate for drop
+  let dirX = tx - from.x, dirY = aimY + holdover - from.y, dirZ = tz - from.z
+  const dl = Math.hypot(dirX, dirY, dirZ) || 1
+  dirX /= dl; dirY /= dl; dirZ /= dl
 
-  // -- damage ---------------------------------------------------------------
-  let dmg = spec.damage * (0.8 + ctx.rand() * 0.4)
-  if (spec.target.kind === 'vehicle') {
-    dmg *= ARMOUR_MULT[Math.min(2, (tgt as Vehicle).armour)]
-  }
+  fireBullet(ctx, {
+    team: spec.team,
+    from: { x: from.x + dirX * 0.8, y: from.y + dirY * 0.8, z: from.z + dirZ * 0.8 },
+    dir: { x: dirX, y: dirY, z: dirZ },
+    speed: COMBAT.bulletSpeed,
+    damage: spec.damage,
+    spread,
+    category: spec.category,
+    shooterUnitId: spec.shooterUnitId,
+    shooterId: sh.id,
+    tracer: spec.tracer || ctx.rand() < COMBAT.tracerFraction,
+  })
 
   // -- muzzle + report ------------------------------------------------------
-  const eye = eyePos(ctx, sh)
-  const dirX = (tx - sh.pos.x) / Math.max(0.01, d)
-  const dirZ = (tz - sh.pos.z) / Math.max(0.01, d)
-  fx(s, { t: 'muzzle', x: eye.x + dirX * 0.8, y: eye.y, z: eye.z + dirZ * 0.8, dirX, dirZ })
-  if (spec.sound) snd(s, { name: spec.sound, x: eye.x, y: eye.y, z: eye.z })
-
-  // -- impact point ----------------------------------------------------------
-  let ix = tx, iz = tz
-  const targetH = spec.target.kind === 'soldier'
-    ? ctx.terrain.heightAt(tx, tz) + stanceHeight((tgt as Soldier).stance) * 0.7
-    : ctx.terrain.heightAt(tx, tz) + 1.6
-  let iy = targetH
-  if (!hit) {
-    const miss = 1 + ctx.rand() * 3
-    const ang = ctx.rand() * Math.PI * 2
-    ix += Math.cos(ang) * miss
-    iz += Math.sin(ang) * miss
-    iy = ctx.terrain.heightAt(ix, iz) + 0.05
-  }
-
-  if (spec.tracer || ctx.rand() < 0.25) {
-    fx(s, { t: 'tracer', x1: eye.x, y1: eye.y, z1: eye.z, x2: ix, y2: iy, z2: iz, speed: COMBAT.bulletSpeed })
-  }
-
-  s.pendingShots.push({
-    t: s.time + d / COMBAT.bulletSpeed,
-    targetKind: spec.target.kind,
-    targetId: spec.target.kind === 'soldier' ? (tgt as Soldier).id : (tgt as Vehicle).id,
-    hit, damage: dmg, category: spec.category, team: spec.team,
-    x: ix, y: iy, z: iz,
-    shooterUnitId: spec.shooterUnitId,
-  })
+  fx(s, { t: 'muzzle', x: from.x + dirX * 0.8, y: from.y, z: from.z + dirZ * 0.8, dirX, dirZ })
+  if (spec.sound) snd(s, { name: spec.sound, x: from.x, y: from.y, z: from.z })
 
   // MG bursts suppress the whole beaten zone immediately.
   if (spec.suppress > 0.08) {
     suppressArea(ctx, tx, tz, 4.5, spec.suppress * 0.6, spec.team)
   }
-}
-
-export function resolvePendingShots(ctx: Ctx): void {
-  const { s } = ctx
-  let w = 0
-  for (let i = 0; i < s.pendingShots.length; i++) {
-    const shot = s.pendingShots[i]
-    if (shot.t > s.time) { s.pendingShots[w++] = shot; continue }
-    if (shot.hit) {
-      if (shot.targetKind === 'soldier') {
-        const tgt = findSoldier(ctx, shot.targetId)
-        if (tgt && tgt.hp > 0) {
-          damageSoldier(ctx, tgt, shot.damage, shot.category, shot.team, shot.shooterUnitId)
-        }
-      } else {
-        const v = s.vehicles.find((v) => v.id === shot.targetId)
-        if (v && !v.dead) {
-          if (shot.damage <= 0.5) {
-            snd(s, { name: 'ricochet', x: shot.x, y: shot.y, z: shot.z, gain: 0.5 })
-          } else {
-            damageVehicle(ctx, v, shot.damage, shot.category, shot.team, shot.shooterUnitId)
-          }
-        }
-      }
-    } else {
-      // A miss is not nothing: dirt kicks up, heads go down.
-      if (ctx.rand() < 0.4) fx(s, { t: 'dirt', x: shot.x, y: shot.y, z: shot.z, amount: 0.3 })
-      suppressNear(ctx, shot.x, shot.z, 2.5, 0.12, shot.team)
-    }
-  }
-  s.pendingShots.length = w
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +325,7 @@ export function explode(ctx: Ctx, x: number, z: number, radius: number, damage: 
     if (v.dead) continue
     const d2 = dist2(v.pos.x, v.pos.z, x, z)
     if (d2 > (radius + 3) * (radius + 3)) continue
-    const isAP = o.category === 'artillery' || o.category === 'mine'
+    const isAP = o.category === 'artillery' || o.category === 'enemyart' || o.category === 'mine'
     const mult = isAP ? 1 : 0.3
     damageVehicle(ctx, v, blastDamage(damage, Math.sqrt(d2), radius + 3) * mult, o.category, o.team, o.shooterUnitId ?? -1)
   }
@@ -428,10 +380,6 @@ export function suppressArea(ctx: Ctx, x: number, z: number, radius: number, amo
   }
 }
 
-function suppressNear(ctx: Ctx, x: number, z: number, radius: number, amount: number, shooterTeam: Team): void {
-  suppressArea(ctx, x, z, radius, amount, shooterTeam)
-}
-
 function* alliesNear(ctx: Ctx, team: Team, x: number, z: number, radius: number): Generator<Soldier> {
   const r2 = radius * radius
   if (team === 'german') {
@@ -461,11 +409,21 @@ export function soldierUpkeep(ctx: Ctx, sol: Soldier, dt: number, officerNear: b
   }
 }
 
-/** Weapon-appropriate stance given suppression & orders. */
+/**
+ * Weapon-appropriate stance given suppression & orders. Stance is now
+ * load-bearing: bullets are physical, so a crouched man's muzzle is BELOW
+ * the parapet. In a trench the parapet is the cover — men stay on the fire
+ * step until they are pinned outright (or ordered down); in the open they
+ * hug the ground as before.
+ */
 export function combatStance(sol: Soldier, inTrench: boolean, takingCover: boolean): void {
   if (sol.stance === 'dead') return
   if (takingCover) { sol.stance = 'crouch'; return }
-  if (sol.suppression > COMBAT.suppressPin) sol.stance = inTrench ? 'crouch' : 'prone'
+  if (inTrench) {
+    sol.stance = sol.suppression > COMBAT.suppressPin ? 'crouch' : 'stand'
+    return
+  }
+  if (sol.suppression > COMBAT.suppressPin) sol.stance = 'prone'
   else if (sol.suppression > COMBAT.suppressCrouch) sol.stance = 'crouch'
   else sol.stance = 'stand'
 }

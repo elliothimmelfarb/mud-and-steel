@@ -8,9 +8,10 @@ import type { Enemy, Soldier, TargetPriority, Unit, Vehicle } from '../core/type
 import { COMBAT, UNIT_DEFS, VET_ROF_BONUS, WORLD } from '../core/config'
 import { dist2, fx, snd, type Ctx } from './sim'
 import {
-  combatStance, coverFor, damageSoldier, eyePos, fireSmallArms, soldierUpkeep, litAt,
+  combatStance, coverFor, damageSoldier, fireSmallArms, soldierUpkeep, litAt,
 } from './combat'
 import { spawnGrenade, spawnMortarBomb, spawnShell, spawnGasShell, spawnFlare } from './projectiles'
+import { losClear, standSurface } from './ballistics'
 import { sectionAt } from './trench'
 
 interface AuraSources { officers: Array<{ x: number; z: number }>; medics: Array<{ x: number; z: number }> }
@@ -62,6 +63,7 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
     soldierUpkeep(ctx, c, dt, officerNear, medicNear)
     c.masked = s.masksOn
     moraleSum += c.morale
+    if (c.id === ctx.possessedSoldierId) continue // the player poses himself
     const inTrench = ctx.terrain.trenchAt(c.pos.x, c.pos.z) > 0.45
     combatStance(c, inTrench, takingCover)
     c.animPhase += dt * 7
@@ -86,7 +88,7 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   } else if (u.fallenBack) {
     // Scramble toward the support line.
     for (const c of u.crew) {
-      if (c.hp <= 0) continue
+      if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
       const tz = WORLD.supportTrenchZ + 6
       const dx = homeX - c.pos.x, dz = tz - c.pos.z
       const d = Math.hypot(dx, dz)
@@ -118,7 +120,8 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   }
 
   // -- role behaviors -----------------------------------------------------------
-  const shooter = u.crew.find((c) => c.hp > 0)
+  // Never auto-fire the man the player is embodying — his trigger, his rifle.
+  const shooter = u.crew.find((c) => c.hp > 0 && c.id !== ctx.possessedSoldierId)
   if (!shooter) return
   if (shooter.cooldown > 0) shooter.cooldown -= dt
   if (takingCover) return // heads down
@@ -136,7 +139,11 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   // -- pick a target ----------------------------------------------------------
   const rapid = s.orders.rapidT > 0
   const range = def.range + (u.kind === 'sniper' ? ctx.mods.sniperRange : 0)
-  const target = pickTarget(ctx, u, range, def.minRange, u.targeting)
+  // Direct-fire weapons only shoot men they can actually see; mortars and
+  // field guns lob over the dead ground.
+  const directFire = u.kind === 'rifleman' || u.kind === 'lewis' || u.kind === 'vickers' ||
+    u.kind === 'sniper' || u.kind === 'officer'
+  const target = pickTarget(ctx, u, range, def.minRange, u.targeting, directFire)
   if (!target) return
 
   const rofMult = (1 + u.vet * VET_ROF_BONUS) * (rapid ? 2 : 1)
@@ -234,7 +241,7 @@ function isChargeKind(kind: Unit['kind']): boolean {
 function formUp(ctx: Ctx, u: Unit, homeX: number, homeZ: number, dt: number): void {
   for (let i = 0; i < u.crew.length; i++) {
     const c = u.crew[i]
-    if (c.hp <= 0) continue
+    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
     const ox = (i % 2) * 1.1 - 0.55 * (u.crew.length > 1 ? 1 : 0)
     const oz = Math.floor(i / 2) * 1.0
     const tx = homeX + ox, tz = homeZ + oz
@@ -251,7 +258,7 @@ function formUp(ctx: Ctx, u: Unit, homeX: number, homeZ: number, dt: number): vo
 function chargeMove(ctx: Ctx, u: Unit, dt: number): void {
   // Over the top: run at the nearest enemy within 40m north, melee on contact.
   for (const c of u.crew) {
-    if (c.hp <= 0) continue
+    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
     let best: Enemy | null = null
     let bestD = 42 * 42
     for (const e of ctx.s.enemies) {
@@ -282,7 +289,9 @@ function chargeMove(ctx: Ctx, u: Unit, dt: number): void {
 
 export type Target = { kind: 'soldier'; ref: Enemy } | { kind: 'vehicle'; ref: Vehicle }
 
-export function pickTarget(ctx: Ctx, u: Unit, range: number, minRange: number, prio: TargetPriority): Target | null {
+export function pickTarget(
+  ctx: Ctx, u: Unit, range: number, minRange: number, prio: TargetPriority, needLos = false,
+): Target | null {
   const { s } = ctx
   const px = u.pos.x, pz = u.pos.z
   const r2 = range * range, min2 = minRange * minRange
@@ -298,8 +307,10 @@ export function pickTarget(ctx: Ctx, u: Unit, range: number, minRange: number, p
     if (bestV) return { kind: 'vehicle', ref: bestV }
   }
 
-  let best: Enemy | null = null
-  let bestScore = -Infinity
+  // Keep a shortlist of the best-scoring candidates, then take the first one
+  // the shooter can actually see over the dead ground.
+  const TOP = 5
+  const top: Array<{ e: Enemy; score: number }> = []
   for (const e of s.enemies) {
     if (e.hp <= 0 || e.behavior === 'rout') continue
     const d2v = dist2(e.pos.x, e.pos.z, px, pz)
@@ -316,9 +327,24 @@ export function pickTarget(ctx: Ctx, u: Unit, range: number, minRange: number, p
     }
     // Prefer visible men at night.
     if (ctx.weather.state.night && !litAt(ctx, e.pos.x, e.pos.z)) score -= 200
-    if (score > bestScore) { bestScore = score; best = e }
+    let i = top.length
+    while (i > 0 && top[i - 1].score < score) i--
+    if (i < TOP) {
+      top.splice(i, 0, { e, score })
+      if (top.length > TOP) top.pop()
+    }
   }
-  if (best) return { kind: 'soldier', ref: best }
+  if (!needLos && top.length > 0) return { kind: 'soldier', ref: top[0].e }
+  if (top.length > 0) {
+    const eyeY = standSurface(ctx, px, pz) + 1.38
+    for (const cand of top) {
+      const e = cand.e
+      const aimY = standSurface(ctx, e.pos.x, e.pos.z) + 0.9
+      if (losClear(ctx, px, eyeY, pz, e.pos.x, aimY, e.pos.z)) {
+        return { kind: 'soldier', ref: e }
+      }
+    }
+  }
 
   // Fall back to vehicles for anyone whose rounds can matter.
   if (u.kind === 'vickers' || u.kind === 'lewis' || u.kind === 'mortar' || u.kind === 'fieldgun') {
@@ -406,7 +432,7 @@ function gasProjectorTick(ctx: Ctx, u: Unit, shooter: Soldier): void {
 /** Flamethrower cone: instant area damage + panic. Both sides use this. */
 export function flameCone(ctx: Ctx, shooter: Soldier, team: 'brit' | 'german', range: number, damage: number, unitId: number): void {
   const dirX = Math.sin(shooter.facing), dirZ = -Math.cos(shooter.facing)
-  const y = ctx.terrain.heightAt(shooter.pos.x, shooter.pos.z) + 1.2
+  const y = standSurface(ctx, shooter.pos.x, shooter.pos.z) + 1.2
   fx(ctx.s, { t: 'flame', x: shooter.pos.x, y, z: shooter.pos.z, dirX, dirZ, length: range })
   snd(ctx.s, { name: 'gas_pop', x: shooter.pos.x, y, z: shooter.pos.z, gain: 0.3, rate: 0.6 })
   const victims: Soldier[] = []

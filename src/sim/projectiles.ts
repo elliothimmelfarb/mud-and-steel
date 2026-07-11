@@ -3,14 +3,13 @@
  * gas drums, parachute flares, and the shells of off-map barrages. True
  * ballistic integration; the whistle you hear is timed to the impact you get.
  */
-import type { Projectile, ProjectileKind, Soldier, Team, Unit } from '../core/types'
+import type { Projectile, ProjectileKind, Soldier, Team, Unit, Vec3 } from '../core/types'
 import { WORLD } from '../core/config'
 import { fx, snd, type Ctx } from './sim'
 import { explode } from './combat'
+import { G, terrainNormal } from './ballistics'
 import type { Target } from './soldiers'
 import { createGasCloud } from './gas'
-
-const G = 9.81
 
 function push(ctx: Ctx, p: Omit<Projectile, 'id'>): Projectile {
   const proj = { ...p, id: ctx.s.nextId++ }
@@ -46,7 +45,10 @@ export function spawnGrenade(ctx: Ctx, thrower: Soldier, tx: number, tz: number,
   const d = Math.hypot(ax - thrower.pos.x, az - thrower.pos.z)
   const T = 0.9 + d * 0.045
   const y = ctx.terrain.heightAt(thrower.pos.x, thrower.pos.z) + 1.6
-  lob(ctx, 'grenade', thrower.team, thrower.pos.x, thrower.pos.z, y, ax, az, T, aoe, damage, unitId)
+  const g = lob(ctx, 'grenade', thrower.team, thrower.pos.x, thrower.pos.z, y, ax, az, T, aoe, damage, unitId)
+  // Mills-bomb fuse keeps burning after the bounce: the grenade lands, then
+  // skips and rolls (downhill, into trenches and shell holes) before it goes.
+  g.timer = T + 0.9 + ctx.rand() * 0.8
   snd(ctx.s, { name: 'whistle_attack', x: thrower.pos.x, y, z: thrower.pos.z, gain: 0.15, rate: 1.6 })
 }
 
@@ -70,7 +72,7 @@ export function spawnShell(ctx: Ctx, u: Unit, target: Target, damage: number, ao
   const lead = target.kind === 'vehicle' ? 1.5 : 0.5
   const scatter = 2.5 * ctx.mods.indirectScatter
   const tx = tp.x + (ctx.rand() - 0.5) * scatter
-  const tz = tp.z + (ctx.rand() - 0.5) * scatter - lead
+  const tz = tp.z + (ctx.rand() - 0.5) * scatter + lead // enemies advance toward +z
   const d = Math.hypot(tx - u.pos.x, tz - u.pos.z)
   const T = Math.max(0.5, d / 160) // flat, fast
   const y = ctx.terrain.heightAt(u.pos.x, u.pos.z) + 1.1
@@ -128,6 +130,8 @@ export function spawnFlare(ctx: Ctx, x: number, z: number): void {
 // Integration
 // ---------------------------------------------------------------------------
 
+const _n: Vec3 = { x: 0, y: 1, z: 0 }
+
 export function updateProjectiles(ctx: Ctx, dt: number): void {
   const { s } = ctx
   const wind = ctx.weather.state
@@ -146,13 +150,59 @@ export function updateProjectiles(ctx: Ctx, dt: number): void {
       p.timer -= dt
       if (ctx.rand() < dt * 2) fx(s, { t: 'smokepuff', x: p.pos.x, y: p.pos.y + 0.5, z: p.pos.z, size: 0.7 })
       if (p.timer <= 0 || p.pos.y <= ctx.terrain.heightAt(p.pos.x, p.pos.z)) alive = false
+    } else if (p.kind === 'grenade') {
+      // Rigid-body grenade: fly, bounce off the ground plane, roll downhill,
+      // detonate on the fuse — wherever it has ended up by then.
+      p.vel.y -= G * dt
+      p.pos.x += p.vel.x * dt
+      p.pos.y += p.vel.y * dt
+      p.pos.z += p.vel.z * dt
+      p.timer -= dt
+      const ground = ctx.terrain.heightAt(p.pos.x, p.pos.z)
+      if (p.pos.y <= ground) {
+        p.pos.y = ground + 0.03
+        terrainNormal(ctx.terrain, p.pos.x, p.pos.z, _n)
+        const vDotN = p.vel.x * _n.x + p.vel.y * _n.y + p.vel.z * _n.z
+        if (vDotN < -1.2) {
+          // Bounce: reflect the normal component, scrub the tangential one.
+          const rest = 0.34, fric = 0.62
+          p.vel.x = (p.vel.x - 2 * vDotN * _n.x) * fric
+          p.vel.y = (p.vel.y - 2 * vDotN * _n.y) * rest
+          p.vel.z = (p.vel.z - 2 * vDotN * _n.z) * fric
+          fx(s, { t: 'dirt', x: p.pos.x, y: p.pos.y, z: p.pos.z, amount: 0.15 })
+        } else {
+          // Resting contact: roll downhill, bleed speed to the mud.
+          const damp = Math.max(0, 1 - 3.2 * dt)
+          p.vel.x = p.vel.x * damp + _n.x * G * dt * 1.6
+          p.vel.z = p.vel.z * damp + _n.z * G * dt * 1.6
+          p.vel.y = 0
+          if (Math.hypot(p.vel.x, p.vel.z) < 0.25) { p.vel.x = 0; p.vel.z = 0 }
+        }
+      }
+      if (p.timer <= 0) {
+        impact(ctx, p)
+        alive = false
+      }
     } else {
       p.vel.y -= G * dt
       p.pos.x += p.vel.x * dt
       p.pos.y += p.vel.y * dt
       p.pos.z += p.vel.z * dt
       const ground = ctx.terrain.heightAt(p.pos.x, p.pos.z)
-      if (p.pos.y <= ground) {
+      // Direct hits: flat-trajectory shells strike armour they pass through.
+      if ((p.kind === 'shell' || p.kind === 'tankshell') && p.pos.y < ground + 4) {
+        for (const v of s.vehicles) {
+          if (v.dead || v.team === p.team) continue
+          const dx = v.pos.x - p.pos.x, dz = v.pos.z - p.pos.z
+          if (dx * dx + dz * dz < 2.6 * 2.6 &&
+              p.pos.y < ctx.terrain.heightAt(v.pos.x, v.pos.z) + 2.9) {
+            impact(ctx, p)
+            alive = false
+            break
+          }
+        }
+      }
+      if (alive && p.pos.y <= ground) {
         impact(ctx, p)
         alive = false
       } else if (Math.abs(p.pos.x) > WORLD.width || Math.abs(p.pos.z) > WORLD.depth) {

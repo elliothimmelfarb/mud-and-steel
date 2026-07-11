@@ -268,7 +268,14 @@ export const ARMOUR_MULT = [1, 0.12, 0] as const
 // ---------------------------------------------------------------------------
 
 export const COMBAT = {
-  bulletSpeed: 250,           // visual travel; hits resolve on arrival
+  bulletSpeed: 550,           // muzzle velocity (m/s) — rounds are real simulated bodies
+  baseSpreadRad: 0.0045,      // shot-group sigma for a calm, competent shooter at accuracy 1
+  bulletMaxLife: 1.6,         // seconds of flight before a round is discarded
+  tracerFraction: 0.24,       // share of rounds that burn a visible tracer
+  tracerStreakLen: 6.5,       // metres of hot streak drawn behind a tracer round
+  ballStreakLen: 1.4,         // metres of faint streak for ordinary ball ammunition
+  ricochetChance: 0.3,        // odds a round sparks off armour / a shallow hard hit
+  tracerTrailChance: 0.14,    // per-round-per-frame odds of a drifting smoke wisp
   suppressDecay: 0.09,        // per second
   suppressCrouch: 0.5,        // above this: crouch, accuracy penalty
   suppressPin: 0.8,           // above this: pinned prone, cannot fire

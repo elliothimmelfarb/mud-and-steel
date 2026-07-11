@@ -1164,51 +1164,144 @@ export class EffectsSystem {
         SPR.SMOKE_B, 0.12, 1.3, 0.2,
       )
     }
+    // Brass casing flicked out to the side — rifles/MGs only, not artillery.
+    if (!isBig && Math.random() < 0.7 * this.mul + 0.15) {
+      const bx = -dz, bz = dx // perpendicular to the line of fire
+      this.alp.spawn(
+        x + dx * 0.05, y + 0.02, z + dz * 0.05,
+        bx * rr(1.4, 2.6) + dx * rr(-0.3, 0.4), rr(1.6, 2.8), bz * rr(1.4, 2.6) + dz * rr(-0.3, 0.4),
+        t0, rr(0.5, 0.85),
+        0.04, 0.032,
+        0.72, 0.55, 0.24, 0.95,
+        Math.random() * TWO_PI, rr(-14, 14),
+        -9.8, 0,
+        SPR.DEBRIS, 0.02, 0.5, 0,
+      )
+    }
+    // A pop of dynamic light so muzzle fire actually lights the mud at night.
     if (isBig) {
       this.flash(x + dx * 1.2, y + 0.4, z + dz * 1.2, 0xffc070, 170, 0.12)
+    } else {
+      this.flash(x + dx * 0.5, y + 0.15, z + dz * 0.5, 0xffb060, 26, 0.05)
     }
   }
 
-  tracer(x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, speed: number): void {
+  /**
+   * One faint drifting wisp of powder smoke left hanging behind a tracer round.
+   * Called probabilistically per round per frame by the RoundRenderer, so a
+   * burst threads smoke down-range without flooding the pool.
+   */
+  tracerTrail(x: number, y: number, z: number): void {
     if (this.disposed) return
-    const dx = x2 - x1
-    const dy = y2 - y1
-    const dz = z2 - z1
-    const dist = Math.hypot(dx, dy, dz)
-    if (dist < 0.2 || speed <= 1) return
-    const flight = dist / speed
-    // Staggered births along the path: each segment lights up in sequence, so
-    // the streak reads as a moving round with zero per-frame CPU cost.
-    let n = Math.floor(dist / 2.5)
-    if (n < 3) n = 3
-    else if (n > 22) n = 22
-    n = Math.max(3, Math.round(n * (0.55 + 0.45 * this.mul)))
+    this.alp.spawn(
+      x, y, z,
+      rr(-0.1, 0.1), rr(0.15, 0.45), rr(-0.1, 0.1),
+      this.time, rr(0.35, 0.6),
+      0.08, rr(0.26, 0.42),
+      0.82, 0.78, 0.66, 0.16 * this.strobeMul() + 0.02,
+      Math.random() * TWO_PI, rr(-0.4, 0.4),
+      0, 0.9,
+      SPR.SOFT, 0.15, 1.2, 0.2,
+    )
+  }
+
+  /**
+   * The terminal mark of a physical round: a material-correct puff, kicked
+   * debris, and — on a hard shallow strike — a bright ricochet spark fan and a
+   * pop of light. The sim resolves the surface at the point of impact; this
+   * only decides how it looks.
+   */
+  impact(
+    surface: import('../core/types').ImpactSurface,
+    x: number, y: number, z: number,
+    nx: number, ny: number, nz: number,
+    spark: boolean,
+  ): void {
+    if (this.disposed) return
     const t0 = this.time
-    for (let i = 0; i < n; i++) {
-      const f = i / (n - 1)
-      const px = x1 + dx * f
-      const py = y1 + dy * f
-      const pz = z1 + dz * f
-      const birth = t0 + f * flight
-      this.add.spawn(
-        px, py, pz, 0, 0, 0,
-        birth, rr(0.06, 0.1),
-        rr(0.2, 0.28), rr(0.1, 0.16),
-        1, 0.87, 0.55, 0.9,
-        0, 0, 0, 0,
-        SPR.SOFT, 0.05, 1, 0,
-      )
-      // every third segment gets a wider faint glow for body
-      if (i % 3 === 0) {
-        this.add.spawn(
-          px, py, pz, 0, 0, 0,
-          birth, 0.14,
-          0.5, 0.25,
-          1, 0.7, 0.4, 0.3,
-          0, 0, 0, 0,
-          SPR.SOFT, 0.05, 1.2, 0,
+    let nl = Math.hypot(nx, ny, nz)
+    if (nl < 1e-4) { nx = 0; ny = 1; nz = 0; nl = 1 }
+    nx /= nl; ny /= nl; nz /= nl
+
+    // Flesh: a brief dark spray thrown back off the wound. The blood that
+    // settles on a kill is handled separately — this is the strike itself.
+    if (surface === 'flesh') {
+      const n = 3 + (Math.random() < 0.5 ? 1 : 0)
+      for (let i = 0; i < n; i++) {
+        const ang = Math.random() * TWO_PI
+        const sp = rr(0.6, 2.2)
+        this.alp.spawn(
+          x, y, z,
+          nx * rr(1, 3) + Math.cos(ang) * sp, ny * rr(0.5, 1.8) + rr(0.3, 1), nz * rr(1, 3) + Math.sin(ang) * sp,
+          t0, rr(0.22, 0.45),
+          rr(0.06, 0.12), rr(0.13, 0.24),
+          0.34, 0.05, 0.04, rr(0.4, 0.55),
+          Math.random() * TWO_PI, rr(-2, 2),
+          -6, 0,
+          SPR.SOFT, 0.04, 1.1, 0,
         )
       }
+      return
+    }
+
+    // Dust puff palette + debris count per surface.
+    let pr = 0.42, pg = 0.36, pb = 0.28, puffA = 0.5, clods = 3, wet = false
+    let puffSpr: number = SPR.DUST
+    if (surface === 'steel') { pr = 0.62; pg = 0.63; pb = 0.6; puffA = 0.38; clods = 0 }
+    else if (surface === 'sandbag') { pr = 0.62; pg = 0.55; pb = 0.4; puffA = 0.6; clods = 2 }
+    else if (surface === 'mud') { pr = 0.26; pg = 0.22; pb = 0.17; puffA = 0.6; clods = 4; wet = true }
+    else if (surface === 'water') { pr = 0.52; pg = 0.55; pb = 0.54; puffA = 0.5; clods = 3; wet = true; puffSpr = SPR.SPLASH }
+
+    // The puff, pushed out along the surface normal.
+    this.alp.spawn(
+      x + nx * 0.1, y + ny * 0.1 + 0.04, z + nz * 0.1,
+      nx * rr(0.6, 1.4), rr(0.4, 1) + ny * 0.6, nz * rr(0.6, 1.4),
+      t0, rr(0.35, 0.6),
+      rr(0.26, 0.4), rr(0.55, 0.9),
+      pr, pg, pb, puffA * rr(0.75, 1) * this.strobeMul(),
+      Math.random() * TWO_PI, rr(-0.5, 0.5),
+      0, 0.8,
+      puffSpr, 0.06, 1.2, 0.2,
+    )
+
+    // Kicked clods / spray.
+    const nc = this.n0(clods)
+    for (let i = 0; i < nc; i++) {
+      const ang = Math.random() * TWO_PI
+      const sp = rr(1.5, 5)
+      const vy = rr(2, 6)
+      const life = ((2 * vy) / 9.8) * rr(0.8, 1.1)
+      const shade = rr(0.75, 1.15)
+      this.alp.spawn(
+        x, y + 0.05, z,
+        nx * sp * 0.4 + Math.cos(ang) * sp, vy, nz * sp * 0.4 + Math.sin(ang) * sp,
+        t0 + rr(0, 0.03), life,
+        rr(0.06, 0.14), rr(0.08, 0.18),
+        pr * shade, pg * shade, pb * shade, rr(0.7, 0.9),
+        Math.random() * TWO_PI, rr(-6, 6),
+        -9.8, 0,
+        wet && Math.random() < 0.5 ? SPR.SPLASH : (Math.random() < 0.5 ? SPR.DIRT_A : SPR.DIRT_B), 0.02, 0.5, 0,
+      )
+    }
+
+    // Sparks: always a couple off steel, otherwise only on a real ricochet.
+    if (spark || surface === 'steel') {
+      const nsp = this.n1(surface === 'steel' ? 3 : 2)
+      for (let i = 0; i < nsp; i++) {
+        const ang = Math.random() * TWO_PI
+        const sp = rr(4, 12)
+        this.add.spawn(
+          x + nx * 0.05, y + ny * 0.05 + 0.04, z + nz * 0.05,
+          nx * rr(2, 5) + Math.cos(ang) * sp * 0.5, ny * rr(1, 3) + rr(1, 4), nz * rr(2, 5) + Math.sin(ang) * sp * 0.5,
+          t0, rr(0.12, 0.3),
+          rr(0.08, 0.14), rr(0.02, 0.05),
+          1, 0.8, 0.42, 0.9 * this.strobeMul(),
+          Math.random() * TWO_PI, 0,
+          -10, 0,
+          SPR.SPARK, 0.02, 0.8, 0,
+        )
+      }
+      if (spark) this.flash(x + nx * 0.2, y + 0.2, z + nz * 0.2, 0xffd08a, 30, 0.06)
     }
   }
 

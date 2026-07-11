@@ -4,7 +4,7 @@
  * brute-force queries cheap at 30 Hz and the code honest.
  */
 import type {
-  CasualtyRecord, Defence, DirectorMemory, Enemy, FxEvent, GamePhase, GasCloud,
+  Bullet, CasualtyRecord, Defence, DirectorMemory, Enemy, FxEvent, GamePhase, GasCloud,
   Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection, TrenchSlot,
   Unit, Vehicle, WavePlan,
 } from '../core/types'
@@ -47,6 +47,8 @@ export interface SimState {
   squads: Squad[]
   vehicles: Vehicle[]
   projectiles: Projectile[]
+  /** In-flight small-arms rounds, physically integrated each tick. */
+  bullets: Bullet[]
   clouds: GasCloud[]
   defences: Defence[]
   corpses: Corpse[]
@@ -69,23 +71,7 @@ export interface SimState {
   planBarrageCursor: number
   waveStartTime: number
 
-  /** In-flight small-arms fire: resolves after travel time. */
-  pendingShots: PendingShot[]
-
   nextId: number
-}
-
-export interface PendingShot {
-  t: number                  // sim time when the round arrives
-  targetKind: 'soldier' | 'vehicle'
-  targetId: number
-  hit: boolean
-  damage: number
-  category: string           // director bookkeeping
-  team: Team                 // shooter's team
-  // impact point (for misses: dirt + suppression)
-  x: number; y: number; z: number
-  shooterUnitId: number      // for XP credit (-1 for enemies)
 }
 
 export interface Ctx {
@@ -101,6 +87,11 @@ export interface Ctx {
   flowDirty: boolean
   /** Difficulty knobs resolved at run start. */
   night: boolean
+  /**
+   * Soldier id the player is currently embodying in first person (-1 = none).
+   * The AI must not move, pose or fire this man — the player does.
+   */
+  possessedSoldierId: number
 }
 
 export function makeStats(): RunStats {

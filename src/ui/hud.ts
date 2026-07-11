@@ -621,6 +621,7 @@ export function settingsSchema(): SettingsGroup[] {
         { key: 'bind.orderMasks', label: 'Gas Masks', type: 'keybind' },
         { key: 'bind.orderFlare', label: 'Flare', type: 'keybind' },
         { key: 'bind.callWave', label: 'Sound the Advance', type: 'keybind' },
+        { key: 'bind.embody', label: 'Embody soldier (first person)', type: 'keybind' },
       ],
     },
   ]
@@ -660,6 +661,11 @@ export function helpSections(): Array<{ title: string; html: string }> {
       <b>Fix Bayonets</b> (B) — front-line infantry counter-charge into no-man's land.<br>
       <b>Gas Masks</b> (G) — near-immunity to gas, but fogged eyepieces cost accuracy.<br>
       <b>Flare</b> (V) — light up night attacks. <b>Creeping Barrage</b> and the <b>Mark IV</b> unlock in STORES.</p>`,
+    },
+    {
+      title: 'Take Up a Rifle',
+      html: `<p><b>Double-click any of your soldiers</b> (or select a unit and press <span class="ms-kbd">M</span>) to step into his boots. Mouse looks, <span class="ms-kbd">WASD</span> moves, <span class="ms-kbd">Shift</span> runs, <span class="ms-kbd">C</span> cycles stance, hold <b>right-click</b> to aim down the sights, <span class="ms-kbd">R</span> reloads the ten-round magazine.</p>
+      <p>Your rounds are as real as everyone else's — they drop with range, thump into parapets, and your kills pay requisition to his unit. The enemy shoots back at <i>you</i>. <span class="ms-kbd">M</span> or <span class="ms-kbd">Esc</span> returns to command. Dying also works.</p>`,
     },
     {
       title: 'The Enemy Learns',

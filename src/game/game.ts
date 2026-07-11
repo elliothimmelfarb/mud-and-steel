@@ -27,6 +27,7 @@ import { CameraRig, Input, rayGround } from '../render/controls'
 import { SoldierRenderer, type SoldierPose } from '../render/unitMeshes'
 import { Scenery } from '../render/scenery'
 import { EffectsSystem, type EmitterHandle } from '../render/effects'
+import { RoundRenderer } from '../render/roundRenderer'
 import type { AudioEngine, SfxName } from '../audio/audio'
 import { FlowField } from '../sim/pathfind'
 import { Mods } from '../sim/mods'
@@ -38,12 +39,13 @@ import { updateUnits } from '../sim/soldiers'
 import { updateEnemies } from '../sim/enemies'
 import { updateVehicles, spawnVehicle } from '../sim/vehicles'
 import { updateProjectiles, spawnFlare } from '../sim/projectiles'
+import { updateBullets, standSurface } from '../sim/ballistics'
 import { updateGas, collectGasBlobs, resetGas } from '../sim/gas'
-import { resolvePendingShots } from '../sim/combat'
 import { updateCapture } from '../sim/trench'
 import { planWave, updateWaveSpawns, noteWireDensity } from '../sim/waves'
 import { updateBarrages, startCreepingBarrage, resetBarrages } from '../sim/barrage'
 import { rebuildFlow } from '../sim/flow'
+import { FpsMode } from './fps'
 
 export type OrderId = keyof typeof ORDER_DEFS
 
@@ -103,6 +105,7 @@ export class Game {
   readonly renderer: GameRenderer
   readonly rig: CameraRig
   readonly input: Input
+  readonly fpsMode: FpsMode
   readonly events = new EventBus()
   readonly audio: AudioEngine
   settings: GameSettings
@@ -115,6 +118,7 @@ export class Game {
   scenery!: Scenery
   effects!: EffectsSystem
   soldiers!: SoldierRenderer
+  rounds!: RoundRenderer
 
   // sim
   ctx!: Ctx
@@ -172,6 +176,9 @@ export class Game {
     this.rig = new CameraRig(this.renderer.camera, this.terrain)
     this.input = new Input(this.renderer.renderer.domElement, settings.keybinds)
     this.wireInput()
+    // The camera lives in the scene so the first-person viewmodel can hang off it.
+    this.renderer.scene.add(this.renderer.camera)
+    this.fpsMode = new FpsMode(this)
 
     // Placement ghost.
     this.ghost = new THREE.Group()
@@ -267,16 +274,22 @@ export class Game {
     // Tear down the previous battlefield properly: dispose GPU resources
     // before dropping references (scene.clear() alone leaks VRAM). Persistent
     // helper objects (ghost, markers, flare sprites) are detached first.
+    this.fpsMode.exit()
     const oldScene = this.renderer.scene
     this.effects?.dispose()
-    const persistent = new Set<THREE.Object3D>([this.ghost])
+    // The camera carries the FPS viewmodel — it must survive the teardown.
+    const persistent = new Set<THREE.Object3D>([this.ghost, this.renderer.camera])
     if (this.slotMarkers) persistent.add(this.slotMarkers)
     if (this.chevrons) persistent.add(this.chevrons)
     for (const sp of this.flareSprites) persistent.add(sp)
     for (const p of persistent) oldScene.remove(p)
     oldScene.traverse((o) => {
+      // Lights hold shadow-map render targets (the sun's is 16–67 MB).
+      if ((o as THREE.Light).isLight) { (o as THREE.Light).dispose(); return }
       const mesh = o as THREE.Mesh
-      if (!mesh.isMesh && (o as THREE.Points).type !== 'Points' && (o as THREE.Line).type !== 'Line') return
+      const drawable = mesh.isMesh || (o as THREE.Points).isPoints || (o as THREE.Line).isLine
+      if (!drawable) return
+      if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose()
       mesh.geometry?.dispose()
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       for (const m of mats) {
@@ -300,8 +313,10 @@ export class Game {
     this.effects.setParticleScale(this.settings.particleDensity)
     this.effects.setReduceFlashes(this.settings.reduceFlashes)
     this.soldiers = new SoldierRenderer(oldScene)
+    this.rounds = new RoundRenderer(oldScene, this.effects)
     this.scenery = new Scenery(oldScene, this.terrain, seed)
     oldScene.add(this.ghost)
+    oldScene.add(this.renderer.camera)
     if (this.slotMarkers) oldScene.add(this.slotMarkers)
     if (this.chevrons) oldScene.add(this.chevrons)
     for (const sp of this.flareSprites) oldScene.add(sp)
@@ -320,7 +335,7 @@ export class Game {
       req: resume?.req ?? Math.round(ECONOMY.startReq[difficulty]),
       breach: resume?.breach ?? COMBAT.breachMax,
       masksOn: resume?.masksOn ?? false,
-      units: [], enemies: [], squads: [], vehicles: [], projectiles: [],
+      units: [], enemies: [], squads: [], vehicles: [], projectiles: [], bullets: [],
       clouds: [], defences: [], corpses: [],
       sections, slots,
       fx: [], sounds: [],
@@ -330,7 +345,6 @@ export class Game {
       stats: resume?.stats ?? makeStats(),
       casualties: resume?.casualties ?? [],
       plan: null, planCursor: 0, planBarrageCursor: 0, waveStartTime: 0,
-      pendingShots: [],
       nextId: 1,
     }
 
@@ -349,6 +363,7 @@ export class Game {
       flowInf, flowVeh,
       events: this.events, rand: forkRand(seed, 'combat'),
       mods: this.mods, flowDirty: true, night: false,
+      possessedSoldierId: -1,
     }
 
     // Restore a saved position. Order matters: defences first (sandbags bump
@@ -385,9 +400,14 @@ export class Game {
     this.selectedUnitId = -1
     this.buildSelection = null
     this.ghost.visible = false
+    // No ghosts of the last battlefield: stale instance counts would render.
+    this.slotMarkers.count = 0
+    this.chevrons.count = 0
+    this.embodyHintShown = false
     this.audio.setMuffled(s.masksOn ? 0.4 : 0)
     this.rig.target.set(0, 0, WORLD.frontTrenchZ + 30)
     this.rig.yaw = 0
+    this.rig.pitch = 0.88
     this.rig.dist = 85
     this.applySettings(this.settings)
     this.prepareNextWave()
@@ -572,7 +592,7 @@ export class Game {
     }
     s.clouds.length = 0
     s.projectiles.length = 0
-    s.pendingShots.length = 0
+    s.bullets.length = 0
 
     // The director broods on recent lessons more than old ones.
     for (const k of Object.keys(s.director.dmgByCategory)) {
@@ -819,7 +839,13 @@ export class Game {
       if (d < bestD) { bestD = d; best = u.id }
     }
     this.selectedUnitId = best
-    if (best >= 0) this.audio.play('ui_click', { gain: 0.4 })
+    if (best >= 0) {
+      this.audio.play('ui_click', { gain: 0.4 })
+      if (!this.embodyHintShown) {
+        this.embodyHintShown = true
+        this.hud?.toast('Press M (or double-click) to take this man\'s rifle yourself', 'info')
+      }
+    }
   }
 
   selectedInfo(): SelectedInfo | null {
@@ -976,13 +1002,14 @@ export class Game {
 
   private wireInput(): void {
     const input = this.input
-    input.onWheelZoom = (d) => this.rig.zoomBy(d)
+    input.onWheelZoom = (d) => { if (!this.fpsMode?.active) this.rig.zoomBy(d) }
     input.onDrag = (dx, dy, button) => {
-      if (button === 2) this.rig.rotateBy(dx)
+      if (this.fpsMode?.active) return // first person owns the mouse
+      if (button === 2) this.rig.rotateBy(dx, dy) // free look: yaw + pitch
       else if (button === 1) this.rig.panByScreen(dx, dy)
     }
     input.onPointerMove = (nx, ny) => {
-      if (!this.running) return
+      if (!this.running || this.fpsMode?.active) return
       this.kbCursor.active = false
       const hit = new THREE.Vector3()
       if (rayGround(this.renderer.camera, nx, ny, this.terrain, hit)) {
@@ -990,7 +1017,7 @@ export class Game {
       }
     }
     input.onClick = (nx, ny, button) => {
-      if (!this.running || this.modalOpen) return
+      if (!this.running || this.modalOpen || this.fpsMode?.active) return
       const hit = new THREE.Vector3()
       if (!rayGround(this.renderer.camera, nx, ny, this.terrain, hit)) return
       if (button === 0) {
@@ -998,13 +1025,35 @@ export class Game {
           this.updateGhost(hit.x, hit.z)
           this.confirmPlace()
         } else {
+          const prev = this.selectedUnitId
           this.selectAt(hit.x, hit.z)
+          // Double-click a unit: take that man's rifle yourself.
+          const now = performance.now()
+          if (
+            this.selectedUnitId >= 0 && this.selectedUnitId === prev &&
+            this.selectedUnitId === this.lastSelClick.id && now - this.lastSelClick.t < 380
+          ) {
+            this.possessSelected()
+          }
+          this.lastSelClick = { t: now, id: this.selectedUnitId }
         }
       } else if (button === 2 && !this.input.pointer.dragging) {
         this.setBuildSelection(null)
         this.selectedUnitId = -1
       }
     }
+  }
+
+  private lastSelClick = { t: 0, id: -1 }
+  private embodyHintShown = false
+
+  /** Step into the boots of the selected unit's senior surviving man. */
+  possessSelected(): void {
+    const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
+    if (!u) return
+    const c = u.crew.find((s) => s.hp > 0)
+    if (!c) return
+    this.fpsMode.enter(u, c)
   }
 
   /** Keyboard-only placement cursor step. */
@@ -1034,6 +1083,7 @@ export class Game {
   applySettings(st: GameSettings): void {
     this.settings = st
     this.renderer.setQuality(st.quality, st.postfx, st.shadows)
+    this.sky?.setShadowQuality(st.quality)
     this.effects?.setQuality(st.quality)
     this.effects?.setParticleScale(st.particleDensity)
     this.effects?.setReduceFlashes(st.reduceFlashes)
@@ -1057,14 +1107,22 @@ export class Game {
     if (!this.ctx) return
     this.fps = this.fps * 0.95 + (1 / Math.max(dt, 0.001)) * 0.05
 
+    // A modal (intel paper, pause, letters) always pulls you out of the trench.
+    if (this.fpsMode.active && this.modalOpen) this.fpsMode.exit()
+
     // Camera & input always run (even paused). While a modal owns the keys,
     // queued presses are DROPPED — they must not fire on the first free frame
     // (Esc that closed the pause menu would immediately reopen it).
-    if (this.running && !this.modalOpen) this.pollActions(dt)
-    else this.input.clearPressed()
-    this.rig.update(dt, this.input, {
-      x: this.input.pointer.x, y: this.input.pointer.y, inside: this.input.pointer.inside,
-    }, this.modalOpen)
+    if (this.fpsMode.active) {
+      this.input.clearPressed() // first person owns the keyboard
+      this.fpsMode.update(dt)
+    } else {
+      if (this.running && !this.modalOpen) this.pollActions(dt)
+      else this.input.clearPressed()
+      this.rig.update(dt, this.input, {
+        x: this.input.pointer.x, y: this.input.pointer.y, inside: this.input.pointer.inside,
+      }, this.modalOpen)
+    }
 
     // Fixed-step sim.
     const effSpeed = this.paused || this.modalOpen || !this.running ? 0 : this.speed
@@ -1105,6 +1163,7 @@ export class Game {
     if (input.consume('confirm') && this.buildSelection) this.confirmPlace()
     if (input.consume('sell')) this.sellSelected()
     if (input.consume('cycleUnits')) this.cycleSelection()
+    if (input.consume('embody')) this.possessSelected()
     if (input.consume('callWave')) this.callWaveEarly()
     if (input.consume('rotatePlacement')) this.wireAngle += Math.PI / 4
     // Orders.
@@ -1160,8 +1219,8 @@ export class Game {
     updateEnemies(this.ctx, dt)
     updateVehicles(this.ctx, dt)
     updateProjectiles(this.ctx, dt)
+    updateBullets(this.ctx, dt)
     updateGas(this.ctx, dt)
-    resolvePendingShots(this.ctx)
     updateCapture(this.ctx, dt)
 
     for (const c of s.corpses) c.deadT += dt
@@ -1188,6 +1247,12 @@ export class Game {
     const w = this.weather.state
 
     this.sky.setConditions(w.tod, w.fog, w.rain)
+    // Sharp shadows follow whatever the player is looking at.
+    if (this.fpsMode.active) {
+      this.sky.setFocus(this.renderer.camera.position.x, this.renderer.camera.position.z)
+    } else {
+      this.sky.setFocus(this.rig.target.x, this.rig.target.z)
+    }
     this.terrainMesh.update(dt, w.wetness)
 
     // Drain FX queue.
@@ -1203,7 +1268,7 @@ export class Game {
           break
         }
         case 'muzzle': this.effects.muzzleFlash(e.x, e.y, e.z, e.dirX, e.dirZ, e.big); break
-        case 'tracer': this.effects.tracer(e.x1, e.y1, e.z1, e.x2, e.y2, e.z2, e.speed); break
+        case 'impact': this.effects.impact(e.surface, e.x, e.y, e.z, e.nx, e.ny, e.nz, e.spark); break
         case 'dirt': this.effects.dirtBurst(e.x, e.y, e.z, e.amount); break
         case 'debris': this.effects.debris(e.x, e.y, e.z); break
         case 'blood': this.effects.blood(e.x, e.y, e.z); break
@@ -1227,9 +1292,9 @@ export class Game {
     s.sounds.length = 0
 
     // Soldiers. Men in trenches stand on the fire step so heads and rifles
-    // show over the parapet (and so the player can see their army).
-    const standY = (x: number, z: number): number =>
-      this.terrain.heightAt(x, z) + this.terrain.trenchAt(x, z) * 0.85
+    // show over the parapet. MUST match the sim-side standSurface — bullets
+    // fly at the men you see.
+    const standY = (x: number, z: number): number => standSurface(this.ctx, x, z)
     this.soldiers.begin()
     const pose: SoldierPose = {
       x: 0, y: 0, z: 0, facing: 0, stance: 'stand', moveAmount: 0, animPhase: 0,
@@ -1240,6 +1305,7 @@ export class Game {
       if (u.disbanded) continue
       for (const c of u.crew) {
         if (c.hp <= 0) continue
+        if (c.id === this.ctx.possessedSoldierId) continue // you can't see your own body
         pose.x = c.pos.x; pose.z = c.pos.z
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
@@ -1326,6 +1392,9 @@ export class Game {
       this.chevrons.count = 0
     }
 
+    // Bullets in flight.
+    this.rounds.sync(s.bullets)
+
     // Gas.
     const blobCount = collectGasBlobs(this.ctx, this.gasBuf)
     this.effects.setGasBlobs(this.gasBuf, blobCount)
@@ -1372,7 +1441,10 @@ export class Game {
 
     // Weather FX + ambience.
     this.effects.rain(w.rain)
-    const lp = this.rig.listenerPose()
+    const cam = this.renderer.camera
+    const lp = this.fpsMode.active
+      ? { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: this.fpsMode.yaw }
+      : this.rig.listenerPose()
     this.audio.setListener(lp.x, lp.y, lp.z, lp.yaw)
     this.audio.setAmbience({
       battle: this.battleNoise,

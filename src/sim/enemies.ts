@@ -84,7 +84,9 @@ function updateEnemy(ctx: Ctx, e: Enemy, dt: number, officerNear: boolean): void
   const { s } = ctx
   const def = ENEMY_DEFS[e.kind]
   if (e.cooldown > 0) e.cooldown -= dt
-  if (e.behaviorT > 0) e.behaviorT -= dt
+  // Decay below zero (bounded) — 'firing' MGs wait for behaviorT <= -6 to
+  // pack up when targetless; clamping at 0 would strand them forever.
+  if (e.behaviorT > -30) e.behaviorT -= dt
 
   const inTrench = ctx.terrain.trenchAt(e.pos.x, e.pos.z) > 0.45
   combatStance(e, inTrench, false)

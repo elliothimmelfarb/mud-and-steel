@@ -16,7 +16,7 @@ export type Action =
   | 'rotateLeft' | 'rotateRight' | 'zoomIn' | 'zoomOut'
   | 'pause' | 'speedDown' | 'speedUp'
   | 'cancel' | 'confirm' | 'sell' | 'cycleUnits' | 'rotatePlacement'
-  | 'help' | 'callWave' | 'toggleMenu'
+  | 'help' | 'callWave' | 'toggleMenu' | 'embody'
   | 'orderCover' | 'orderRapid' | 'orderBayonets' | 'orderMasks'
   | 'orderFlare' | 'orderBarrage' | 'orderTank'
   | 'build1' | 'build2' | 'build3' | 'build4' | 'build5' | 'build6'
@@ -28,7 +28,7 @@ export const DEFAULT_BINDS: Record<Action, string> = {
   rotateLeft: 'KeyQ', rotateRight: 'KeyE', zoomIn: 'KeyZ', zoomOut: 'KeyX',
   pause: 'Space', speedDown: 'BracketLeft', speedUp: 'BracketRight',
   cancel: 'Escape', confirm: 'Enter', sell: 'Delete', cycleUnits: 'Tab', rotatePlacement: 'KeyR',
-  help: 'KeyH', callWave: 'KeyN', toggleMenu: 'Escape',
+  help: 'KeyH', callWave: 'KeyN', toggleMenu: 'Escape', embody: 'KeyM',
   orderCover: 'KeyC', orderRapid: 'KeyF', orderBayonets: 'KeyB', orderMasks: 'KeyG',
   orderFlare: 'KeyV', orderBarrage: 'KeyJ', orderTank: 'KeyT',
   build1: 'Digit1', build2: 'Digit2', build3: 'Digit3', build4: 'Digit4',
@@ -108,6 +108,15 @@ export class Input {
 
   /** Drop queued edge-triggered presses (called while a modal owns the keys). */
   clearPressed(): void { this.pressedActions.clear() }
+
+  /**
+   * Forget every held key (first-person mode swallows keyups, so keys held
+   * across the mode switch would otherwise stick down forever).
+   */
+  releaseAll(): void {
+    this.down.clear()
+    this.pressedActions.clear()
+  }
 
   isDown(action: Action): boolean {
     if (this.down.has(this.binds[action])) return true
@@ -235,8 +244,11 @@ export class CameraRig {
   /** Ground point the camera orbits. */
   readonly target = new THREE.Vector3(0, 0, WORLD.frontTrenchZ + 25)
   yaw = 0                      // 0 = camera south of target, looking north at the enemy
+  /** Free-look elevation angle (radians above the horizon). Right-drag to set. */
+  pitch = 0.88
   dist = 78
   private curYaw = 0
+  private curPitch = 0.88
   private curDist = 78
   private curTarget = this.target.clone()
   private shake = 0
@@ -250,10 +262,14 @@ export class CameraRig {
 
   zoomBy(wheelDelta: number): void {
     const dir = this.invertZoom ? -1 : 1
-    this.dist = clamp(this.dist * Math.pow(1.0016, wheelDelta * dir), 24, 150)
+    this.dist = clamp(this.dist * Math.pow(1.0016, wheelDelta * dir), 10, 170)
   }
 
-  rotateBy(dx: number): void { this.yaw += dx * 0.005 }
+  /** Right-drag free look: yaw with dx, pitch with dy. */
+  rotateBy(dx: number, dy = 0): void {
+    this.yaw += dx * 0.005
+    this.pitch = clamp(this.pitch - dy * 0.0042, 0.1, 1.5)
+  }
 
   panByScreen(dx: number, dy: number): void {
     // Middle-drag "grab the map": same frame math as keyboard panning,
@@ -276,8 +292,8 @@ export class CameraRig {
       if (input.isDown('panDown')) mz += 1
       if (input.isDown('rotateLeft')) this.yaw -= 1.7 * dt
       if (input.isDown('rotateRight')) this.yaw += 1.7 * dt
-      if (input.isDown('zoomIn')) this.dist = clamp(this.dist * (1 - 1.3 * dt), 24, 150)
-      if (input.isDown('zoomOut')) this.dist = clamp(this.dist * (1 + 1.3 * dt), 24, 150)
+      if (input.isDown('zoomIn')) this.dist = clamp(this.dist * (1 - 1.3 * dt), 10, 170)
+      if (input.isDown('zoomOut')) this.dist = clamp(this.dist * (1 + 1.3 * dt), 10, 170)
     }
     if (this.edgePan && pointerEdge.inside && document.hasFocus()) {
       const m = 14
@@ -298,21 +314,21 @@ export class CameraRig {
     // Smooth follow.
     const k = 1 - Math.exp(-dt * 9)
     this.curYaw += (this.yaw - this.curYaw) * k
+    this.curPitch += (this.pitch - this.curPitch) * k
     this.curDist += (this.dist - this.curDist) * k
     this.curTarget.lerp(this.target, k)
 
-    // Pitch rises as you zoom out: trench-level drama up close, map view far out.
-    const zf = (this.curDist - 24) / (150 - 24)
-    const pitch = (34 + zf * 30) * (Math.PI / 180)
-
     const groundY = this.terrain.heightAt(this.curTarget.x, this.curTarget.z)
-    const cy = Math.sin(pitch) * this.curDist
-    const ch = Math.cos(pitch) * this.curDist
+    const cy = Math.sin(this.curPitch) * this.curDist
+    const ch = Math.cos(this.curPitch) * this.curDist
     this.camera.position.set(
       this.curTarget.x + Math.sin(this.curYaw) * ch,
       groundY + cy,
       this.curTarget.z + Math.cos(this.curYaw) * ch,
     )
+    // Never clip into the mud: hold the camera above the terrain under it.
+    const minY = this.terrain.heightAt(this.camera.position.x, this.camera.position.z) + 1.8
+    if (this.camera.position.y < minY) this.camera.position.y = minY
     if (this.shake > 0.001) {
       this.shake *= Math.exp(-dt * 5)
       const s = this.shake * this.shake * 1.6

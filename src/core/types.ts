@@ -196,6 +196,29 @@ export interface Projectile {
   sourceUnitId: number
 }
 
+/**
+ * A physically-simulated small-arms round. Unlike lobbed ordnance these are
+ * fast, near-flat, and resolved by swept collision against terrain, men and
+ * armour each tick — cover is real geometry, not a probability.
+ */
+export interface Bullet {
+  id: number
+  team: Team
+  pos: Vec3
+  /** Position at the previous tick (tracer rendering + swept collision). */
+  prev: Vec3
+  vel: Vec3
+  damage: number
+  /** Director bookkeeping ('rifle' | 'mg' | 'sniper' | 'enemy'...). */
+  category: string
+  shooterUnitId: number
+  /** The soldier who fired it (never collides with them). */
+  shooterId: number
+  tracer: boolean
+  /** Seconds of flight remaining before the round is discarded. */
+  life: number
+}
+
 /** A drifting gas concentration blob. Clouds are sets of blobs advected by wind. */
 export interface GasBlob {
   x: number; z: number
@@ -263,10 +286,17 @@ export interface WeatherState {
 // Effects / sound queues (sim → presentation seam)
 // ---------------------------------------------------------------------------
 
+/**
+ * What a physical round struck, so the presentation layer can pick the right
+ * dust, spark, splinter or spray. Resolved at the point of impact in the sim's
+ * swept collision, never guessed render-side.
+ */
+export type ImpactSurface = 'dirt' | 'mud' | 'sandbag' | 'steel' | 'flesh' | 'water'
+
 export type FxEvent =
   | { t: 'explosion'; x: number; y: number; z: number; radius: number; big: boolean; dirt: boolean }
   | { t: 'muzzle'; x: number; y: number; z: number; dirX: number; dirZ: number; big?: boolean }
-  | { t: 'tracer'; x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; speed: number }
+  | { t: 'impact'; x: number; y: number; z: number; nx: number; ny: number; nz: number; surface: ImpactSurface; spark: boolean }
   | { t: 'dirt'; x: number; y: number; z: number; amount: number }
   | { t: 'debris'; x: number; y: number; z: number }
   | { t: 'blood'; x: number; y: number; z: number }

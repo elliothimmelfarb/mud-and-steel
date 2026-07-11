@@ -145,6 +145,39 @@ export class Scenery {
 
   // -- dynamic sync ------------------------------------------------------------
 
+  /**
+   * Free the GPU resources a dead entity's group owns, before it's dropped.
+   *
+   * Geometries in props.ts are always built fresh per builder call (there is no
+   * module-level geometry cache), so every geometry in a per-entity group is
+   * owned by that group and safe to dispose — deduped, since buildTankMkIV
+   * shares one geometry across two meshes via `.clone()`.
+   *
+   * Materials are the opposite: every builder pulls from the shared module-cached
+   * `mat.*` set (via fm/wrapVC/pm), so disposing them would corrupt still-living
+   * props. The ONLY owned materials are the per-instance clones made when a
+   * vehicle is dead-dressed (see syncVehicles) — the caller opts into freeing
+   * those via `ownedMaterials`.
+   */
+  private disposeGroup(root: THREE.Object3D, ownedMaterials: boolean): void {
+    const geos = new Set<THREE.BufferGeometry>()
+    const mats = new Set<THREE.Material>()
+    root.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!mesh.isMesh) return
+      if (mesh.geometry && !geos.has(mesh.geometry)) {
+        geos.add(mesh.geometry)
+        mesh.geometry.dispose()
+      }
+      if (ownedMaterials) {
+        const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        for (const m of list) {
+          if (m && !mats.has(m)) { mats.add(m); m.dispose() }
+        }
+      }
+    })
+  }
+
   syncDefences(defences: Defence[], night: boolean): void {
     const t = this.terrain
     let coil = 0, post = 0, trap = 0, stake = 0, bag = 0
@@ -241,9 +274,14 @@ export class Scenery {
     for (const [id, g] of this.defenceProps) {
       if (!liveIds.has(id)) {
         this.scene.remove(g)
+        this.disposeGroup(g, false) // materials are shared mat.* — geometry only
         this.defenceProps.delete(id)
         const beam = this.beams.get(id)
-        if (beam) { this.scene.remove(beam); this.beams.delete(id) }
+        if (beam) {
+          this.scene.remove(beam)
+          beam.geometry.dispose() // per-searchlight cone; beamMat is shared, leave it
+          this.beams.delete(id)
+        }
       }
     }
 
@@ -286,6 +324,7 @@ export class Scenery {
     for (const [id, g] of this.unitProps) {
       if (!live.has(id)) {
         this.scene.remove(g)
+        this.disposeGroup(g, false) // materials are shared mat.* — geometry only
         this.unitProps.delete(id)
       }
     }
@@ -304,8 +343,17 @@ export class Scenery {
       }
       const y = this.terrain.heightAt(v.pos.x, v.pos.z)
       entry.group.position.set(v.pos.x, y, v.pos.z)
+      // Sit the hull on the actual ground: pitch over crests, roll on cambers.
+      const dirX = Math.sin(v.facing), dirZ = -Math.cos(v.facing)
+      const rightX = -Math.cos(v.facing), rightZ = -Math.sin(v.facing)
+      const hF = this.terrain.heightAt(v.pos.x + dirX * 2.8, v.pos.z + dirZ * 2.8)
+      const hB = this.terrain.heightAt(v.pos.x - dirX * 2.8, v.pos.z - dirZ * 2.8)
+      const hR = this.terrain.heightAt(v.pos.x + rightX * 1.4, v.pos.z + rightZ * 1.4)
+      const hL = this.terrain.heightAt(v.pos.x - rightX * 1.4, v.pos.z - rightZ * 1.4)
+      entry.group.rotation.order = 'YXZ'
       entry.group.rotation.y = -v.facing + Math.PI
-      entry.group.rotation.z = v.bogged ? 0.06 : 0
+      entry.group.rotation.x = -Math.atan2(hF - hB, 5.6)
+      entry.group.rotation.z = Math.atan2(hR - hL, 2.8) + (v.bogged ? 0.06 : 0)
       if (v.dead && !entry.deadDressed) {
         entry.deadDressed = true
         entry.group.traverse((o) => {
@@ -321,6 +369,9 @@ export class Scenery {
     for (const [id, entry] of this.vehicleProps) {
       if (!live.has(id)) {
         this.scene.remove(entry.group)
+        // Dead-dressed vehicles carry per-instance cloned materials (owned);
+        // otherwise materials are the shared mat.* set. Geometry is always owned.
+        this.disposeGroup(entry.group, entry.deadDressed)
         this.vehicleProps.delete(id)
       }
     }
