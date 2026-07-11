@@ -1,0 +1,41 @@
+/** Minimal typed event bus for cross-cutting notifications (UI ← sim). */
+
+export interface GameEvents {
+  waveStart: { wave: number; name: string }
+  waveEnd: { wave: number; bonus: number }
+  sectionLost: { sectionId: number }
+  sectionRetaken: { sectionId: number }
+  unitPlaced: { unitId: number }
+  unitLost: { unitId: number; kind: string }
+  soldierDied: { name: string; rank: string; kind: string; wave: number }
+  gasAlarm: { incoming: boolean }
+  barrageWarning: { x: number; z: number; seconds: number }
+  tankSighted: Record<string, never>
+  promoted: { unitId: number; vet: number }
+  reqChanged: { req: number }
+  gameOver: { victory: boolean }
+  toast: { text: string; kind: 'info' | 'warn' | 'danger' | 'good' }
+}
+
+type Handler<T> = (payload: T) => void
+
+export class EventBus {
+  private handlers = new Map<keyof GameEvents, Set<Handler<never>>>()
+
+  on<K extends keyof GameEvents>(name: K, fn: Handler<GameEvents[K]>): () => void {
+    let set = this.handlers.get(name)
+    if (!set) { set = new Set(); this.handlers.set(name, set) }
+    set.add(fn as Handler<never>)
+    return () => set.delete(fn as Handler<never>)
+  }
+
+  emit<K extends keyof GameEvents>(name: K, payload: GameEvents[K]): void {
+    const set = this.handlers.get(name)
+    if (!set) return
+    for (const fn of set) (fn as Handler<GameEvents[K]>)(payload)
+  }
+
+  clear(): void {
+    this.handlers.clear()
+  }
+}

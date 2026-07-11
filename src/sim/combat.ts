@@ -1,0 +1,471 @@
+/**
+ * The combat model. Small-arms fire is probabilistic but physical: rounds take
+ * real travel time, misses land somewhere and suppress, cover comes from the
+ * actual terrain (trench, parapet state, shell holes), and night/fog/gas-mask
+ * all degrade shooting. Explosions damage BOTH sides, deform the terrain, and
+ * knock down parapets — your own mortars can bury your own charge.
+ */
+import type { Enemy, Soldier, Team, Unit, Vehicle } from '../core/types'
+import { ARMOUR_MULT, COMBAT, ENEMY_DEFS, UNIT_DEFS, VET_ACC_BONUS } from '../core/config'
+import { dist2, fx, snd, type Ctx, type PendingShot } from './sim'
+import { damageParapet, parapetFactor, sectionAt } from './trench'
+
+// ---------------------------------------------------------------------------
+// Geometry / perception helpers
+// ---------------------------------------------------------------------------
+
+export function stanceHeight(st: Soldier['stance']): number {
+  switch (st) {
+    case 'stand': return 1.5
+    case 'crouch': return 1.0
+    case 'prone': return 0.4
+    case 'dead': return 0.2
+  }
+}
+
+export function eyePos(ctx: Ctx, s: Soldier): { x: number; y: number; z: number } {
+  return { x: s.pos.x, y: ctx.terrain.heightAt(s.pos.x, s.pos.z) + stanceHeight(s.stance), z: s.pos.z }
+}
+
+/** Is this point illuminated right now? (day, flare overhead, searchlight beam) */
+export function litAt(ctx: Ctx, x: number, z: number): boolean {
+  if (!ctx.weather.state.night) return true
+  for (const p of ctx.s.projectiles) {
+    if (p.kind === 'flare' && p.pos.y > 2 && dist2(p.pos.x, p.pos.z, x, z) < 85 * 85) return true
+  }
+  for (const d of ctx.s.defences) {
+    if (d.kind !== 'searchlight' || !d.active || d.hp <= 0) continue
+    // Beam: a 12°-wide wedge out to 170m at d.angle.
+    const dx = x - d.pos.x, dz = z - d.pos.z
+    const dist = Math.hypot(dx, dz)
+    if (dist > 170 || dist < 4) continue
+    const bearing = Math.atan2(dx, -dz)
+    let diff = bearing - d.angle
+    while (diff > Math.PI) diff -= Math.PI * 2
+    while (diff < -Math.PI) diff += Math.PI * 2
+    if (Math.abs(diff) < 0.105) return true
+  }
+  return false
+}
+
+/** 0..~0.85 damage & hit-chance reduction from what the target is standing in. */
+export function coverFor(ctx: Ctx, s: Soldier): number {
+  let cover = 0
+  const t = ctx.terrain
+  if (t.trenchAt(s.pos.x, s.pos.z) > 0.45) {
+    const sec = sectionAt(ctx.s.sections, s.pos.x, s.pos.z)
+    cover = COMBAT.coverTrench * parapetFactor(sec)
+  } else if (t.craterDepthAt(s.pos.x, s.pos.z) > 0.45 && s.stance !== 'stand') {
+    cover = COMBAT.coverCrater
+  }
+  if (s.stance === 'prone') cover = Math.max(cover, COMBAT.coverProne)
+  else if (s.stance === 'crouch') cover = Math.max(cover, COMBAT.coverProne * 0.5)
+  return Math.min(0.85, cover)
+}
+
+// ---------------------------------------------------------------------------
+// Small arms
+// ---------------------------------------------------------------------------
+
+export interface ShotSpec {
+  shooter: Soldier
+  team: Team
+  target: { kind: 'soldier'; ref: Soldier } | { kind: 'vehicle'; ref: Vehicle }
+  damage: number
+  accuracy: number
+  range: number
+  suppress: number
+  category: string
+  shooterUnitId: number
+  tracer: boolean
+  sound: string | null
+  vetLevel?: number
+}
+
+export function fireSmallArms(ctx: Ctx, spec: ShotSpec): void {
+  const { s } = ctx
+  const sh = spec.shooter
+  const tgt = spec.target.ref
+  const tx = spec.target.kind === 'soldier' ? tgt.pos.x : (tgt as Vehicle).pos.x
+  const tz = spec.target.kind === 'soldier' ? tgt.pos.z : (tgt as Vehicle).pos.z
+  const d = Math.sqrt(dist2(sh.pos.x, sh.pos.z, tx, tz))
+
+  // -- hit probability ------------------------------------------------------
+  let p = spec.accuracy
+  p *= Math.max(0.08, 1.12 - 0.62 * Math.pow(d / Math.max(1, spec.range), 1.5))
+  if (spec.vetLevel) p *= 1 + spec.vetLevel * VET_ACC_BONUS
+  // Shooter state
+  p *= 1 - Math.min(0.6, sh.suppression * 0.65)
+  if (sh.masked) p *= ctx.mods.maskAccPenalty
+  // Visibility
+  const w = ctx.weather.state
+  if (w.night && !litAt(ctx, tx, tz)) p *= COMBAT.nightAccMult
+  if (w.fog > 0.15) {
+    const effRange = spec.range * (1 - 0.45 * w.fog)
+    if (d > effRange) p *= 0.25
+  }
+  // Target protection
+  if (spec.target.kind === 'soldier') {
+    p *= 1 - coverFor(ctx, tgt as Soldier)
+  } else {
+    p = Math.min(0.95, p * 1.9) // a tank is hard to miss
+  }
+
+  const hit = ctx.rand() < p
+
+  // -- damage ---------------------------------------------------------------
+  let dmg = spec.damage * (0.8 + ctx.rand() * 0.4)
+  if (spec.target.kind === 'vehicle') {
+    dmg *= ARMOUR_MULT[Math.min(2, (tgt as Vehicle).armour)]
+  }
+
+  // -- muzzle + report ------------------------------------------------------
+  const eye = eyePos(ctx, sh)
+  const dirX = (tx - sh.pos.x) / Math.max(0.01, d)
+  const dirZ = (tz - sh.pos.z) / Math.max(0.01, d)
+  fx(s, { t: 'muzzle', x: eye.x + dirX * 0.8, y: eye.y, z: eye.z + dirZ * 0.8, dirX, dirZ })
+  if (spec.sound) snd(s, { name: spec.sound, x: eye.x, y: eye.y, z: eye.z })
+
+  // -- impact point ----------------------------------------------------------
+  let ix = tx, iz = tz
+  const targetH = spec.target.kind === 'soldier'
+    ? ctx.terrain.heightAt(tx, tz) + stanceHeight((tgt as Soldier).stance) * 0.7
+    : ctx.terrain.heightAt(tx, tz) + 1.6
+  let iy = targetH
+  if (!hit) {
+    const miss = 1 + ctx.rand() * 3
+    const ang = ctx.rand() * Math.PI * 2
+    ix += Math.cos(ang) * miss
+    iz += Math.sin(ang) * miss
+    iy = ctx.terrain.heightAt(ix, iz) + 0.05
+  }
+
+  if (spec.tracer || ctx.rand() < 0.25) {
+    fx(s, { t: 'tracer', x1: eye.x, y1: eye.y, z1: eye.z, x2: ix, y2: iy, z2: iz, speed: COMBAT.bulletSpeed })
+  }
+
+  s.pendingShots.push({
+    t: s.time + d / COMBAT.bulletSpeed,
+    targetKind: spec.target.kind,
+    targetId: spec.target.kind === 'soldier' ? (tgt as Soldier).id : (tgt as Vehicle).id,
+    hit, damage: dmg, category: spec.category, team: spec.team,
+    x: ix, y: iy, z: iz,
+    shooterUnitId: spec.shooterUnitId,
+  })
+
+  // MG bursts suppress the whole beaten zone immediately.
+  if (spec.suppress > 0.08) {
+    suppressArea(ctx, tx, tz, 4.5, spec.suppress * 0.6, spec.team)
+  }
+}
+
+export function resolvePendingShots(ctx: Ctx): void {
+  const { s } = ctx
+  let w = 0
+  for (let i = 0; i < s.pendingShots.length; i++) {
+    const shot = s.pendingShots[i]
+    if (shot.t > s.time) { s.pendingShots[w++] = shot; continue }
+    if (shot.hit) {
+      if (shot.targetKind === 'soldier') {
+        const tgt = findSoldier(ctx, shot.targetId)
+        if (tgt && tgt.hp > 0) {
+          damageSoldier(ctx, tgt, shot.damage, shot.category, shot.team, shot.shooterUnitId)
+        }
+      } else {
+        const v = s.vehicles.find((v) => v.id === shot.targetId)
+        if (v && !v.dead) {
+          if (shot.damage <= 0.5) {
+            snd(s, { name: 'ricochet', x: shot.x, y: shot.y, z: shot.z, gain: 0.5 })
+          } else {
+            damageVehicle(ctx, v, shot.damage, shot.category, shot.team, shot.shooterUnitId)
+          }
+        }
+      }
+    } else {
+      // A miss is not nothing: dirt kicks up, heads go down.
+      if (ctx.rand() < 0.4) fx(s, { t: 'dirt', x: shot.x, y: shot.y, z: shot.z, amount: 0.3 })
+      suppressNear(ctx, shot.x, shot.z, 2.5, 0.12, shot.team)
+    }
+  }
+  s.pendingShots.length = w
+}
+
+// ---------------------------------------------------------------------------
+// Damage & death
+// ---------------------------------------------------------------------------
+
+export function findSoldier(ctx: Ctx, id: number): Soldier | null {
+  for (const e of ctx.s.enemies) if (e.id === id) return e
+  for (const u of ctx.s.units) {
+    for (const c of u.crew) if (c.id === id) return c
+  }
+  return null
+}
+
+export function damageSoldier(
+  ctx: Ctx, target: Soldier, dmg: number, category: string, sourceTeam: Team, shooterUnitId: number,
+): void {
+  if (target.hp <= 0) return
+  target.hp -= dmg
+  target.morale = Math.max(0, target.morale - COMBAT.moraleHitPenalty)
+  target.suppression = Math.min(1, target.suppression + 0.15)
+  // Director learns what kills its men.
+  if (target.team === 'german' && sourceTeam === 'brit') {
+    const d = ctx.s.director.dmgByCategory
+    d[category] = (d[category] ?? 0) + dmg
+  }
+  if (target.hp <= 0) {
+    killSoldier(ctx, target, sourceTeam, shooterUnitId)
+  }
+}
+
+export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooterUnitId: number): void {
+  const { s } = ctx
+  if (target.stance === 'dead') return // never record the same man twice
+  target.hp = 0
+  target.stance = 'dead'
+  const y = ctx.terrain.heightAt(target.pos.x, target.pos.z)
+  s.corpses.push({
+    x: target.pos.x, z: target.pos.z, y, facing: target.facing,
+    team: target.team, deadT: 0, seed: target.id * 0.618 % 1,
+    mounted: false,
+  })
+  if (s.corpses.length > 140) s.corpses.shift()
+  fx(s, { t: 'blood', x: target.pos.x, y: y + 0.6, z: target.pos.z })
+  if (ctx.rand() < 0.5) snd(s, { name: 'death_cry', x: target.pos.x, y, z: target.pos.z, gain: 0.5 })
+
+  // Morale shock ripples to nearby friends.
+  for (const ally of alliesNear(ctx, target.team, target.pos.x, target.pos.z, 10)) {
+    if (ally !== target) ally.morale = Math.max(0, ally.morale - COMBAT.moraleDeathPenalty)
+  }
+
+  if (target.team === 'german') {
+    // Only deaths the PLAYER caused pay out — Germans lost to their own
+    // barrages and gas are not your kills.
+    if (sourceTeam === 'brit') {
+      const e = target as Enemy
+      s.stats.kills++
+      const bounty = Math.round(e.bounty * ctx.mods.bounty)
+      s.req += bounty
+      s.stats.reqEarned += bounty
+      ctx.events.emit('reqChanged', { req: s.req })
+      if (shooterUnitId >= 0) {
+        const u = s.units.find((u) => u.id === shooterUnitId)
+        if (u) creditKill(ctx, u)
+      }
+    }
+  } else {
+    s.stats.losses++
+    // Name the man for the memorial. His unit gives him his rank.
+    let rank = 'Pte.'
+    let kind = 'rifleman'
+    for (const u of s.units) {
+      if (u.crew.includes(target)) {
+        rank = ['Pte.', 'L/Cpl.', 'Cpl.', 'Sjt.'][u.vet] ?? 'Pte.'
+        kind = u.kind
+        break
+      }
+    }
+    ctx.events.emit('soldierDied', {
+      name: `${target.name.first} ${target.name.last}`,
+      rank, kind, wave: s.wave,
+    })
+  }
+}
+
+export function creditKill(ctx: Ctx, u: Unit): void {
+  u.xp++
+  if (u.crew.length > 0) u.crew[0].kills++
+  const th = [4, 10, 20]
+  const level = th.filter((t) => u.xp >= t).length as 0 | 1 | 2 | 3
+  if (level > u.vet) {
+    u.vet = level
+    ctx.events.emit('promoted', { unitId: u.id, vet: level })
+  }
+}
+
+export function damageVehicle(
+  ctx: Ctx, v: Vehicle, dmg: number, category: string, sourceTeam: Team, shooterUnitId: number,
+): void {
+  if (v.dead) return
+  v.hp -= dmg
+  if (v.team === 'german' && sourceTeam === 'brit') {
+    const d = ctx.s.director.dmgByCategory
+    d[category] = (d[category] ?? 0) + dmg
+  }
+  snd(ctx.s, { name: 'tank_hit', x: v.pos.x, y: 1.5, z: v.pos.z, gain: 0.7 })
+  if (v.hp <= 0) {
+    v.dead = true
+    v.burnT = 45
+    const y = ctx.terrain.heightAt(v.pos.x, v.pos.z)
+    fx(ctx.s, { t: 'explosion', x: v.pos.x, y: y + 1.5, z: v.pos.z, radius: 5, big: true, dirt: false })
+    snd(ctx.s, { name: 'explosion_big', x: v.pos.x, y, z: v.pos.z })
+    if (v.team === 'german') {
+      const def = v.kind === 'etank' ? 200 : 60
+      const bounty = Math.round(def * ctx.mods.bounty)
+      ctx.s.req += bounty
+      ctx.s.stats.reqEarned += bounty
+      ctx.s.stats.kills++
+      ctx.events.emit('reqChanged', { req: ctx.s.req })
+      if (shooterUnitId >= 0) {
+        const u = ctx.s.units.find((u) => u.id === shooterUnitId)
+        if (u) creditKill(ctx, u)
+      }
+    }
+    ctx.flowDirty = true // wrecks become obstacles
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Explosions
+// ---------------------------------------------------------------------------
+
+export interface ExplodeOpts {
+  team: Team
+  category: string
+  shooterUnitId?: number
+  craterRadius?: number     // 0/undefined = no terrain deformation
+  craterDepth?: number
+  big?: boolean
+}
+
+export function explode(ctx: Ctx, x: number, z: number, radius: number, damage: number, o: ExplodeOpts): void {
+  const { s } = ctx
+  const y = ctx.terrain.heightAt(x, z)
+  const water = ctx.terrain.floodedAt(x, z)
+
+  // Terrain scar first (changes cover for the damage step below — fair: the
+  // blast and the hole are simultaneous, but this errs kindly).
+  if (o.craterRadius && o.craterRadius > 0) {
+    ctx.terrain.crater(x, z, o.craterRadius, o.craterDepth ?? 0.8)
+    ctx.flowDirty = true
+  }
+
+  fx(s, { t: 'explosion', x, y: y + 0.3, z, radius, big: !!o.big, dirt: !water })
+  if (water) fx(s, { t: 'dirt', x, y: y + 0.2, z, amount: 2 })
+  snd(s, { name: o.big ? 'explosion_big' : 'explosion_small', x, y, z })
+
+  // Soldiers — BOTH teams. War is not tidy.
+  const r2 = radius * radius
+  for (const u of s.units) {
+    if (u.disbanded) continue
+    for (const c of u.crew) {
+      if (c.hp <= 0) continue
+      const d2 = dist2(c.pos.x, c.pos.z, x, z)
+      if (d2 > r2 * 2.6) continue
+      let dmg = blastDamage(damage, Math.sqrt(d2), radius)
+      if (dmg <= 0) continue
+      dmg *= 1 - coverFor(ctx, c) * 0.75
+      if (s.orders.coverT > 0) dmg *= 0.5 * ctx.mods.barrageCasualty
+      damageSoldier(ctx, c, dmg, o.category, o.team, -1)
+    }
+  }
+  for (const e of s.enemies) {
+    if (e.hp <= 0) continue
+    const d2 = dist2(e.pos.x, e.pos.z, x, z)
+    if (d2 > r2 * 2.6) continue
+    let dmg = blastDamage(damage, Math.sqrt(d2), radius)
+    if (dmg <= 0) continue
+    dmg *= 1 - coverFor(ctx, e) * 0.75
+    damageSoldier(ctx, e, dmg, o.category, o.team, o.shooterUnitId ?? -1)
+  }
+  for (const v of s.vehicles) {
+    if (v.dead) continue
+    const d2 = dist2(v.pos.x, v.pos.z, x, z)
+    if (d2 > (radius + 3) * (radius + 3)) continue
+    const isAP = o.category === 'artillery' || o.category === 'mine'
+    const mult = isAP ? 1 : 0.3
+    damageVehicle(ctx, v, blastDamage(damage, Math.sqrt(d2), radius + 3) * mult, o.category, o.team, o.shooterUnitId ?? -1)
+  }
+
+  // Defences: wire gets shredded, traps and posts battered.
+  for (const d of s.defences) {
+    if (d.hp <= 0) continue
+    const dd2 = dist2(d.pos.x, d.pos.z, x, z)
+    if (dd2 > (radius + 2) * (radius + 2)) continue
+    const dmg = blastDamage(damage, Math.sqrt(dd2), radius + 2)
+    d.hp -= d.kind === 'wire' ? dmg * 1.6 : dmg
+    if (d.kind === 'wire') d.wear = Math.min(1, d.wear + 0.4)
+    if (d.hp <= 0 && d.kind === 'wire') {
+      fx(s, { t: 'wiresnap', x: d.pos.x, y: ctx.terrain.heightAt(d.pos.x, d.pos.z) + 0.4, z: d.pos.z })
+      ctx.flowDirty = true
+    }
+  }
+
+  damageParapet(ctx, x, z, damage * 0.65)
+  suppressArea(ctx, x, z, radius * 2.1, Math.min(0.55, damage / 90), null)
+}
+
+function blastDamage(damage: number, d: number, radius: number): number {
+  if (d > radius * 1.6) return 0
+  const t = Math.max(0, 1 - d / (radius * 1.6))
+  return damage * t * t
+}
+
+// ---------------------------------------------------------------------------
+// Suppression & morale utilities
+// ---------------------------------------------------------------------------
+
+/** Suppress the OPPOSING team near a point (team=null suppresses everyone). */
+export function suppressArea(ctx: Ctx, x: number, z: number, radius: number, amount: number, team: Team | null): void {
+  const r2 = radius * radius
+  if (team !== 'german') {
+    for (const e of ctx.s.enemies) {
+      if (e.hp <= 0) continue
+      const d2 = dist2(e.pos.x, e.pos.z, x, z)
+      if (d2 < r2) e.suppression = Math.min(1, e.suppression + amount * (1 - d2 / r2))
+    }
+  }
+  if (team !== 'brit') {
+    for (const u of ctx.s.units) {
+      if (u.disbanded) continue
+      for (const c of u.crew) {
+        if (c.hp <= 0) continue
+        const d2 = dist2(c.pos.x, c.pos.z, x, z)
+        if (d2 < r2) c.suppression = Math.min(1, c.suppression + amount * (1 - d2 / r2))
+      }
+    }
+  }
+}
+
+function suppressNear(ctx: Ctx, x: number, z: number, radius: number, amount: number, shooterTeam: Team): void {
+  suppressArea(ctx, x, z, radius, amount, shooterTeam)
+}
+
+function* alliesNear(ctx: Ctx, team: Team, x: number, z: number, radius: number): Generator<Soldier> {
+  const r2 = radius * radius
+  if (team === 'german') {
+    for (const e of ctx.s.enemies) {
+      if (e.hp > 0 && dist2(e.pos.x, e.pos.z, x, z) < r2) yield e
+    }
+  } else {
+    for (const u of ctx.s.units) {
+      if (u.disbanded) continue
+      for (const c of u.crew) if (c.hp > 0 && dist2(c.pos.x, c.pos.z, x, z) < r2) yield c
+    }
+  }
+}
+
+/** Shared per-soldier upkeep: suppression decay, morale regen, gas coughing. */
+export function soldierUpkeep(ctx: Ctx, sol: Soldier, dt: number, officerNear: boolean, medicNear: boolean): void {
+  sol.suppression = Math.max(0, sol.suppression - COMBAT.suppressDecay * dt * (officerNear ? 1.6 : 1))
+  let regen = COMBAT.moraleRegen * (officerNear ? 2.2 : 1) * (medicNear ? 1.5 : 1) * ctx.mods.rallyRate
+  sol.morale = Math.min(1, sol.morale + regen * dt)
+  const floor = sol.team === 'brit' ? ctx.mods.moraleFloor : 0
+  if (sol.morale < floor) sol.morale = floor
+  if (sol.gasExposure > 0) {
+    sol.gasExposure = Math.max(0, sol.gasExposure - dt * 0.5)
+    if (ctx.rand() < dt * 0.25) {
+      snd(ctx.s, { name: 'cough', x: sol.pos.x, y: 1, z: sol.pos.z, gain: 0.35 })
+    }
+  }
+}
+
+/** Weapon-appropriate stance given suppression & orders. */
+export function combatStance(sol: Soldier, inTrench: boolean, takingCover: boolean): void {
+  if (sol.stance === 'dead') return
+  if (takingCover) { sol.stance = 'crouch'; return }
+  if (sol.suppression > COMBAT.suppressPin) sol.stance = inTrench ? 'crouch' : 'prone'
+  else if (sol.suppression > COMBAT.suppressCrouch) sol.stance = 'crouch'
+  else sol.stance = 'stand'
+}

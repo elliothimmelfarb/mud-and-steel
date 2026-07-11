@@ -1,0 +1,400 @@
+/**
+ * MUD & STEEL — shared type spine.
+ * Sim runs in 2D top-down coords (x: west→east, z: north→south).
+ * The enemy advances from north (-z) toward the player trenches (+z).
+ * y is height above sea level, always derived from terrain except for projectiles/flares.
+ * Units: meters, seconds, radians. Sim ticks at a fixed 30 Hz.
+ */
+
+export interface Vec2 { x: number; z: number }
+export interface Vec3 { x: number; y: number; z: number }
+
+export type Team = 'brit' | 'german'
+
+// ---------------------------------------------------------------------------
+// Player buildables
+// ---------------------------------------------------------------------------
+
+export type UnitKindId =
+  | 'rifleman' | 'lewis' | 'vickers' | 'sniper' | 'grenadier'
+  | 'mortar' | 'fieldgun' | 'flamer' | 'medic' | 'officer'
+  | 'engineer' | 'gasproj'
+
+export type DefenceKindId =
+  | 'wire' | 'mine' | 'sandbags' | 'tanktrap' | 'searchlight' | 'flarepost'
+
+export type BuildableId = UnitKindId | DefenceKindId
+
+/** Where a buildable may be placed. */
+export type PlacementKind =
+  | 'trench'   // inside a trench section (infantry)
+  | 'pad'      // emplacement pads dug behind/into the line (crewed weapons)
+  | 'field'    // open ground in no-man's land / approaches (wire, mines...)
+
+export type Stance = 'stand' | 'crouch' | 'prone' | 'dead'
+
+export interface SoldierName { first: string; last: string }
+
+/** One human being. Player soldiers live inside a Unit's crew; enemies stand alone. */
+export interface Soldier {
+  id: number
+  team: Team
+  pos: Vec2
+  /** Facing in radians, 0 = looking north (-z), increases clockwise when viewed from above. */
+  facing: number
+  hp: number
+  maxHp: number
+  stance: Stance
+  /** 0..1, decays; high suppression forces crouch/prone and ruins accuracy. */
+  suppression: number
+  /** 0..1; at ~0 the soldier breaks and routs. */
+  morale: number
+  masked: boolean
+  /** Gas damage accumulator (for coughing sfx pacing etc). */
+  gasExposure: number
+  /** Animation phase accumulator (walk cycle, etc). */
+  animPhase: number
+  /** Seconds until this soldier may fire again. */
+  cooldown: number
+  name: SoldierName
+  kills: number
+}
+
+export type VeterancyLevel = 0 | 1 | 2 | 3 // green, seasoned, veteran, elite
+
+export interface Unit {
+  id: number
+  kind: UnitKindId
+  slotId: number
+  pos: Vec2
+  crew: Soldier[]
+  /** Weapon heat 0..1 (vickers overheats; venting steam at ~1). */
+  heat: number
+  /** Vickers jacket venting: latched until heat drains back to ~0.35. */
+  venting: boolean
+  /** Shells in the ready rack for mortar/fieldgun/gasproj; -1 = not ammo-limited. */
+  ammo: number
+  xp: number
+  vet: VeterancyLevel
+  targeting: TargetPriority
+  /** True while the crew has abandoned the position (routed / taking cover). */
+  fallenBack: boolean
+  disbanded: boolean
+}
+
+export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
+
+export interface Defence {
+  id: number
+  kind: DefenceKindId
+  pos: Vec2
+  /** Wire/sandbags degrade; mines are hp=1 until triggered. */
+  hp: number
+  maxHp: number
+  /** For wire: how mangled it is visually, 0..1. */
+  wear: number
+  /** Searchlight/flarepost state. */
+  active: boolean
+  angle: number
+}
+
+// ---------------------------------------------------------------------------
+// The enemy
+// ---------------------------------------------------------------------------
+
+export type EnemyKindId =
+  | 'einf'      // line infantry
+  | 'estorm'    // stormtrooper: fast, grenades, cuts wire
+  | 'eofficer'  // buffs nearby morale/speed
+  | 'emg'       // MG08 team: sets up in craters, suppresses
+  | 'esniper'
+  | 'eflamer'
+  | 'ecav'      // uhlan cavalry, early waves
+  | 'epioneer'  // wire-cutting/bridging party
+
+export type VehicleKindId = 'ecar' | 'etank' | 'friendlytank'
+
+export type EnemyBehavior =
+  | 'advance'     // moving toward objective via flow field
+  | 'rush'        // sprint (storm/cav)
+  | 'takecover'   // in a crater / shell hole, popping up to fire
+  | 'setup'       // MG deploying
+  | 'firing'
+  | 'cutting'     // cutting wire
+  | 'melee'       // in the trench, close combat
+  | 'rout'        // broken, fleeing north
+  | 'mopup'       // pushing along a captured trench
+
+export interface Enemy extends Soldier {
+  kind: EnemyKindId
+  squadId: number
+  behavior: EnemyBehavior
+  /** Seconds remaining in a timed behavior (setup, cutting...). */
+  behaviorT: number
+  /** Chosen shell-hole to bound toward, if any. */
+  coverTarget: Vec2 | null
+  speedMul: number
+  bounty: number
+  /** Cavalry: the horse dies separately; rider may continue on foot. */
+  mounted: boolean
+}
+
+export interface Squad {
+  id: number
+  members: number[] // enemy ids
+  /** Squad-level objective: which trench section to assault. */
+  targetSectionId: number
+  /** Bounding-overwatch rhythm: squads alternate moving and firing. */
+  bounding: boolean
+  routed: boolean
+}
+
+export interface Vehicle {
+  id: number
+  kind: VehicleKindId
+  team: Team
+  pos: Vec2
+  facing: number
+  hp: number
+  maxHp: number
+  /** Small-arms bounce off armour > 0; mortars/guns/mines penetrate. */
+  armour: number
+  speed: number
+  /** Stuck in deep mud/crater. */
+  bogged: boolean
+  boggedT: number
+  cooldownMain: number
+  cooldownMG: number
+  dead: boolean
+  /** Burning wreck timer. */
+  burnT: number
+}
+
+// ---------------------------------------------------------------------------
+// Ordnance / hazards
+// ---------------------------------------------------------------------------
+
+export type ProjectileKind =
+  | 'shell'      // field gun / off-map artillery HE
+  | 'mortarbomb'
+  | 'grenade'
+  | 'gasshell'
+  | 'flare'
+  | 'tankshell'
+
+export interface Projectile {
+  id: number
+  kind: ProjectileKind
+  team: Team
+  pos: Vec3
+  vel: Vec3
+  /** Blast radius on impact. */
+  radius: number
+  damage: number
+  /** For flares: burn time; for shells: fuse (airburst if > 0 when timer hits). */
+  timer: number
+  sourceUnitId: number
+}
+
+/** A drifting gas concentration blob. Clouds are sets of blobs advected by wind. */
+export interface GasBlob {
+  x: number; z: number
+  r: number
+  /** Concentration 0..1, decays with diffusion. */
+  c: number
+}
+
+export interface GasCloud {
+  id: number
+  team: Team
+  blobs: GasBlob[]
+  age: number
+}
+
+// ---------------------------------------------------------------------------
+// The trench system
+// ---------------------------------------------------------------------------
+
+export interface TrenchSlot {
+  id: number
+  sectionId: number
+  kind: PlacementKind
+  pos: Vec2
+  unitId: number | null
+}
+
+export interface TrenchSection {
+  id: number
+  /** 'front' | 'support' — support sections are the last line. */
+  line: 'front' | 'support'
+  a: Vec2
+  b: Vec2
+  mid: Vec2
+  /** Parapet integrity: shells knock it down, engineers rebuild it. Cover scales with it. */
+  parapetHp: number
+  parapetMax: number
+  captured: boolean
+  /** Progress 0..1 of an enemy capture in progress. */
+  captureT: number
+}
+
+// ---------------------------------------------------------------------------
+// Weather & environment
+// ---------------------------------------------------------------------------
+
+export interface WeatherState {
+  /** Wind vector, m/s. Meanders via noise. Gas cares deeply. */
+  windX: number
+  windZ: number
+  /** 0..1 rainfall right now. */
+  rain: number
+  /** 0..1 fog density (cuts vision & render distance). */
+  fog: number
+  /** Ground wetness 0..1: craters flood, mud slows, weapons foul slightly. */
+  wetness: number
+  /** Time of day 0..1 (0 = midnight). Some waves happen at night. */
+  tod: number
+  night: boolean
+  /** Storm cell timer for thunder. */
+  thunderT: number
+}
+
+// ---------------------------------------------------------------------------
+// Effects / sound queues (sim → presentation seam)
+// ---------------------------------------------------------------------------
+
+export type FxEvent =
+  | { t: 'explosion'; x: number; y: number; z: number; radius: number; big: boolean; dirt: boolean }
+  | { t: 'muzzle'; x: number; y: number; z: number; dirX: number; dirZ: number; big?: boolean }
+  | { t: 'tracer'; x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; speed: number }
+  | { t: 'dirt'; x: number; y: number; z: number; amount: number }
+  | { t: 'debris'; x: number; y: number; z: number }
+  | { t: 'blood'; x: number; y: number; z: number }
+  | { t: 'flame'; x: number; y: number; z: number; dirX: number; dirZ: number; length: number }
+  | { t: 'smokepuff'; x: number; y: number; z: number; size: number }
+  | { t: 'steam'; x: number; y: number; z: number }
+  | { t: 'flash'; x: number; y: number; z: number; color: number; intensity: number; decay: number }
+  | { t: 'wiresnap'; x: number; y: number; z: number }
+
+export interface SoundEvent {
+  name: string
+  x?: number
+  y?: number
+  z?: number
+  gain?: number
+  rate?: number
+  /** For shell whistles: seconds until impact. */
+  dur?: number
+}
+
+// ---------------------------------------------------------------------------
+// Waves & the adaptive director
+// ---------------------------------------------------------------------------
+
+export interface WaveSpawn {
+  kind: EnemyKindId | VehicleKindId
+  count: number
+  /** Seconds after wave start. */
+  at: number
+  /** Spawn cluster center x (z is always the north edge). */
+  x: number
+}
+
+export interface WavePlan {
+  number: number
+  name: string
+  spawns: WaveSpawn[]
+  /** Off-map artillery events during the wave. */
+  barrages: Array<{ at: number; x: number; z: number; shells: number; gas: boolean }>
+  night: boolean
+  weatherBias: 'clear' | 'rain' | 'fog'
+  /** What the director decided to punish. Shown in intel if recon purchased. */
+  intent: string
+}
+
+/** Tracks how the player kills things so the director can adapt. */
+export interface DirectorMemory {
+  dmgByCategory: Record<string, number> // 'mg' | 'rifle' | 'artillery' | 'gas' | 'wire' | 'mine' | 'flame' | 'sniper'
+  lossesLastWave: number
+  playerLossesLastWave: number
+  wireDensity: number
+}
+
+// ---------------------------------------------------------------------------
+// Meta / run state
+// ---------------------------------------------------------------------------
+
+export type GamePhase = 'build' | 'assault' | 'debrief'
+
+export type Difficulty = 'quiet' | 'front' | 'push'
+
+export interface CasualtyRecord {
+  name: SoldierName
+  rank: string
+  kind: UnitKindId
+  wave: number
+  epitaph: string
+}
+
+export interface RunStats {
+  kills: number
+  losses: number
+  shellsFired: number
+  gasClouds: number
+  sectionsLost: number
+  reqEarned: number
+  score: number
+}
+
+export interface OrderStateMap {
+  takecover: number   // cooldown remaining (s), 0 = ready
+  rapidfire: number
+  bayonets: number
+  masks: boolean      // toggle, not cooldown
+  flare: number
+  barrage: number     // creeping barrage (upgrade-gated)
+  marktank: number    // Mark IV call-in (upgrade-gated)
+}
+
+// ---------------------------------------------------------------------------
+// Terrain interface (implemented in world/terrain.ts; typed here so sim
+// modules don't import the implementation)
+// ---------------------------------------------------------------------------
+
+export interface TerrainLike {
+  readonly width: number   // world meters in x
+  readonly depth: number   // world meters in z
+  heightAt(x: number, z: number): number
+  /** Depth below original ground level (>0 inside craters/trenches). */
+  craterDepthAt(x: number, z: number): number
+  /** 0..1 mud factor (wetness + churn); slows movement, bogs tanks. */
+  mudAt(x: number, z: number): number
+  /** True if standing water at this point (flooded crater). */
+  floodedAt(x: number, z: number): boolean
+  /** Carve a crater. Returns true if terrain actually changed. */
+  crater(x: number, z: number, radius: number, depth: number): boolean
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+export interface GameSettings {
+  volMaster: number
+  volSfx: number
+  volAmbience: number
+  volUi: number
+  quality: 0 | 1 | 2          // low / medium / high
+  shadows: boolean
+  postfx: boolean
+  particleDensity: number      // 0.25..1
+  edgePan: boolean
+  invertZoom: boolean
+  cameraSpeed: number
+  uiScale: number
+  colorAssist: boolean         // enemy chevron markers
+  autoMasks: boolean
+  showFps: boolean
+  reduceFlashes: boolean       // photosensitivity: dampen muzzle/explosion strobing
+  keybinds: Record<string, string>
+}
