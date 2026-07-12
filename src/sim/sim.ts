@@ -92,6 +92,13 @@ export interface Ctx {
    * The AI must not move, pose or fire this man — the player does.
    */
   possessedSoldierId: number
+  /**
+   * Unit id whose weapon the player is currently operating in first person
+   * (-1 = none). The whole unit stands down from auto-firing — the player is
+   * the gunner now; other crew merely feed and load. Also gates a manned
+   * medic/sapper's automatic healing/repair, which the player performs by hand.
+   */
+  possessedUnitId: number
 }
 
 export function makeStats(): RunStats {

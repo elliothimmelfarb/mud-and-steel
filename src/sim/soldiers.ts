@@ -106,6 +106,11 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
     formUp(ctx, u, homeX, homeZ, dt)
   }
 
+  // The player has this unit's weapon in hand — it does not fire, heat, heal
+  // or repair on its own. His crew stay put and load; every trigger-pull,
+  // bandage and spanner-turn is now the player's. Crew upkeep already ran.
+  if (u.id === ctx.possessedUnitId) return
+
   // -- weapon heat ------------------------------------------------------------
   if (u.kind === 'vickers') {
     if (u.venting || u.heat >= 1) {

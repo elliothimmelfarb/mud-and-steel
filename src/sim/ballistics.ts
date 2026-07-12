@@ -128,7 +128,10 @@ export function fireBullet(ctx: Ctx, spec: BulletSpec): Bullet {
     category: spec.category,
     shooterUnitId: spec.shooterUnitId,
     shooterId: spec.shooterId,
-    tracer: spec.tracer,
+    // Every round burns a tracer — friendly amber, enemy ember-red (see
+    // RoundRenderer). This is the single point every bullet passes through, so
+    // the choice lives here rather than in each caller's spec.
+    tracer: true,
     life: COMBAT.bulletMaxLife,
   }
   ctx.s.bullets.push(bullet)

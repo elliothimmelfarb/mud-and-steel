@@ -79,6 +79,42 @@ export function spawnShell(ctx: Ctx, u: Unit, target: Target, damage: number, ao
   lob(ctx, 'shell', 'brit', u.pos.x, u.pos.z, y, tx, tz, T, aoe, damage, unitId)
 }
 
+/**
+ * Lob a mortar bomb to an EXPLICIT ground point — used when the player mans the
+ * Stokes himself and drops it wherever his sight is laid, rather than onto an
+ * AI-chosen target. Same arc, whistle and re-digging burst as the crewed gun.
+ */
+export function spawnMortarBombAt(
+  ctx: Ctx, fromX: number, fromZ: number, fromY: number,
+  tx: number, tz: number, damage: number, aoe: number, unitId: number,
+): void {
+  const d = Math.hypot(tx - fromX, tz - fromZ)
+  const T = 2.4 + d * 0.012
+  lob(ctx, 'mortarbomb', 'brit', fromX, fromZ, fromY, tx, tz, T, aoe, damage, unitId)
+  snd(ctx.s, { name: 'mortar_launch', x: fromX, y: fromY, z: fromZ })
+  snd(ctx.s, { name: 'shell_whistle', x: tx, y: 30, z: tz, dur: T * 0.85, gain: 0.5 })
+  fx(ctx.s, { t: 'smokepuff', x: fromX, y: fromY + 0.6, z: fromZ, size: 1.2 })
+}
+
+/**
+ * A flat, fast field-gun shell fired straight down the player's line of sight.
+ * Gravity still bites over the flight, but at 260 m/s the drop is a hand's
+ * width at a hundred metres — you aim at what you mean to hit. The existing
+ * projectile integrator resolves the armour/ground strike and the burst.
+ */
+export function spawnDirectShell(
+  ctx: Ctx, fromX: number, fromY: number, fromZ: number,
+  dirX: number, dirY: number, dirZ: number, speed: number,
+  damage: number, aoe: number, unitId: number,
+): void {
+  push(ctx, {
+    kind: 'shell', team: 'brit',
+    pos: { x: fromX, y: fromY, z: fromZ },
+    vel: { x: dirX * speed, y: dirY * speed, z: dirZ * speed },
+    radius: aoe, damage, timer: 0, sourceUnitId: unitId,
+  })
+}
+
 export function spawnTankShell(ctx: Ctx, team: Team, fromX: number, fromZ: number, tx: number, tz: number, damage: number): void {
   const d = Math.hypot(tx - fromX, tz - fromZ)
   const T = Math.max(0.4, d / 140)

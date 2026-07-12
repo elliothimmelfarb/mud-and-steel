@@ -1118,7 +1118,13 @@ export class EffectsSystem {
     this.flash(x, y + 1, z, water ? 0xcfd8e0 : 0xffa54a, rad * (big ? 260 : 150) * (water ? 0.4 : 1), big ? 0.4 : 0.26)
   }
 
-  muzzleFlash(x: number, y: number, z: number, dirX: number, dirZ: number, big?: boolean): void {
+  /**
+   * `scale` shrinks the whole effect toward the muzzle. Third-person shots leave
+   * it at 1; the first-person viewmodel passes a fraction so a world-scale flash
+   * doesn't balloon a metre past a barrel that's only ~1m from the eye — it hugs
+   * the muzzle tip instead of hanging out in front of it.
+   */
+  muzzleFlash(x: number, y: number, z: number, dirX: number, dirZ: number, big?: boolean, scale = 1, core = true): void {
     if (this.disposed) return
     const len = Math.hypot(dirX, dirZ)
     const dx = len > 1e-5 ? dirX / len : 0
@@ -1126,11 +1132,14 @@ export class EffectsSystem {
     const isBig = big === true
     const t0 = this.time
     const strobe = this.strobeMul()
-    const s = isBig ? 2 : 0.9
+    const sc = scale
+    const s = (isBig ? 2 : 0.9) * sc
 
-    // the flash itself, pushed slightly out of the barrel
-    this.add.spawn(
-      x + dx * 0.35, y, z + dz * 0.35, dx * 1.5, 0.2, dz * 1.5,
+    // the flash itself, pushed slightly out of the barrel. `core` is off for the
+    // first-person viewmodel, which draws its own barrel-welded flash and only
+    // wants the world ejecta (sparks, smoke, brass) from here.
+    if (core) this.add.spawn(
+      x + dx * 0.35 * sc, y, z + dz * 0.35 * sc, dx * 1.5 * sc, 0.2, dz * 1.5 * sc,
       t0, this.reduceFlashes ? rr(0.07, 0.1) : rr(0.05, 0.08),
       s * rr(0.85, 1.15), s * rr(0.55, 0.75),
       1, 0.88, 0.58, 0.95 * strobe,
@@ -1140,10 +1149,10 @@ export class EffectsSystem {
     // sparks kicked forward
     const ns = this.n0(isBig ? 4 : 2)
     for (let i = 0; i < ns; i++) {
-      const sp = rr(7, 16) * (isBig ? 1.5 : 1)
+      const sp = rr(7, 16) * (isBig ? 1.5 : 1) * sc
       this.add.spawn(
-        x + dx * 0.4, y, z + dz * 0.4,
-        dx * sp + rr(-2, 2), rr(0.5, 2.5), dz * sp + rr(-2, 2),
+        x + dx * 0.4 * sc, y, z + dz * 0.4 * sc,
+        dx * sp + rr(-2, 2) * sc, rr(0.5, 2.5) * sc, dz * sp + rr(-2, 2) * sc,
         t0, rr(0.08, 0.22),
         rr(0.08, 0.16) * s, rr(0.03, 0.07) * s,
         1, 0.78, 0.42, 0.85,
@@ -1154,8 +1163,8 @@ export class EffectsSystem {
     // powder smoke curling off the muzzle
     if (Math.random() < (isBig ? 1 : 0.45) * this.mul) {
       this.alp.spawn(
-        x + dx * 0.7, y + 0.1, z + dz * 0.7,
-        dx * rr(0.8, 1.5), rr(0.3, 0.7), dz * rr(0.8, 1.5),
+        x + dx * 0.7 * sc, y + 0.1, z + dz * 0.7 * sc,
+        dx * rr(0.8, 1.5) * sc, rr(0.3, 0.7), dz * rr(0.8, 1.5) * sc,
         t0 + 0.02, rr(1.2, 2.4) * (isBig ? 1.6 : 1),
         rr(0.18, 0.3) * s, rr(0.7, 1.1) * s,
         0.5, 0.48, 0.45, rr(0.14, 0.22),
@@ -1168,7 +1177,7 @@ export class EffectsSystem {
     if (!isBig && Math.random() < 0.7 * this.mul + 0.15) {
       const bx = -dz, bz = dx // perpendicular to the line of fire
       this.alp.spawn(
-        x + dx * 0.05, y + 0.02, z + dz * 0.05,
+        x + dx * 0.05 * sc, y + 0.02, z + dz * 0.05 * sc,
         bx * rr(1.4, 2.6) + dx * rr(-0.3, 0.4), rr(1.6, 2.8), bz * rr(1.4, 2.6) + dz * rr(-0.3, 0.4),
         t0, rr(0.5, 0.85),
         0.04, 0.032,
@@ -1179,10 +1188,13 @@ export class EffectsSystem {
       )
     }
     // A pop of dynamic light so muzzle fire actually lights the mud at night.
-    if (isBig) {
-      this.flash(x + dx * 1.2, y + 0.4, z + dz * 1.2, 0xffc070, 170, 0.12)
-    } else {
-      this.flash(x + dx * 0.5, y + 0.15, z + dz * 0.5, 0xffb060, 26, 0.05)
+    // First person (core off) is lit by FpsMode's own camera-mounted flash lamp.
+    if (core) {
+      if (isBig) {
+        this.flash(x + dx * 1.2 * sc, y + 0.4, z + dz * 1.2 * sc, 0xffc070, 170, 0.12)
+      } else {
+        this.flash(x + dx * 0.5 * sc, y + 0.15, z + dz * 0.5 * sc, 0xffb060, 26, 0.05)
+      }
     }
   }
 

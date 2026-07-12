@@ -363,7 +363,7 @@ export class Game {
       flowInf, flowVeh,
       events: this.events, rand: forkRand(seed, 'combat'),
       mods: this.mods, flowDirty: true, night: false,
-      possessedSoldierId: -1,
+      possessedSoldierId: -1, possessedUnitId: -1,
     }
 
     // Restore a saved position. Order matters: defences first (sandbags bump
