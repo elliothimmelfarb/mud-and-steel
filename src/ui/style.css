@@ -7,6 +7,136 @@
 
 /* ---------- root tokens ---------- */
 
+/* ---------- first-person sight picture ---------- */
+
+.fps-hud::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at center, transparent 48%, rgba(8, 7, 5, 0.12) 100%);
+}
+
+.fps-sight {
+  --sight-gap: 11px;
+  --sight-alpha: 0.82;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  z-index: 2;
+  opacity: 0;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.9));
+  transition: opacity 0.08s linear;
+}
+
+.fps-sight__mark,
+.fps-sight__bead {
+  position: absolute;
+  display: block;
+  background: rgba(238, 229, 204, var(--sight-alpha));
+}
+
+.fps-sight__mark--top,
+.fps-sight__mark--bottom {
+  left: -1px;
+  width: 2px;
+  height: 7px;
+}
+
+.fps-sight__mark--top { bottom: var(--sight-gap); }
+.fps-sight__mark--bottom { top: var(--sight-gap); }
+
+.fps-sight__mark--left,
+.fps-sight__mark--right {
+  top: -1px;
+  width: 7px;
+  height: 2px;
+}
+
+.fps-sight__mark--left { right: var(--sight-gap); }
+.fps-sight__mark--right { left: var(--sight-gap); }
+
+.fps-sight__bead {
+  width: 3px;
+  height: 3px;
+  margin: -1.5px;
+  border-radius: 50%;
+}
+
+.fps-sight--ads .fps-sight__bead { opacity: 0.35; }
+.fps-sight--blocked .fps-sight__mark { background: rgba(195, 155, 92, 0.56); }
+
+/* ---------- hit marker: confirms a round YOU fired connected ---------- */
+
+.fps-hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  /* JS only ever touches --hm-scale + opacity (see FpsMode.updateFeedback);
+     the pop-then-settle read comes from --hm-scale racing from ~1.4 to 1. */
+  transform: translate(-50%, -50%) scale(var(--hm-scale, 1));
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.9));
+}
+
+.fps-hitmarker__bar {
+  position: absolute;
+  left: -9px;
+  top: -1px;
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(232, 224, 200, 0.92);
+}
+
+.fps-hitmarker__bar--a { transform: rotate(45deg); }
+.fps-hitmarker__bar--b { transform: rotate(-45deg); }
+
+/* A kill is bigger, longer-held (see HIT_MARKER_KILL_DUR) and iron-gall red
+   rather than parchment — unmistakably a different confirmation. */
+.fps-hitmarker--kill .fps-hitmarker__bar {
+  left: -12px;
+  width: 24px;
+  height: 3px;
+  background: #a04a3a;
+}
+
+/* ---------- directional damage: where incoming fire that wounded you
+   came from, relative to your current view ---------- */
+
+.fps-hurtdir {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.fps-hurtdir__wedge {
+  position: absolute;
+  left: -13px;
+  top: -150px;
+  width: 0;
+  height: 0;
+  /* Classic CSS triangle: transparent side borders + a solid top border
+     tapers to a point at the BOTTOM of the box — i.e. the tip aims back at
+     the crosshair (screen centre) while the wide base sits at the ring's
+     outer edge, reading as "danger from this side". */
+  border-left: 13px solid transparent;
+  border-right: 13px solid transparent;
+  border-top: 18px solid rgba(160, 74, 58, 0.88);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
 .screen,
 .ui-scaled {
   --paper: #d8cdb4;

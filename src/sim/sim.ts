@@ -4,7 +4,7 @@
  * brute-force queries cheap at 30 Hz and the code honest.
  */
 import type {
-  Bullet, CasualtyRecord, Defence, DirectorMemory, Enemy, FxEvent, GamePhase, GasCloud,
+  Bullet, CasualtyRecord, Defence, DirectorMemory, Enemy, FpsFeedbackEvent, FxEvent, GamePhase, GasCloud,
   Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection, TrenchSlot,
   Unit, Vehicle, WavePlan,
 } from '../core/types'
@@ -99,6 +99,17 @@ export interface Ctx {
    * medic/sapper's automatic healing/repair, which the player performs by hand.
    */
   possessedUnitId: number
+  /**
+   * Transient first-person feedback for the embodied player: hit/kill
+   * confirmations on rounds the possessed soldier fired, and directional
+   * "you were hit from over there" signals when he is the one struck. This
+   * lives on `Ctx`, NOT `SimState` — it is pure presentation bookkeeping,
+   * drained (and fully cleared) by FpsMode every render frame, and must
+   * never be part of a save or a deterministic replay. Push through
+   * `pushFpsFeedback` below, which is the natural `possessedSoldierId`-gated
+   * choke point.
+   */
+  fpsFeedback: FpsFeedbackEvent[]
 }
 
 export function makeStats(): RunStats {
@@ -129,6 +140,17 @@ export function fx(s: SimState, e: FxEvent): void {
 
 export function snd(s: SimState, e: SoundEvent): void {
   if (s.sounds.length < 120) s.sounds.push(e)
+}
+
+/**
+ * Queue one first-person feedback event for the embodied player. Capped like
+ * `fx`/`snd` above so a wild frame (a burst that lands several confirmed
+ * hits, or the rare case a drain gets skipped) can never grow this past a
+ * HUD's worth of events — FpsMode empties it completely every render frame
+ * regardless, so in the ordinary case this never gets anywhere near the cap.
+ */
+export function pushFpsFeedback(ctx: Ctx, e: FpsFeedbackEvent): void {
+  if (ctx.fpsFeedback.length < 16) ctx.fpsFeedback.push(e)
 }
 
 /** All living soldiers of a team (units' crews or enemies). */

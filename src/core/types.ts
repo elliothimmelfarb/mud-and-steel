@@ -207,6 +207,14 @@ export interface Bullet {
   pos: Vec3
   /** Position at the previous tick (tracer rendering + swept collision). */
   prev: Vec3
+  /**
+   * Muzzle position at birth — never mutated after `fireBullet` sets it. The
+   * tracer renderer clamps the drawn streak's length to the distance from
+   * `spawn` to `pos`, so a round can never appear to trail back through (and
+   * past) the camera on the render frame right after it leaves the barrel,
+   * before the 30 Hz sim has had a chance to move it downrange.
+   */
+  spawn: Vec3
   vel: Vec3
   damage: number
   /** Director bookkeeping ('rifle' | 'mg' | 'sniper' | 'enemy'...). */
@@ -217,6 +225,15 @@ export interface Bullet {
   tracer: boolean
   /** Seconds of flight remaining before the round is discarded. */
   life: number
+  /**
+   * Cosmetic dedup flag for the first-person supersonic whiz-by (fps.ts):
+   * set once a round has already cracked past the embodied camera, so a
+   * round hanging in the air across several render frames only ever earns
+   * one crack + flinch. Presentation-only — the sim never reads this, so
+   * it is fine that only rounds the player actually embodies to see ever
+   * get it set.
+   */
+  whizzed?: boolean
 }
 
 /** A drifting gas concentration blob. Clouds are sets of blobs advected by wind. */
@@ -316,6 +333,18 @@ export interface SoundEvent {
   /** For shell whistles: seconds until impact. */
   dur?: number
 }
+
+/**
+ * Transient first-person feedback for the embodied player — confirms that a
+ * round the possessed soldier fired connected (and whether it killed), or
+ * that an incoming round wounded him and from which world direction it came.
+ * Pure presentation signalling: it never affects the sim and is never saved,
+ * which is why it lives on `Ctx` rather than here alongside `FxEvent`/
+ * `SoundEvent` in `SimState` — see `Ctx.fpsFeedback` in sim/sim.ts.
+ */
+export type FpsFeedbackEvent =
+  | { t: 'hit'; kill: boolean }
+  | { t: 'hurt'; fromX: number; fromZ: number }
 
 // ---------------------------------------------------------------------------
 // Waves & the adaptive director

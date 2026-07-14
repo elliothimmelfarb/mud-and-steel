@@ -15,7 +15,7 @@
  * Exit:  M or Esc (or death, which is very much period-authentic).
  */
 import * as THREE from 'three'
-import type { Soldier, Unit, UnitKindId } from '../core/types'
+import type { Bullet, Soldier, Unit, UnitKindId } from '../core/types'
 import { COMBAT, WORLD } from '../core/config'
 import { standSurface } from '../sim/ballistics'
 import { sectionAt } from '../sim/trench'
@@ -29,6 +29,28 @@ import type { Game } from './game'
 const EYE_HEIGHT = { stand: 1.68, crouch: 1.1, prone: 0.5, dead: 0.3 } as const
 const MOVE_SPEED = { stand: 3.3, crouch: 1.7, prone: 0.85, dead: 0 } as const
 const SPRINT_SPEED = 5.3
+
+// Supersonic whiz-by (see scanWhizByes): a round need not actually HIT you to
+// announce itself — real rifle rounds break the sound barrier, so a close
+// pass cracks past the ear well before (and separately from) the report of
+// the gun that fired it. `WHIZ_RADIUS` is the closest-approach distance that
+// still reads as "close enough to notice"; `WHIZ_SLOTS` caps how many of
+// THIS frame's qualifying rounds actually get a crack, so a machine-gun burst
+// or a heavy firefight can't pile ten cracks on top of each other at once —
+// see the scratch-array field comment below for how the cap is enforced
+// without a per-frame allocation.
+const WHIZ_RADIUS = 2.2
+const WHIZ_SLOTS = 3
+
+// Hit marker / directional damage feedback (see updateFeedback): how long a
+// plain hit vs. a kill confirmation stays lit on the crosshair, how many
+// simultaneous "hit from over there" wedges the pool can hold, and how long
+// one of those wedges takes to fade. Kept short and snappy — this is a
+// confirmation, not a status display.
+const HIT_MARKER_DUR = 0.18
+const HIT_MARKER_KILL_DUR = 0.5
+const HURT_SLOTS = 4
+const HURT_INDICATOR_DUR = 1.2
 
 export class FpsMode {
   active = false
@@ -51,27 +73,99 @@ export class FpsMode {
   private ads = 0
   private adsHeld = false
   private triggerDown = false
-  private recoil = 0
+  // Recoil model: four independent accumulators, all rendered-only offsets on
+  // top of the player's actual aimed yaw/pitch. Each springs back toward zero
+  // every frame in update() (see applyRecoil() for what feeds them and why);
+  // none of them is ever written into `yaw`/`pitch` themselves, which is what
+  // guarantees recover-to-aim — release the trigger and the view settles back
+  // to exactly where the mouse is pointed, never a permanent drift.
+  private kick = 0        // 0..~1.6 sharp per-shot punch; spring rate ~16/s
+  private climbPitch = 0  // accumulated upward view offset (rad); ~5-7/s, clamped
+  private swayYaw = 0     // accumulated horizontal wander (rad); ~8/s
+  private fovKick = 0     // additive FOV punch; ~8/s
   private lastHp = 0
   private swayT = 0
   private prevSpeed: Game['speed'] = 1
   private reticle: GroundHit | null = null
 
+  // Whiz-by scratch: the WHIZ_SLOTS closest qualifying rounds found by THIS
+  // frame's scanWhizByes() pass, kept in fixed-size arrays (not a fresh array
+  // + sort every frame) so scanning a few hundred live bullets never touches
+  // the heap. Each slot holds a bullet reference, its squared closest-approach
+  // distance, and the closest-approach point — worst-of-N eviction during the
+  // scan keeps only the nearest few without ever sorting the whole list.
+  private readonly whizBullet: (Bullet | null)[] = new Array(WHIZ_SLOTS).fill(null)
+  private readonly whizD2 = new Float64Array(WHIZ_SLOTS)
+  private readonly whizCx = new Float64Array(WHIZ_SLOTS)
+  private readonly whizCy = new Float64Array(WHIZ_SLOTS)
+  private readonly whizCz = new Float64Array(WHIZ_SLOTS)
+
+  // Combat feedback: hit markers + directional damage, drained each frame
+  // from `game.ctx.fpsFeedback` by `updateFeedback()`. Hit marker is a single
+  // shared state (only one crosshair, so no pool needed); directional wedges
+  // get a small fixed pool since a firefight can wound the player from more
+  // than one direction inside the same fade window.
+  //
+  // `hitMarkerT`/`hurtT` are dt-driven countdowns (like `swayT`), never
+  // wall-clock — they hit zero exactly like every other timer in this file.
+  private hitMarkerT = 0
+  private hitMarkerKill = false
+  // Per-slot countdown and the WORLD bearing (not screen angle) the shot came
+  // from — storing the world bearing, not a precomputed screen angle, means
+  // the wedge keeps pointing at the right place even as the player goes on
+  // turning after the hit lands; the screen angle is re-derived from the
+  // current `yaw` fresh every frame in updateFeedback(). `hurtT[k] <= 0`
+  // means slot k is free.
+  private readonly hurtT = new Float64Array(HURT_SLOTS)
+  private readonly hurtBearing = new Float64Array(HURT_SLOTS)
+
   // input state (owned entirely by this mode while active)
   private keys = new Set<string>()
 
+  // FPS Lab: when set, the mode runs without the browser pointer lock so a
+  // harness can drive yaw/pitch/trigger from script and inspect every weapon.
+  debugUnlocked = false
+  private flashHold = false
+
   // three.js
   private flashLight: THREE.PointLight
+  // A dim, short-range fill welded to the eye. The sun is directional, so with
+  // it behind you the whole viewmodel falls into shadow and reads as a dark
+  // lump; this lights the weapon's camera-facing side so it stays legible
+  // whichever way you turn. Short range keeps it off the world beyond the gun.
+  private fillLight: THREE.PointLight
   private aimRing: THREE.Mesh
   private _muzzleWorld = new THREE.Vector3() // scratch: viewmodel muzzle → world
   // Muzzle flash bolted to the gun model itself, so it stays welded to the
   // barrel through recoil kick, sway and mouselook — a world-space flash would
   // drift off the muzzle the instant the camera moved after the shot.
-  private muzzleFlash: THREE.Sprite
-  private muzzleFlashCore: THREE.Sprite
+  //
+  // Two camera-facing billboards, not 3D geometry: an outer soft amber glow
+  // and an inner spiky hot star. A real cone/ball reads fine from the side but
+  // collapses to a flat, hard-edged polygon (or a CA-fringed white ball) the
+  // instant you look nearly straight down the barrel — which first person
+  // does constantly, since that is where the gun sits. A billboard always
+  // presents its painted flame shape flat to the eye, so it reads as fire from
+  // every angle including head-on. Sprites (not manually-oriented planes)
+  // because their position still rides the viewmodel's full local transform —
+  // recoil, sway, everything — while their orientation stays camera-facing for
+  // free; only `SpriteMaterial.rotation` needs driving for the in-plane spin.
+  private muzzleFlash: THREE.Sprite     // outer glow
+  private muzzleFlashCore: THREE.Sprite // inner hot star
+  // Session-lived textures backing the two billboards (see buildGlowTexture /
+  // buildStarTexture at the bottom of this file). Built once; disposed with
+  // the mode.
+  private flashGlowTex: THREE.CanvasTexture
+  private flashStarTex: THREE.CanvasTexture
   private flashT = 0        // seconds of flash left
-  private flashDur = 0.045  // how long one flash burns
-  private flashSize = 0.42  // this shot's flash radius (local units)
+  private flashDur = 0.055  // how long one flash burns
+  private flashSize = 0.42  // this shot's flash magnitude (local units)
+  // Live-tunable flame shape (outer glow radius, inner star radius, how far
+  // ahead of the crown the star floats, plume/core opacity). Exposed so the
+  // FPS Lab can dial it in without a recompile; these defaults were tuned
+  // there. Deliberately modest — "roughly muzzle-sized", not a fireball that
+  // fills the screen.
+  flashShape = { oR: 1.9, cR: 0.85, cFwd: 0.14, oA: 0.85, cA: 1.0 }
 
   // DOM
   private hudRoot: HTMLDivElement
@@ -86,28 +180,38 @@ export class FpsMode {
   private healthEl!: HTMLDivElement
   private stanceEl!: HTMLDivElement
   private hintEl!: HTMLDivElement
+  private hitMarkerEl!: HTMLDivElement
+  // One rotated, zero-size "clock hand" element per pooled wedge — see
+  // buildHud(). Rotating this wrapper (not the wedge itself) keeps the
+  // wedge's own triangle geometry fixed and simple.
+  private readonly hurtIndicatorEls: HTMLDivElement[] = []
 
   constructor(private game: Game) {
     this.flashLight = new THREE.PointLight(0xffc87a, 0, 9, 2)
     this.flashLight.position.set(0.06, -0.02, -1.0)
     game.renderer.camera.add(this.flashLight)
 
-    // Two stacked billboards: a broad amber glow and a hot near-white core.
-    // They live on the active viewmodel (re-parented in equip) at its muzzle.
-    const glowTex = makeFlashTexture(false)
-    const coreTex = makeFlashTexture(true)
-    this.muzzleFlash = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowTex, color: 0xffb45a, blending: THREE.AdditiveBlending,
-      transparent: true, depthTest: false, depthWrite: false,
-    }))
-    this.muzzleFlashCore = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: coreTex, color: 0xffca82, blending: THREE.AdditiveBlending,
-      transparent: true, depthTest: false, depthWrite: false,
-    }))
+    // Viewmodel fill (see field comment). Sits just above and behind the eye so
+    // it rakes across the gun from the shooter's side. Off until embodied.
+    this.fillLight = new THREE.PointLight(0xffe8cc, 0, 2.6, 2)
+    this.fillLight.position.set(0.1, 0.22, 0.4)
+    game.renderer.camera.add(this.fillLight)
+
+    // Billboards, not 3D flame cones — see the field comment above for why.
+    // Depth testing stays on (matching the old meshes) so the barrel and
+    // foresight still occlude whichever part of the flash sits behind them;
+    // it just no longer collapses to a flat polygon when viewed head-on.
+    this.flashGlowTex = buildGlowTexture()
+    this.flashStarTex = buildStarTexture()
+    this.muzzleFlash = makeFlashSprite(this.flashGlowTex, 0xff8a24)
+    // Warm, not pure white: against the bright sky an additive near-white core
+    // clips straight through the bloom threshold into a white smear, so the hot
+    // heart is a hot amber that blooms as fire instead.
+    this.muzzleFlashCore = makeFlashSprite(this.flashStarTex, 0xffcf8a)
     for (const s of [this.muzzleFlash, this.muzzleFlashCore]) {
       s.visible = false
       s.frustumCulled = false
-      s.renderOrder = 8
+      s.renderOrder = 4
     }
 
     // Landing reticle for thrown/indirect fire (added to the world, not the cam).
@@ -152,7 +256,8 @@ export class FpsMode {
       soldier.stance = 'stand'
     }
     this.yaw = soldier.facing
-    this.pitch = this.profile.control === 'lob' ? -0.35 : 0 // mortars start laid downrange
+    // mortars/gas lay high; guns lay a touch low; everyone else level.
+    this.pitch = this.profile.startPitch ?? (this.profile.control === 'lob' ? -0.35 : 0)
     this.ammo = this.profile.magSize
     this.fuel = 1
     this.boltT = 0.3
@@ -161,9 +266,19 @@ export class FpsMode {
     this.ads = 0
     this.adsHeld = false
     this.triggerDown = false
-    this.recoil = 0
+    this.kick = 0
+    this.climbPitch = 0
+    this.swayYaw = 0
+    this.fovKick = 0
     this.lastHp = soldier.hp
     this.reticle = null
+    // No feedback carries over from a previous embodiment (or the sliver of
+    // queue that could theoretically have built up before possession, though
+    // the push side is itself gated on possessedSoldierId).
+    this.hitMarkerT = 0
+    this.hitMarkerKill = false
+    this.hurtT.fill(0)
+    this.game.ctx.fpsFeedback.length = 0
     if (this.profile.heat) { unit.heat = 0; unit.venting = false }
     this.keys.clear()
     this.prevSpeed = this.game.speed
@@ -173,10 +288,11 @@ export class FpsMode {
     this.game.selectedUnitId = unit.id // keep the unit selected for re-entry
     this.game.input.releaseAll() // no stuck pan keys across the mode switch
     this.vm.group.visible = true
+    this.fillLight.intensity = 4.5
     this.hudRoot.style.display = 'block'
     document.body.classList.add('ms-fps') // clear the map table off the periscope
     this.hintEl.textContent = `${soldier.name.first} ${soldier.name.last} — M or Esc to return to command`
-    this.requestLock()
+    if (!this.debugUnlocked) this.requestLock()
     this.game.audio.play('ui_click', { gain: 0.5 })
   }
 
@@ -196,16 +312,17 @@ export class FpsMode {
     // detaches them from the old one; positioning in the group's local space
     // means they ride every pose the barrel does.
     this.flashT = 0
+    this.flashHold = false // never carry a held-lit lab flash across a weapon swap
     this.muzzleFlash.visible = false
     this.muzzleFlashCore.visible = false
     v.group.add(this.muzzleFlash, this.muzzleFlashCore)
-    this.muzzleFlash.position.copy(v.muzzle)
-    this.muzzleFlashCore.position.copy(v.muzzle)
+    this.positionMuzzleFlash(0)
   }
 
   /** True while the browser has actually handed us the mouse. */
   private get locked(): boolean {
-    return document.pointerLockElement === this.game.renderer.renderer.domElement
+    return this.debugUnlocked ||
+      document.pointerLockElement === this.game.renderer.renderer.domElement
   }
 
   /**
@@ -226,6 +343,7 @@ export class FpsMode {
     if (document.pointerLockElement) document.exitPointerLock()
     if (this.vm) this.vm.group.visible = false
     this.flashLight.intensity = 0
+    this.fillLight.intensity = 0
     this.flashT = 0
     this.muzzleFlash.visible = false
     this.muzzleFlashCore.visible = false
@@ -258,6 +376,8 @@ export class FpsMode {
     window.removeEventListener('mousemove', this.onMouseMove, true)
     window.removeEventListener('mousedown', this.onMouseDown, true)
     window.removeEventListener('mouseup', this.onMouseUp, true)
+    this.flashGlowTex.dispose()
+    this.flashStarTex.dispose()
     this.hudRoot.remove()
   }
 
@@ -266,13 +386,21 @@ export class FpsMode {
   // -------------------------------------------------------------------------
 
   private onLockChange = (): void => {
+    if (this.debugUnlocked) return // the lab drives the view without a real lock
     if (this.active && document.pointerLockElement !== this.game.renderer.renderer.domElement) {
       this.exit()
     }
   }
 
+  /** Let clicks/keys aimed at the FPS Lab control panel through to the DOM. */
+  private isLabEvent(e: Event): boolean {
+    if (!this.debugUnlocked) return false
+    const t = e.target as HTMLElement | null
+    return !!t?.closest?.('[data-fpslab]')
+  }
+
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (!this.active) return
+    if (!this.active || this.isLabEvent(e)) return
     this.keys.add(e.code)
     if (e.code === 'KeyM') { this.exit(); e.stopPropagation(); e.preventDefault(); return }
     if (e.code === 'KeyC' && !this.profile.emplaced) this.cycleStance()
@@ -281,7 +409,7 @@ export class FpsMode {
   }
 
   private onKeyUp = (e: KeyboardEvent): void => {
-    if (!this.active) return
+    if (!this.active || this.isLabEvent(e)) return
     this.keys.delete(e.code)
     e.stopPropagation()
   }
@@ -295,7 +423,7 @@ export class FpsMode {
   }
 
   private onMouseDown = (e: MouseEvent): void => {
-    if (!this.active) return
+    if (!this.active || this.isLabEvent(e)) return
     e.stopPropagation()
     e.preventDefault()
     // Not holding the mouse yet? The click buys the lock — it does not fire.
@@ -310,7 +438,7 @@ export class FpsMode {
   }
 
   private onMouseUp = (e: MouseEvent): void => {
-    if (!this.active) return
+    if (!this.active || this.isLabEvent(e)) return
     if (e.button === 0) this.triggerDown = false
     if (e.button === 2) this.adsHeld = false
     e.stopPropagation()
@@ -372,22 +500,107 @@ export class FpsMode {
 
     // Spend the discharge.
     this.boltT = this.profile.fireInterval
-    this.recoil = this.profile.recoil
-    this.flashLight.intensity = this.profile.control === 'directgun' ? 40
+    this.applyRecoil()
+    // A brief warm pop from the muzzle. Kept modest: the viewmodels are now
+    // bright, self-lit meshes ~1 m from the eye, so a strong point light here
+    // blows them (and the ground underfoot) past the bloom threshold into a
+    // white smear. This is a night-time garnish, not the flash itself.
+    this.flashLight.intensity = this.profile.control === 'directgun' ? 13
       : this.profile.control === 'lob' || this.profile.control === 'throw' ? 0
-        : this.profile.heat ? 16 : 26
+        : this.profile.heat ? 5 : 8
     // Light the barrel flash for direct-fire weapons (lobs/flame/tools have none).
-    const c = this.profile.control
-    if (c === 'bolt' || c === 'semi' || c === 'auto' || c === 'directgun') {
-      const base = c === 'directgun' ? 0.44 : this.profile.id === 'vickers' ? 0.3 : 0.2
-      this.flashSize = base * (0.85 + this.game.ctx.rand() * 0.3)
-      this.flashT = this.flashDur
-      this.muzzleFlash.material.rotation = this.game.ctx.rand() * Math.PI * 2
-      this.muzzleFlashCore.material.rotation = this.game.ctx.rand() * Math.PI * 2
-    }
+    this.igniteBarrelFlash()
     if (this.profile.ammoKind === 'fuel') this.fuel = Math.max(0, this.fuel - 0.014)
     else if (this.profile.ammoKind !== 'none') this.ammo--
   }
+
+  /**
+   * One discharge's worth of recoil impulse. Called once per shot from
+   * tryFire() — never per frame — and feeds the accumulators update() springs
+   * back toward zero every frame:
+   *  - `kick` is the sharp punch that reads as THIS shot, distinct from the
+   *    sustained rise of a burst.
+   *  - `climbPitch` is that sustained rise: it builds shot over shot while the
+   *    trigger stays down and clamps well short of the sky, which is what
+   *    makes holding an auto weapon climb-then-cap rather than wandering
+   *    forever or snapping identically every round.
+   *  - `swayYaw` adds a little horizontal wander so a long burst doesn't climb
+   *    in an unnaturally dead-straight line.
+   *  - `fovKick` lurches the field of view — the 18-pounder's shove should be
+   *    felt in the lens, not just the crosshair.
+   * ADS visibly steadies the weapon: `steady` damps how much each impulse
+   * ADDS (not how fast it decays), so aiming down sights tightens the group
+   * and flattens the climb without touching decay/settle timing.
+   *
+   * The per-weapon `recoilKickMul`/`recoilClimbMul`/`recoilSwayMul`/
+   * `recoilClimbCap` overrides give characterful weapons (sniper's one heavy
+   * punch, Lewis/Vickers's fast climb, the pistol's light snap) without
+   * touching every profile — see weapons.ts.
+   *
+   * Random jitter here is Math.random(), never ctx.rand(): it's cosmetic view
+   * shake, not sim-affecting, so it must not perturb the seeded RNG stream
+   * (matches the convention in render/effects.ts).
+   */
+  private applyRecoil(): void {
+    const p = this.profile
+    const r = p.recoil
+    const steady = 1 - this.ads * 0.4
+    const kickMul = p.recoilKickMul ?? 1
+    const climbMul = p.recoilClimbMul ?? 1
+    const climbCap = p.recoilClimbCap ?? 0.16
+    const swayMul = p.recoilSwayMul ?? 1
+
+    this.kick = Math.min(1.6, this.kick + (r * 0.55 + 0.18) * kickMul * steady)
+    this.climbPitch = Math.min(climbCap,
+      this.climbPitch + r * 0.018 * (0.8 + Math.random() * 0.4) * climbMul * steady)
+    this.swayYaw += (Math.random() - 0.5) * r * 0.02 * swayMul * steady
+    this.fovKick += r * (p.control === 'directgun' ? 6 : 1.3)
+
+    // Heavy ordnance also punches the whole screen. Rifles/MGs get NO shake —
+    // that reads through kick/climb instead, so recoil doesn't feel like two
+    // unrelated effects (weapon motion + camera noise) stacked on each other.
+    if (p.control === 'directgun') this.game.renderer.addShock(r * 0.25)
+    else if (p.control === 'lob' && p.id === 'mortar') this.game.renderer.addShock(r * 0.12)
+  }
+
+  /** Light the barrel-welded flash for a direct-fire discharge. */
+  private igniteBarrelFlash(): void {
+    const c = this.profile.control
+    if (c !== 'bolt' && c !== 'semi' && c !== 'auto' && c !== 'directgun') return
+    const base = c === 'directgun' ? 0.34 : this.profile.id === 'vickers' ? 0.2 : 0.15
+    this.flashSize = base * (this.profile.flashScale ?? 1) * (0.85 + this.game.ctx.rand() * 0.3)
+    this.flashT = this.flashDur
+    // Seed this burn's silhouette/orientation. Purely cosmetic — the sim never
+    // sees it — so Math.random(), not the seeded stream: a sprite's rotation
+    // is an in-plane spin (SpriteMaterial.rotation), unlike the old meshes'
+    // Object3D.rotation.z, which a billboard ignores entirely for its facing.
+    // updateMuzzleFlash re-rolls both every LIVE frame for the flicker; this
+    // is what a held/frozen lab inspection actually shows.
+    this.muzzleFlashCore.material.rotation = Math.random() * Math.PI * 2
+    this.setFlashCoreVariant(Math.floor(Math.random() * FLASH_STAR_CELLS))
+  }
+
+  // -------------------------------------------------------------------------
+  // FPS Lab hooks — a script harness drives these to inspect every weapon
+  // without needing pointer lock or the full build → possess flow.
+  // -------------------------------------------------------------------------
+
+  debugFire(): void { this.tryFire() }
+  debugHold(on: boolean): void { this.triggerDown = on }
+  debugAds(on: boolean): void { this.adsHeld = on }
+  debugLook(yaw: number, pitch: number): void {
+    this.yaw = yaw
+    this.pitch = clamp(pitch, -1.4, 1.4)
+  }
+  debugStance(st: 'stand' | 'crouch' | 'prone'): void {
+    if (this.soldier && !this.profile.emplaced) this.soldier.stance = st
+  }
+  /** Hold the barrel flash lit so its placement can be inspected frame-by-frame. */
+  debugFreezeFlash(on: boolean): void {
+    this.flashHold = on
+    if (on) this.igniteBarrelFlash()
+  }
+  get debugName(): string { return this.profile?.name ?? '' }
 
   /**
    * World position of the active viewmodel's muzzle tip. The flash itself is
@@ -405,24 +618,72 @@ export class FpsMode {
     return { x: this._muzzleWorld.x, y: this._muzzleWorld.y, z: this._muzzleWorld.z }
   }
 
-  /** Fade the barrel-welded flash. Scale pops big then collapses as it burns. */
+  /**
+   * Fade the barrel-welded flash. Scale pops big then collapses as it burns,
+   * and — while actually firing — both billboards re-roll their rotation,
+   * scale jitter and (for the spiky core) which texture cell they show every
+   * single frame. Turbulent burning gas never holds one silhouette for two
+   * frames running, and a static decal is exactly what the old fixed cone/ball
+   * looked like.
+   */
   private updateMuzzleFlash(dt: number): void {
-    if (this.flashT <= 0) {
+    if (this.flashHold) {
+      // Lab inspection: hold a representative MID-burn frame (not the peak
+      // frame-1 pop) and skip the re-roll below, so the shape stays put long
+      // enough to actually examine placement instead of chattering forever.
+      this.flashT = this.flashDur * 0.5
+    } else if (this.flashT <= 0) {
       if (this.muzzleFlash.visible) { this.muzzleFlash.visible = false; this.muzzleFlashCore.visible = false }
       return
+    } else {
+      this.flashT -= dt
     }
-    this.flashT -= dt
     const k = Math.max(0, this.flashT / this.flashDur) // 1 → 0 over the burn
-    // Ease the size down and the brightness with it; a little forward jitter
-    // reads as the flame guttering rather than a static decal.
-    const size = this.flashSize * (0.7 + 0.5 * k)
-    const alpha = Math.min(1, k * 1.3)
+    // Pop wide on the first frame, then gutter down. Alpha trails the size so
+    // the flame reads as burning gas venting, not a static decal. Down the
+    // sights it shrinks so a peak flash never whites out the target.
+    const size = this.flashSize * (0.6 + 0.55 * k) * (1 - this.ads * 0.35)
+    const alpha = Math.min(1, k * 1.6)
+    const sh = this.flashShape
     this.muzzleFlash.visible = true
     this.muzzleFlashCore.visible = true
-    this.muzzleFlash.scale.set(size, size, size)
-    this.muzzleFlashCore.scale.set(size * 0.5, size * 0.5, size * 0.5)
-    ;(this.muzzleFlash.material as THREE.SpriteMaterial).opacity = alpha * 0.4
-    ;(this.muzzleFlashCore.material as THREE.SpriteMaterial).opacity = alpha * 0.4
+    this.positionMuzzleFlash(size)
+
+    if (!this.flashHold) {
+      // Cosmetic jitter — Math.random(), the sim never touches this. A fresh
+      // in-plane rotation and cell for the spiky core, plus independent scale
+      // wobble on both billboards, is what sells "turbulent gas" over "sprite".
+      this.muzzleFlashCore.material.rotation = Math.random() * Math.PI * 2
+      this.setFlashCoreVariant(Math.floor(Math.random() * FLASH_STAR_CELLS))
+    }
+    const outerJitter = 0.92 + Math.random() * 0.16
+    const coreJitter = 0.88 + Math.random() * 0.24
+
+    // Outer glow: roughly round, a touch tall — a soft amber halo, not a cone.
+    this.muzzleFlash.scale.set(size * sh.oR * outerJitter, size * sh.oR * 1.08 * outerJitter, 1)
+    // Inner star: a compact hot knot, noticeably smaller than the glow.
+    const cr = size * sh.cR * coreJitter
+    this.muzzleFlashCore.scale.set(cr, cr, 1)
+    this.muzzleFlash.material.opacity = alpha * sh.oA
+    this.muzzleFlashCore.material.opacity = alpha * sh.cA
+  }
+
+  /** Pick which of the star atlas's cells the spiky core billboard shows. */
+  private setFlashCoreVariant(i: number): void {
+    this.flashStarTex.offset.x = i / FLASH_STAR_CELLS
+  }
+
+  /**
+   * Anchor the outer glow right at the muzzle tip and float the inner hot
+   * star a touch further forward — both extend on the viewmodel's local −Z,
+   * so the whole flash sits beyond the barrel crown rather than fused into a
+   * single flat disc with the barrel poking through it.
+   */
+  private positionMuzzleFlash(size: number): void {
+    const m = this.vm.muzzle
+    this.muzzleFlash.position.set(m.x, m.y, m.z - 0.02)
+    const fwd = 0.02 + size * this.flashShape.cFwd
+    this.muzzleFlashCore.position.set(m.x, m.y, m.z - fwd)
   }
 
   /** Medic/sapper: mend by hand while the trigger is held. */
@@ -566,7 +827,18 @@ export class FpsMode {
       this.reloadT -= dt
       if (this.reloadT <= 0) { this.ammo = this.profile.magSize }
     }
-    this.recoil = Math.max(0, this.recoil - dt * 5)
+    // Spring every recoil accumulator back toward zero. Multiplicative decay
+    // (x -= x*rate*dt) reads as a fast snap that EASES into the settle rather
+    // than a linear ramp that stops dead — much closer to an actual spring,
+    // and it's why holding an auto weapon shows a climb that visibly slows as
+    // it nears its cap instead of climbing in identical steps. Rates chosen
+    // so `kick` (the sharp per-shot punch) settles in ~0.1s while `climbPitch`
+    // (the sustained rise across a burst) and `swayYaw` linger a beat longer,
+    // reading as muzzle climb rather than an instant twitch.
+    this.kick -= this.kick * Math.min(1, dt * 16)
+    this.climbPitch -= this.climbPitch * Math.min(1, dt * 6)
+    this.swayYaw -= this.swayYaw * Math.min(1, dt * 8)
+    this.fovKick -= this.fovKick * Math.min(1, dt * 8)
     this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 300)
     this.updateMuzzleFlash(dt)
     const canAds = !this.profile.emplaced || this.profile.control === 'directgun'
@@ -576,17 +848,29 @@ export class FpsMode {
     // -- camera ---------------------------------------------------------------
     this.swayT += dt
     const cam = g.renderer.camera
-    const eyeBase = standSurface(g.ctx, s.pos.x, s.pos.z) + EYE_HEIGHT[s.stance]
+    const eyeH = this.profile.eyeHeight ?? EYE_HEIGHT[s.stance]
+    const eyeBase = standSurface(g.ctx, s.pos.x, s.pos.z) + eyeH
     const bob = Math.abs(Math.sin(s.animPhase * 0.9)) * 0.035 * mv.len * (sprinting ? 1.6 : 1)
     cam.position.set(s.pos.x, eyeBase + bob, s.pos.z)
     const breathe = Math.sin(this.swayT * 1.7) * 0.0016 * (1 + s.suppression * 5) * (1 - this.ads * 0.6)
-    const kick = this.recoil * this.recoil * 0.028 * (this.profile.recoil || 0.01)
     cam.rotation.order = 'YXZ'
-    cam.rotation.y = -this.yaw
-    cam.rotation.x = this.pitch + breathe + kick
-    cam.rotation.z = Math.sin(this.swayT * 1.1) * 0.0012
-    const fov = lerp(this.profile.hipFov, this.profile.adsFov, this.ads)
+    // swayYaw rides on top of the player's actual yaw as a wander, same as
+    // climbPitch/kick ride on pitch below — recover-to-aim means we only ever
+    // ADD a decaying offset here, never write back into `this.yaw`/`this.pitch`.
+    cam.rotation.y = -this.yaw - this.swayYaw
+    // climbPitch is the sustained muzzle rise across a burst; kick is the
+    // sharp jolt from THIS shot riding on top of it. Sign matches the old
+    // single-scalar kick term this replaces: positive raises the view.
+    cam.rotation.x = this.pitch + breathe + this.climbPitch + this.kick * 0.02
+    // A little kick-driven roll on top of the existing idle sway gives a shot
+    // some character without a full third axis of recoil to track.
+    cam.rotation.z = Math.sin(this.swayT * 1.1) * 0.0012 + this.kick * 0.006
+    const fov = lerp(this.profile.hipFov, this.profile.adsFov, this.ads) + this.fovKick
     if (Math.abs(cam.fov - fov) > 0.1) { cam.fov = fov; cam.updateProjectionMatrix() }
+
+    // -- supersonic whiz-by: enemy rounds cracking past the camera this frame,
+    // independent of what the player is doing with the trigger --------------
+    this.scanWhizByes(cam.position.x, cam.position.y, cam.position.z)
 
     // -- aim reticle for thrown / indirect fire (needs the fresh camera) ------
     this.updateReticle()
@@ -594,8 +878,82 @@ export class FpsMode {
     // -- viewmodel ------------------------------------------------------------
     this.poseViewmodel(mv.len, sprinting)
 
+    // -- combat feedback: hit markers + directional damage --------------------
+    this.updateFeedback(dt)
+
     // -- HUD ------------------------------------------------------------------
     this.updateHud()
+  }
+
+  /**
+   * Drain `ctx.fpsFeedback` (see the field doc on `Ctx.fpsFeedback` in
+   * sim/sim.ts) and advance the hit-marker / directional-wedge timers. Runs
+   * every render frame while embodied, regardless of whether the queue has
+   * anything in it this frame — the countdowns still need to tick down even
+   * on a quiet frame between hits.
+   *
+   * The queue is read in full and its length reset to zero unconditionally:
+   * this is the ONE consumer, so nothing else will ever see these events,
+   * and leaving even one behind would let the array creep upward frame over
+   * frame (exactly what the spec's "must not accumulate unboundedly" rules
+   * out).
+   */
+  private updateFeedback(dt: number): void {
+    const q = this.game.ctx.fpsFeedback
+    for (let i = 0; i < q.length; i++) {
+      const e = q[i]
+      if (e.t === 'hit') {
+        // A kill marker always wins over a plain hit landing the same frame
+        // (a double-tap that finishes a man off); a plain hit never
+        // downgrades a kill marker that is still fading from a moment ago.
+        if (e.kill || this.hitMarkerT <= 0 || !this.hitMarkerKill) {
+          this.hitMarkerKill = e.kill
+          this.hitMarkerT = e.kill ? HIT_MARKER_KILL_DUR : HIT_MARKER_DUR
+        }
+      } else {
+        // 'hurt' — claim a free wedge slot; if the pool is already full,
+        // steal whichever slot is closest to fading out anyway (a genuinely
+        // fresh hit is always more useful to show than an old one's last
+        // instant on screen).
+        let slot = -1
+        for (let k = 0; k < HURT_SLOTS; k++) if (this.hurtT[k] <= 0) { slot = k; break }
+        if (slot < 0) {
+          let minT = Infinity
+          for (let k = 0; k < HURT_SLOTS; k++) if (this.hurtT[k] < minT) { minT = this.hurtT[k]; slot = k }
+        }
+        // World bearing of the shooter, matching the game's yaw convention
+        // (yaw 0 looks toward -z; dir = (sin yaw, -cos yaw)) — see the
+        // module doc on Soldier.facing in core/types.ts.
+        this.hurtBearing[slot] = Math.atan2(e.fromX, -e.fromZ)
+        this.hurtT[slot] = HURT_INDICATOR_DUR
+      }
+    }
+    q.length = 0 // full drain — see the doc above for why this must be unconditional
+
+    // -- hit marker: count down and reflect into the DOM ---------------------
+    if (this.hitMarkerT > 0) this.hitMarkerT = Math.max(0, this.hitMarkerT - dt)
+    const hmDur = this.hitMarkerKill ? HIT_MARKER_KILL_DUR : HIT_MARKER_DUR
+    const hmLive = this.hitMarkerT > 0
+    const hmK = hmLive ? this.hitMarkerT / hmDur : 0 // 1 → 0 across the burn
+    // Alpha races ahead of the lifetime so the marker pops in immediately and
+    // then visibly gutters out, rather than fading linearly the whole time.
+    this.hitMarkerEl.style.opacity = hmLive ? String(Math.min(1, hmK * 1.8)) : '0'
+    this.hitMarkerEl.style.setProperty('--hm-scale', String(1 + (hmLive ? (1 - hmK) * 0.4 : 0)))
+    this.hitMarkerEl.classList.toggle('fps-hitmarker--kill', hmLive && this.hitMarkerKill)
+
+    // -- directional wedges: count down and rotate to the CURRENT view -------
+    for (let k = 0; k < HURT_SLOTS; k++) {
+      if (this.hurtT[k] > 0) this.hurtT[k] = Math.max(0, this.hurtT[k] - dt)
+      const el = this.hurtIndicatorEls[k]
+      if (this.hurtT[k] <= 0) { el.style.opacity = '0'; continue }
+      // Screen angle = world bearing minus the player's own yaw — turning
+      // toward the shooter always brings his wedge toward the top (12
+      // o'clock) of the ring, whichever way the player is currently facing.
+      const screenAngle = this.hurtBearing[k] - this.yaw
+      el.style.transform = `rotate(${(screenAngle * (180 / Math.PI)).toFixed(1)}deg)`
+      const frac = this.hurtT[k] / HURT_INDICATOR_DUR
+      el.style.opacity = String(Math.min(1, frac * 1.5))
+    }
   }
 
   /** Where the crosshair meets the ground — the drop point for lob/throw. */
@@ -621,6 +979,92 @@ export class FpsMode {
     ;(this.aimRing.material as THREE.MeshBasicMaterial).color.setHex(atLimit ? 0xc98a3a : 0xe0a94a)
   }
 
+  /**
+   * Supersonic crack/whiz-by: enemy rounds that pass close to the embodied
+   * camera get a sharp sound, a tiny air-snap wisp and a small camera flinch,
+   * on top of (and independent from) whatever hit-registration/suppression
+   * the sim itself does. This is pure presentation — a round that misses the
+   * player's body by inches still says so.
+   *
+   * Runs once per RENDER frame (not per sim tick) over every live bullet, so
+   * it must be cheap and allocation-free: closest point of approach between
+   * the round's THIS-TICK segment (`b.prev` → `b.pos`) and the camera point,
+   * scalar-only (see the module doc above `WHIZ_RADIUS`). Only the closest
+   * `WHIZ_SLOTS` qualifying rounds actually crack this frame — anything
+   * bumped out of the scratch list simply gets reconsidered next frame
+   * (the sim hasn't ticked `prev`/`pos` again yet), which is what keeps a
+   * heavy volley from piling ten cracks on top of each other at once.
+   */
+  private scanWhizByes(px: number, py: number, pz: number): void {
+    const s = this.soldier
+    if (!s) return
+    const bullets = this.game.ctx.s.bullets
+    const myId = this.game.ctx.possessedSoldierId
+    const myTeam = s.team
+    const r2 = WHIZ_RADIUS * WHIZ_RADIUS
+
+    for (let k = 0; k < WHIZ_SLOTS; k++) { this.whizD2[k] = Infinity; this.whizBullet[k] = null }
+
+    for (let i = 0; i < bullets.length; i++) {
+      const b = bullets[i]
+      // Only rounds that could plausibly be shooting AT the player: not his
+      // own outgoing fire, not a teammate's, and not one already cracked.
+      if (b.whizzed || b.shooterId === myId || b.team === myTeam) continue
+      const ax = b.prev.x, ay = b.prev.y, az = b.prev.z
+      const sx = b.pos.x - ax, sy = b.pos.y - ay, sz = b.pos.z - az
+      const segLen2 = sx * sx + sy * sy + sz * sz
+      // Closest point of a point to a segment: project, then clamp to [0,1]
+      // — the degenerate (near-zero-length) segment just tests the point A.
+      let t = 0
+      if (segLen2 > 1e-8) {
+        t = ((px - ax) * sx + (py - ay) * sy + (pz - az) * sz) / segLen2
+        t = t < 0 ? 0 : t > 1 ? 1 : t
+      }
+      const cx = ax + sx * t, cy = ay + sy * t, cz = az + sz * t
+      const dx = px - cx, dy = py - cy, dz = pz - cz
+      const d2 = dx * dx + dy * dy + dz * dz
+      if (d2 > r2) continue
+      // Worst-of-N eviction: replace whichever kept slot is currently
+      // furthest away, if this crossing is actually closer than it.
+      let worst = 0
+      for (let k = 1; k < WHIZ_SLOTS; k++) if (this.whizD2[k] > this.whizD2[worst]) worst = k
+      if (d2 < this.whizD2[worst]) {
+        this.whizD2[worst] = d2
+        this.whizBullet[worst] = b
+        this.whizCx[worst] = cx
+        this.whizCy[worst] = cy
+        this.whizCz[worst] = cz
+      }
+    }
+
+    for (let k = 0; k < WHIZ_SLOTS; k++) {
+      const b = this.whizBullet[k]
+      if (!b) continue
+      b.whizzed = true // dedup — this round has had its one crack
+      const d = Math.sqrt(this.whizD2[k])
+      const prox = 1 - clamp(d / WHIZ_RADIUS, 0, 1) // 0 at the edge of the radius, 1 dead-on
+      const g = this.game
+      // Reuse the existing ricochet whine as the crack: a raw noise burst
+      // pitched up and louder the closer the round actually passed, played
+      // at the closest-approach point so 3D panning places it convincingly
+      // left/right/behind rather than glued to the shooter's muzzle.
+      g.audio.play('ricochet', {
+        x: this.whizCx[k], y: this.whizCy[k], z: this.whizCz[k],
+        gain: 0.28 + prox * 0.5, rate: 1.6 + prox * 0.6,
+      })
+      // A tiny air-snap wisp at the crossing point — reuses the same faint
+      // powder-smoke puff the tracer trail leaves (effects.ts's tracerTrail);
+      // it is generic enough to read as a wisp of disturbed air, and this
+      // stays within budget without adding a new pooled effect. One puff
+      // normally, a second only on a genuinely close pass.
+      g.effects?.tracerTrail(this.whizCx[k], this.whizCy[k], this.whizCz[k])
+      if (prox > 0.55) g.effects?.tracerTrail(this.whizCx[k], this.whizCy[k], this.whizCz[k])
+      // A small flinch — deliberately subtle (see module doc): the battlefield
+      // is already busy, and this must never read as a seizure trigger.
+      g.renderer.addShock(0.02 + prox * 0.03)
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Viewmodel posing
   // -------------------------------------------------------------------------
@@ -639,11 +1083,16 @@ export class FpsMode {
     const sway = (1 - a * 0.85) * (moveLen > 0.1 ? 1 : 0.35)
     const bobX = Math.sin(t * (sprinting ? 9 : 6)) * 0.006 * sway
     const bobY = Math.abs(Math.cos(t * (sprinting ? 9 : 6))) * 0.007 * sway
-    const kick = this.recoil * this.recoil
+    // Drive the viewmodel punch from the sharp `kick` accumulator (not the
+    // sustained `climbPitch` — that's a camera-only effect; the gun in your
+    // hands should show THIS shot's jolt, not the whole burst's drift).
+    const kick = this.kick
 
     if (this.profile.control === 'throw') {
-      // Overarm bowl: the arm cocks back, then whips forward as recoil decays.
-      const swing = this.recoil // 1 at release → 0
+      // Overarm bowl: the arm cocks back on release, then whips forward as
+      // the punch decays — driven by `kick` so the whip's tempo tracks
+      // whatever impulse this profile's recoil actually produced.
+      const swing = Math.min(1, this.kick) // 1 at release → 0
       vm.group.position.set(
         lerp(hip.x, aim.x, a),
         lerp(hip.y, aim.y, a) + swing * 0.12,
@@ -653,13 +1102,16 @@ export class FpsMode {
       return
     }
 
+    // Punch amounts run roughly 2-3x the old single-scalar model so the kick
+    // actually reads: this is where a rifle vs. a Lewis vs. an 18-pounder
+    // should look and feel like fundamentally different weapons in the hands.
     vm.group.position.set(
       lerp(hip.x, aim.x, a) + bobX,
       lerp(hip.y, aim.y, a) - bobY,
-      lerp(hip.z, aim.z, a) + kick * 0.06,
+      lerp(hip.z, aim.z, a) + kick * 0.15,
     )
     vm.group.rotation.set(
-      lerp(hip.rx, aim.rx, a) + kick * 0.09,
+      lerp(hip.rx, aim.rx, a) + kick * 0.22,
       lerp(hip.ry, aim.ry, a),
       hip.rz ?? 0,
     )
@@ -679,7 +1131,7 @@ export class FpsMode {
 
     // Field-gun barrel slams back into its cradle and rides home on the buffer.
     if (vm.recoilPart && vm.restRecoilZ !== undefined) {
-      vm.recoilPart.position.z = vm.restRecoilZ + kick * 0.14
+      vm.recoilPart.position.z = vm.restRecoilZ + kick * 0.32
     }
 
     // Reload: the weapon dips out of the shoulder.
@@ -701,9 +1153,16 @@ export class FpsMode {
     const p = this.profile
     const locked = this.locked
 
-    // Crosshair: hidden under the sniper scope, faint otherwise.
+    // Sight picture: the aperture tightens as the weapon comes to the shoulder
+    // and opens slightly while moving. It disappears under the sniper optic.
     const scoped = p.scope && this.ads > 0.6
-    this.crosshair.style.opacity = String(locked && !scoped ? 0.72 * (1 - this.ads * 0.4) : 0)
+    const moving = this.moveInput().len > 0.1
+    const gap = 11 - this.ads * 6 + (moving ? 4 : 0) + s.suppression * 10
+    this.crosshair.style.setProperty('--sight-gap', `${gap.toFixed(1)}px`)
+    this.crosshair.style.setProperty('--sight-alpha', String(0.82 - this.ads * 0.22))
+    this.crosshair.style.opacity = String(locked && !scoped ? 1 : 0)
+    this.crosshair.classList.toggle('fps-sight--ads', this.ads > 0.65)
+    this.crosshair.classList.toggle('fps-sight--blocked', this.reloadT > 0 || this.boltT > 0.08)
     this.scopeEl.style.opacity = String(scoped ? Math.min(1, (this.ads - 0.6) / 0.3) : 0)
 
     this.hintEl.textContent = locked
@@ -732,7 +1191,7 @@ export class FpsMode {
 
     // Stance (walking weapons only) + health.
     this.stanceEl.style.display = p.emplaced ? 'none' : 'block'
-    this.stanceEl.textContent = s.stance === 'stand' ? 'STANDING' : s.stance === 'crouch' ? 'CROUCHED' : 'PRONE'
+    this.stanceEl.textContent = s.stance === 'stand' ? '↑  STANDING' : s.stance === 'crouch' ? '⌄  CROUCHED' : '—  PRONE'
     const hpFrac = Math.max(0, s.hp / s.maxHp)
     this.healthEl.style.background =
       `linear-gradient(90deg, ${hpFrac > 0.4 ? '#7fae5a' : '#a04a3a'} ${hpFrac * 100}%, rgba(255,255,255,0.12) ${hpFrac * 100}%)`
@@ -766,6 +1225,7 @@ export class FpsMode {
     document.head.appendChild(style)
 
     const root = document.createElement('div')
+    root.className = 'fps-hud'
     root.style.cssText =
       'position:fixed;inset:0;pointer-events:none;display:none;z-index:60;' +
       'font-family:inherit;color:#e8e0c8;text-shadow:0 1px 2px rgba(0,0,0,0.8)'
@@ -784,10 +1244,46 @@ export class FpsMode {
     root.appendChild(this.scopeEl)
 
     this.crosshair = document.createElement('div')
-    this.crosshair.style.cssText =
-      'position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2px 0 0 -2px;' +
-      'border-radius:50%;background:#e8e0c8;box-shadow:0 0 0 1.5px rgba(0,0,0,0.55)'
+    this.crosshair.className = 'fps-sight'
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const mark = document.createElement('i')
+      mark.className = `fps-sight__mark fps-sight__mark--${side}`
+      this.crosshair.appendChild(mark)
+    }
+    const bead = document.createElement('b')
+    bead.className = 'fps-sight__bead'
+    this.crosshair.appendChild(bead)
     root.appendChild(this.crosshair)
+
+    // Hit marker: an X that pops over the crosshair when a round WE fired
+    // connects (see updateFeedback). `--hm-scale` drives the pop-then-settle
+    // via the CSS transform in style.css; the element itself just toggles
+    // opacity and the `--kill` modifier for the bigger red confirmation.
+    this.hitMarkerEl = document.createElement('div')
+    this.hitMarkerEl.className = 'fps-hitmarker'
+    for (const bar of ['a', 'b']) {
+      const b = document.createElement('i')
+      b.className = `fps-hitmarker__bar fps-hitmarker__bar--${bar}`
+      this.hitMarkerEl.appendChild(b)
+    }
+    root.appendChild(this.hitMarkerEl)
+
+    // Directional damage: a pooled ring of wedges (see HURT_SLOTS). Each
+    // `.fps-hurtdir` is a zero-size element pinned at screen centre
+    // (left:50%;top:50%;width:0;height:0), so rotating IT — not the wedge
+    // child, which is merely offset upward by a fixed pixel amount in CSS —
+    // is a pure rotation about that centre point: the wedge child swings
+    // around the crosshair on a ring at whatever angle updateFeedback()
+    // computes this frame.
+    for (let k = 0; k < HURT_SLOTS; k++) {
+      const hand = document.createElement('div')
+      hand.className = 'fps-hurtdir'
+      const wedge = document.createElement('div')
+      wedge.className = 'fps-hurtdir__wedge'
+      hand.appendChild(wedge)
+      root.appendChild(hand)
+      this.hurtIndicatorEls.push(hand)
+    }
 
     const panel = document.createElement('div')
     panel.style.cssText =
@@ -841,42 +1337,135 @@ export class FpsMode {
 
 // -----------------------------------------------------------------------------
 
-/**
- * A soft radial muzzle-flash decal on a canvas. `core` draws a tight hot dot;
- * otherwise a broad glow crossed by a faint four-point star so a spinning
- * billboard reads as fire rather than a disc. Additive blending does the rest.
- */
-function makeFlashTexture(core: boolean): THREE.CanvasTexture {
-  const N = 64, c = document.createElement('canvas')
-  c.width = c.height = N
-  const ctx = c.getContext('2d')!
-  const mid = N / 2
-  const g = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid)
-  if (core) {
-    // Warm, not pure white — a white core clips through the bloom pass into an
-    // ugly magenta-fringed disc; amber blooms into a clean golden flash.
-    g.addColorStop(0, 'rgba(255,236,198,0.95)')
-    g.addColorStop(0.45, 'rgba(255,206,132,0.7)')
-    g.addColorStop(1, 'rgba(255,190,110,0)')
-  } else {
-    g.addColorStop(0, 'rgba(255,238,196,1)')
-    g.addColorStop(0.35, 'rgba(255,176,80,0.55)')
-    g.addColorStop(1, 'rgba(255,150,60,0)')
-  }
+// -----------------------------------------------------------------------------
+// Muzzle-flash billboards — procedural textures + the sprites that wear them
+// -----------------------------------------------------------------------------
+//
+// A cone/ball read fine from the side but collapsed to a flat, hard-edged
+// polygon (or a CA-fringed white ball) staring down the barrel — exactly the
+// view first person has of its own weapon. Billboards fix that structurally:
+// a sprite always presents its painted flame shape flat to the eye, whichever
+// way the barrel points, so "does it look like fire head-on" stops being a
+// geometry problem and becomes a texture-painting one.
+//
+// Two textures, built once at startup (session-lived, trivial GPU cost):
+//  - a single soft radial glow cell (the outer amber halo — perfectly round,
+//    so it needs no variants; its own scale/opacity animation sells it as
+//    living gas).
+//  - three INDEPENDENT jittered "hot star" cells side by side in one atlas
+//    (spikes + a bright core, each seeded differently) so the spiky inner
+//    core can hop between genuinely different silhouettes shot to shot and
+//    frame to frame — see `updateMuzzleFlash`'s per-frame variant swap.
+
+const FLASH_CELL = 96          // px per star-atlas cell
+const FLASH_STAR_CELLS = 3
+
+/** Tiny deterministic hash for jittering the (fixed, startup-only) atlas art. */
+function flashHash(x: number, y: number): number {
+  const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
+  return h - Math.floor(h)
+}
+
+/** Thin gradient spike drawn along local +x, radiating outward from the origin. */
+function paintFlashSpike(ctx: CanvasRenderingContext2D, len: number, thin: number, alpha: number): void {
+  ctx.save()
+  ctx.scale(1, thin)
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, len)
+  g.addColorStop(0, `rgba(255,255,255,${alpha})`)
+  g.addColorStop(0.4, `rgba(255,255,255,${alpha * 0.5})`)
+  g.addColorStop(1, 'rgba(255,255,255,0)')
   ctx.fillStyle = g
-  ctx.fillRect(0, 0, N, N)
-  if (!core) {
-    // Four-point star streaks for a little muzzle-bloom character.
-    ctx.strokeStyle = 'rgba(255,226,170,0.5)'
-    ctx.lineWidth = 3
-    ctx.beginPath()
-    ctx.moveTo(mid, 4); ctx.lineTo(mid, N - 4)
-    ctx.moveTo(4, mid); ctx.lineTo(N - 4, mid)
-    ctx.stroke()
-  }
-  const tex = new THREE.CanvasTexture(c)
+  ctx.beginPath()
+  ctx.arc(0, 0, len, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+/** Outer glow: one wide, soft gaussian falloff — a halo, not a hard disc. */
+function buildGlowTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = FLASH_CELL
+  const ctx = cv.getContext('2d')
+  if (ctx === null) throw new Error('fps: 2d canvas context unavailable')
+  const c = FLASH_CELL / 2
+  const g = ctx.createRadialGradient(c, c, 0, c, c, c)
+  g.addColorStop(0, 'rgba(255,255,255,0.95)')
+  g.addColorStop(0.35, 'rgba(255,255,255,0.55)')
+  g.addColorStop(0.75, 'rgba(255,255,255,0.16)')
+  g.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, FLASH_CELL, FLASH_CELL)
+  const tex = new THREE.CanvasTexture(cv)
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
   tex.needsUpdate = true
   return tex
+}
+
+/**
+ * Inner hot star: `FLASH_STAR_CELLS` independent cells laid out side by side,
+ * each a jittered burst of spikes plus a bright core — mirrors the style of
+ * `render/effects.ts`'s `buildAtlas` SPR.FLASH cell, but as its own small
+ * atlas so `updateMuzzleFlash` can swap the visible cell (via `texture.offset`)
+ * for a genuinely different silhouette rather than just spinning one shape.
+ */
+function buildStarTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas')
+  cv.width = FLASH_CELL * FLASH_STAR_CELLS
+  cv.height = FLASH_CELL
+  const ctx = cv.getContext('2d')
+  if (ctx === null) throw new Error('fps: 2d canvas context unavailable')
+  for (let cell = 0; cell < FLASH_STAR_CELLS; cell++) {
+    const ox = cell * FLASH_CELL
+    const cx = ox + FLASH_CELL / 2, cy = FLASH_CELL / 2
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(ox, 0, FLASH_CELL, FLASH_CELL)
+    ctx.clip()
+    ctx.translate(cx, cy)
+    const spikes = 5 + (cell % 2)
+    for (let i = 0; i < spikes; i++) {
+      const ang = (i / spikes) * Math.PI * 2 + (flashHash(i, cell * 7.7 + 1) - 0.5) * 0.9
+      const len = FLASH_CELL * (0.3 + flashHash(i, cell * 3.3 + 2) * 0.18)
+      ctx.save()
+      ctx.rotate(ang)
+      paintFlashSpike(ctx, len, 0.16 + flashHash(i, cell * 9.1 + 3) * 0.1, 0.9)
+      ctx.restore()
+    }
+    const core = ctx.createRadialGradient(0, 0, 0, 0, 0, FLASH_CELL * 0.22)
+    core.addColorStop(0, 'rgba(255,255,255,1)')
+    core.addColorStop(0.5, 'rgba(255,255,255,0.8)')
+    core.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = core
+    ctx.beginPath()
+    ctx.arc(0, 0, FLASH_CELL * 0.22, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+  const tex = new THREE.CanvasTexture(cv)
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  tex.repeat.set(1 / FLASH_STAR_CELLS, 1)
+  tex.needsUpdate = true
+  return tex
+}
+
+/**
+ * One flash billboard. `depthTest` stays on (matching the old meshes) so the
+ * barrel/foresight can still occlude it; `depthWrite` stays off so flashes
+ * never punch holes in each other or the world behind them.
+ */
+function makeFlashSprite(tex: THREE.Texture, color: number): THREE.Sprite {
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    color,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthTest: true,
+    depthWrite: false,
+  })
+  return new THREE.Sprite(mat)
 }
 
 function camDir(yaw: number, pitch: number): { x: number; y: number; z: number } {

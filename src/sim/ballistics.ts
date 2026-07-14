@@ -7,7 +7,7 @@
  */
 import type { Bullet, ImpactSurface, Soldier, Team, Vec3 } from '../core/types'
 import { ARMOUR_MULT, COMBAT, WORLD } from '../core/config'
-import { dist2, fx, snd, type Ctx } from './sim'
+import { dist2, fx, pushFpsFeedback, snd, type Ctx } from './sim'
 import { damageSoldier, damageVehicle, stanceHeight, suppressArea } from './combat'
 import type { Terrain } from '../world/terrain'
 
@@ -119,6 +119,10 @@ export function fireBullet(ctx: Ctx, spec: BulletSpec): Bullet {
     team: spec.team,
     pos: { x: spec.from.x, y: spec.from.y, z: spec.from.z },
     prev: { x: spec.from.x, y: spec.from.y, z: spec.from.z },
+    // Birth position, held fixed for the round's whole life — see the Bullet
+    // type doc. A fresh literal (not a reference to `spec.from`) so later
+    // mutation of the caller's Vec3, if any, can never leak into the streak.
+    spawn: { x: spec.from.x, y: spec.from.y, z: spec.from.z },
     vel: {
       x: (dx / nl) * spec.speed,
       y: (dy / nl) * spec.speed,
@@ -286,6 +290,22 @@ function sweep(ctx: Ctx, b: Bullet): boolean {
     damageSoldier(ctx, c, dmg, b.category, b.team, b.shooterUnitId)
     // The crack of a near hit keeps neighbours honest.
     suppressArea(ctx, c.pos.x, c.pos.z, 2.5, 0.06, b.team)
+    // -- first-person feedback -------------------------------------------
+    // Both checks key off the same possessed-soldier id, so this is a no-op
+    // whenever nobody is embodied — the natural gate the HUD relies on.
+    // `c.hp` is read AFTER damageSoldier() above, so a killing blow reports
+    // as a kill marker rather than a plain hit confirmation.
+    if (ctx.possessedSoldierId >= 0) {
+      if (b.shooterId === ctx.possessedSoldierId) {
+        pushFpsFeedback(ctx, { t: 'hit', kill: c.hp <= 0 })
+      }
+      if (c.id === ctx.possessedSoldierId) {
+        // The direction a round came FROM is the negative of the direction
+        // it was travelling — exactly the bearing the HUD's directional
+        // wedge needs in order to point back at the shooter.
+        pushFpsFeedback(ctx, { t: 'hurt', fromX: -b.vel.x, fromZ: -b.vel.z })
+      }
+    }
     return true
   }
   if (first === hitVehT && hitVeh) {
@@ -305,6 +325,12 @@ function sweep(ctx: Ctx, b: Bullet): boolean {
       const spark = ctx.rand() < COMBAT.ricochetChance
       fx(ctx.s, { t: 'impact', x: px, y: py, z: pz, nx: nX, ny: 0.25, nz: nZ, surface: 'steel', spark })
       if (spark) snd(ctx.s, { name: 'ricochet', x: px, y: py, z: pz, gain: 0.4 })
+      // Armour hits that actually damaged the vehicle still confirm for the
+      // possessed shooter (the bounce case above does not — nothing about a
+      // shrugged-off round earns a hit marker).
+      if (ctx.possessedSoldierId >= 0 && b.shooterId === ctx.possessedSoldierId) {
+        pushFpsFeedback(ctx, { t: 'hit', kill: false })
+      }
     }
     return true
   }

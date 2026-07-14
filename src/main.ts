@@ -134,6 +134,15 @@ function main(): void {
   requestAnimationFrame(loop)
 
   bootProgress(1)
+
+  // Dev-only first-person verification harness (see game/fpsLab.ts). Skips the
+  // title and drops straight onto a sandbox battlefield.
+  if (new URLSearchParams(location.search).has('fpslab')) {
+    document.getElementById('boot')?.classList.add('done')
+    import('./game/fpsLab').then(({ startFpsLab }) => startFpsLab(game))
+    return
+  }
+
   setTimeout(() => document.getElementById('boot')?.classList.add('done'), 250)
   showTitle()
 }

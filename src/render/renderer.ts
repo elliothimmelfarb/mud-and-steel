@@ -107,7 +107,11 @@ export class GameRenderer {
     container.appendChild(this.renderer.domElement)
 
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 1600)
+    // Near plane pulled in from 0.5 so the first-person viewmodel isn't clipped:
+    // held weapons and especially the close tool viewmodels (dressing, spade) sit
+    // ~0.3 m from the eye. The scene is low-poly with no coplanar distant geometry,
+    // so the tighter near/far ratio doesn't introduce depth fighting.
+    this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.3, 1600)
 
     this.composer = new EffectComposer(this.renderer)
     this.composer.addPass(new RenderPass(this.scene, this.camera))

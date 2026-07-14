@@ -84,6 +84,30 @@ export interface WeaponProfile {
   /** Indirect/thrown weapons clamp their aim point to this band (metres). */
   minRange: number
   maxRange: number
+  /**
+   * Eye height (m) while manning this weapon, overriding the stance table.
+   * Emplaced crews crouch to their gun, so they sit lower than a standing man —
+   * this is what drops you behind the Vickers or breech to look ALONG it rather
+   * than towering over a dark lump.
+   */
+  eyeHeight?: number
+  /** Pitch the view starts laid at (radians, − is down). Guns lay a touch low. */
+  startPitch?: number
+  /** Scales the barrel muzzle flash (1 = rifle-sized). A pistol wants ~0.6. */
+  flashScale?: number
+  /**
+   * Recoil CHARACTER overrides — all optional, all defaulting to a neutral
+   * 1x (or the model's own default) so most profiles never touch them; the
+   * base `recoil` field alone already drives a sensible generic kick/climb/
+   * sway. Set these only where a weapon should read distinctly: the sniper's
+   * one heavy punch, the Lewis/Vickers's fast climb-then-cap, the officer's
+   * light snappy pistol, the 18-pounder's huge single punch. See fps.ts's
+   * applyRecoil() for how each multiplies into the shared spring model.
+   */
+  recoilKickMul?: number   // multiplies the sharp per-shot punch (default 1)
+  recoilClimbMul?: number  // multiplies the accumulating muzzle-climb rate (default 1)
+  recoilClimbCap?: number  // overrides the muzzle-climb clamp, radians (default 0.16)
+  recoilSwayMul?: number   // multiplies the horizontal wander rate (default 1)
   hip: VmPose
   aim: VmPose
   build: () => Viewmodel
@@ -93,7 +117,7 @@ export interface WeaponProfile {
 // Shared viewmodel materials (session-lived, safe to share across meshes)
 // ---------------------------------------------------------------------------
 
-const EM = 0.55 // emissive lift so the viewmodel reads with the sun behind you
+const EM = 0.8 // emissive lift so the viewmodel reads even with the sun behind you
 
 function mkMat(color: number, rough: number, metal: number, emissive: number): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
@@ -101,18 +125,23 @@ function mkMat(color: number, rough: number, metal: number, emissive: number): T
   })
 }
 
+// Viewmodel metals are deliberately LOW-metalness: with no environment map a
+// physically-metallic surface has almost no diffuse term and renders near-black
+// in daylight, which turned the guns into featureless silhouettes. Treating them
+// as bright, lightly-specular painted/oiled steel keeps their form legible held
+// up against the sky, and the emissive floor stops any face going fully black.
 const MAT = {
-  wood: mkMat(0x8a5c30, 0.72, 0.04, 0x241505),
-  darkWood: mkMat(0x6b4423, 0.78, 0.04, 0x1b0f04),
-  steel: mkMat(0x4a4e55, 0.42, 0.72, 0x0c0e12),
-  blued: mkMat(0x2e3238, 0.35, 0.8, 0x08090c),
-  brass: mkMat(0x9a7a42, 0.5, 0.6, 0x1a1206),
-  canvas: mkMat(0x6d6a4c, 0.9, 0.02, 0x161507),
-  copper: mkMat(0x7d5233, 0.5, 0.55, 0x180c05),
-  paint: mkMat(0x55603f, 0.75, 0.2, 0x121607), // field-grey ordnance paint
-  glass: mkMat(0x0a0d10, 0.2, 0.3, 0x05070a),
-  dressing: mkMat(0xd8cfb4, 0.85, 0.0, 0x2a271d),
-  flesh: mkMat(0xa97a55, 0.85, 0.0, 0x201509),
+  wood: mkMat(0xa4703c, 0.7, 0.05, 0x2e1c0a),
+  darkWood: mkMat(0x86552c, 0.74, 0.05, 0x241606),
+  steel: mkMat(0x9298a3, 0.48, 0.35, 0x23262d),
+  blued: mkMat(0x5c636e, 0.4, 0.4, 0x1a1e24),
+  brass: mkMat(0xc39a52, 0.44, 0.45, 0x2e2109),
+  canvas: mkMat(0x8c8863, 0.88, 0.03, 0x1e1c0f),
+  copper: mkMat(0xa66c44, 0.48, 0.42, 0x241206),
+  paint: mkMat(0x707c52, 0.72, 0.2, 0x1a1e10), // field-grey ordnance paint
+  glass: mkMat(0x1a2630, 0.18, 0.35, 0x0a1016),
+  dressing: mkMat(0xe4dcc4, 0.85, 0.0, 0x35322a),
+  flesh: mkMat(0xc08f64, 0.82, 0.0, 0x2c1f12),
 } as const
 
 function part(
@@ -243,13 +272,14 @@ function buildMortar(): Viewmodel {
   const tube = new THREE.CylinderGeometry(0.06, 0.065, 0.85, 16)
   const tubeMesh = part(g, tube, MAT.blued, 0, 0.12, -0.42)
   tubeMesh.rotation.x = -1.15 // muzzle up-and-forward
-  part(g, new THREE.CylinderGeometry(0.07, 0.07, 0.04, 16), MAT.steel, 0.32, 0.44, -0.72, -1.15) // muzzle collar
+  // Muzzle collar seated on the tube mouth (the tube's +Y end after its tilt).
+  part(g, new THREE.CylinderGeometry(0.072, 0.072, 0.05, 16), MAT.steel, 0, 0.29, -0.8, -1.15)
   // Baseplate at your feet + bipod.
   part(g, new THREE.BoxGeometry(0.26, 0.03, 0.22), MAT.paint, 0, -0.16, -0.1)
   part(g, new THREE.BoxGeometry(0.02, 0.3, 0.02), MAT.steel, 0.1, 0.0, -0.35, 0, 0, -0.35)
   part(g, new THREE.BoxGeometry(0.02, 0.3, 0.02), MAT.steel, -0.1, 0.0, -0.35, 0, 0, 0.35)
   part(g, new THREE.BoxGeometry(0.03, 0.03, 0.14), MAT.brass, 0.02, 0.16, -0.28) // elevation screw
-  const vm: Viewmodel = { group: g, muzzle: new THREE.Vector3(0.34, 0.46, -0.76) }
+  const vm: Viewmodel = { group: g, muzzle: new THREE.Vector3(0, 0.31, -0.83) }
   finish(g, 0.85)
   return vm
 }
@@ -323,7 +353,7 @@ function buildToolkit(kind: 'medic' | 'engineer'): Viewmodel {
     part(g, new THREE.BoxGeometry(0.12, 0.02, 0.14), MAT.steel, 0, 0.02, -0.34)
   }
   const vm: Viewmodel = { group: g, muzzle: new THREE.Vector3(0, 0, -0.1) }
-  finish(g, 1.0)
+  finish(g, 1.3)
   return vm
 }
 
@@ -350,6 +380,10 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     spreadHip: 0.02, spreadAds: 0.007, category: 'rifle', sound: 'mg', tracerChance: 0.5,
     ammoName: '.303 Lewis pan', controlsHint: 'HOLD LMB fire · RMB aim · R reload · C stance',
     minRange: 0, maxRange: 0,
+    // Hand-held light MG: it climbs fast the moment you hold the trigger down,
+    // wandering a touch off a dead-straight line, capping well short of the
+    // sky rather than every round reading identical.
+    recoilClimbMul: 3.4, recoilSwayMul: 1.4,
     hip: { x: 0.16, y: -0.2, z: -0.42, rx: 0.05, ry: 0.05 },
     aim: { x: 0, y: -0.11, z: -0.34, rx: 0, ry: 0 }, build: buildLewis,
   },
@@ -359,9 +393,13 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     hipFov: 52, adsFov: 40, emplaced: true, scope: false, heat: true,
     spreadHip: 0.011, spreadAds: 0.006, category: 'mg', sound: 'mg', tracerChance: 0.5,
     ammoName: '.303 belt', controlsHint: 'HOLD LMB fire · watch HEAT · R new belt',
-    minRange: 0, maxRange: 0,
-    hip: { x: 0, y: -0.24, z: -0.36, rx: 0.02, ry: 0 },
-    aim: { x: 0, y: -0.24, z: -0.34, rx: 0, ry: 0 }, build: buildVickers,
+    minRange: 0, maxRange: 0, eyeHeight: 1.16, startPitch: -0.06,
+    // Tripod-mounted: it still climbs hard over a sustained burst (that's the
+    // jacket boiling, the man wrestling the spade grips), but the cradle caps
+    // it a little lower than the hand-held Lewis and damps the sideways wander.
+    recoilClimbMul: 2.6, recoilClimbCap: 0.13, recoilSwayMul: 0.8,
+    hip: { x: 0, y: -0.4, z: -0.56, rx: 0.05, ry: 0 },
+    aim: { x: 0, y: -0.4, z: -0.52, rx: 0.03, ry: 0 }, build: buildVickers,
   },
   sniper: {
     id: 'sniper', name: 'Sniper', control: 'bolt', ammoKind: 'mag',
@@ -369,7 +407,11 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     hipFov: 55, adsFov: 11, emplaced: false, scope: true, heat: false,
     spreadHip: 0.02, spreadAds: 0.0006, category: 'sniper', sound: 'sniper', tracerChance: 0,
     ammoName: '.303 SMLE (scoped)', controlsHint: 'RMB scope · LMB fire · R reload · C stance',
-    minRange: 0, maxRange: 0, hip: RIFLE_HIP, aim: RIFLE_AIM, build: () => buildRifle(true),
+    minRange: 0, maxRange: 0,
+    // Heaviest single punch in the arsenal — one hard snap up per shot, then
+    // a quick settle back onto the scope before the bolt's even worked.
+    recoilKickMul: 1.35,
+    hip: RIFLE_HIP, aim: RIFLE_AIM, build: () => buildRifle(true),
   },
   grenadier: {
     id: 'grenadier', name: 'Bomber', control: 'throw', ammoKind: 'grenades',
@@ -387,9 +429,9 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     hipFov: 60, adsFov: 52, emplaced: true, scope: false, heat: false,
     spreadHip: 0, spreadAds: 0, category: 'artillery', sound: 'mortar_launch', tracerChance: 0,
     ammoName: '3-inch bombs', controlsHint: 'Aim reticle downrange · LMB drop · R re-stock',
-    minRange: 45, maxRange: 190,
-    hip: { x: 0.05, y: -0.28, z: -0.34, rx: 0, ry: 0 },
-    aim: { x: 0.05, y: -0.28, z: -0.34, rx: 0, ry: 0 }, build: buildMortar,
+    minRange: 45, maxRange: 190, eyeHeight: 1.5,
+    hip: { x: 0.06, y: -0.4, z: -0.32, rx: 0, ry: 0 },
+    aim: { x: 0.06, y: -0.4, z: -0.32, rx: 0, ry: 0 }, build: buildMortar,
   },
   fieldgun: {
     id: 'fieldgun', name: '18-Pounder', control: 'directgun', ammoKind: 'shells',
@@ -397,9 +439,13 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     hipFov: 54, adsFov: 30, emplaced: true, scope: false, heat: false,
     spreadHip: 0, spreadAds: 0, category: 'artillery', sound: 'fieldgun', tracerChance: 0,
     ammoName: '18-pdr HE', controlsHint: 'RMB lay the sight · LMB fire · R load shell',
-    minRange: 0, maxRange: 0,
-    hip: { x: 0, y: -0.22, z: -0.3, rx: 0.01, ry: 0 },
-    aim: { x: 0, y: -0.2, z: -0.28, rx: 0, ry: 0 }, build: buildFieldgun,
+    minRange: 0, maxRange: 0, eyeHeight: 1.32, startPitch: -0.03,
+    // Nothing else on the field should feel like this: a violent single punch
+    // well beyond a rifle's, on top of the FOV lurch and screen shake that
+    // applyRecoil() already gives every directgun discharge.
+    recoilKickMul: 1.6,
+    hip: { x: 0, y: -0.6, z: -0.32, rx: 0.04, ry: 0 },
+    aim: { x: 0, y: -0.58, z: -0.3, rx: 0.02, ry: 0 }, build: buildFieldgun,
   },
   flamer: {
     id: 'flamer', name: 'Flame Projector', control: 'flame', ammoKind: 'fuel',
@@ -418,8 +464,8 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     spreadHip: 0, spreadAds: 0, category: '', sound: 'build', tracerChance: 0,
     ammoName: 'Field dressings', controlsHint: 'HOLD LMB to bandage the nearest wounded man',
     minRange: 0, maxRange: 10,
-    hip: { x: 0.16, y: -0.16, z: -0.26, rx: 0, ry: 0 },
-    aim: { x: 0.1, y: -0.14, z: -0.22, rx: -0.25, ry: 0 }, build: () => buildToolkit('medic'),
+    hip: { x: 0.14, y: -0.16, z: -0.46, rx: 0, ry: 0 },
+    aim: { x: 0.1, y: -0.15, z: -0.42, rx: -0.25, ry: 0 }, build: () => buildToolkit('medic'),
   },
   officer: {
     id: 'officer', name: 'Officer', control: 'semi', ammoKind: 'mag',
@@ -427,9 +473,11 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     hipFov: 56, adsFov: 42, emplaced: false, scope: false, heat: false,
     spreadHip: 0.03, spreadAds: 0.012, category: 'rifle', sound: 'pistol', tracerChance: 0,
     ammoName: 'Webley .455', controlsHint: 'LMB fire · RMB aim · R reload · C stance',
-    minRange: 0, maxRange: 0,
-    hip: { x: 0.18, y: -0.2, z: -0.34, rx: 0.05, ry: 0.04 },
-    aim: { x: 0, y: -0.12, z: -0.3, rx: 0, ry: 0 }, build: buildPistol,
+    minRange: 0, maxRange: 0, flashScale: 0.6,
+    // A light service revolver: a snappy little flick of the wrist, not a punch.
+    recoilKickMul: 0.55,
+    hip: { x: 0.18, y: -0.2, z: -0.4, rx: 0.05, ry: 0.04 },
+    aim: { x: 0, y: -0.12, z: -0.34, rx: 0, ry: 0 }, build: buildPistol,
   },
   engineer: {
     id: 'engineer', name: 'Sapper', control: 'tool', ammoKind: 'none',
@@ -438,8 +486,8 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     spreadHip: 0, spreadAds: 0, category: '', sound: 'build', tracerChance: 0,
     ammoName: 'Entrenching tools', controlsHint: 'HOLD LMB to shore up parapet / mend wire',
     minRange: 0, maxRange: 14,
-    hip: { x: 0.16, y: -0.18, z: -0.28, rx: 0, ry: 0 },
-    aim: { x: 0.12, y: -0.16, z: -0.26, rx: -0.2, ry: 0 }, build: () => buildToolkit('engineer'),
+    hip: { x: 0.14, y: -0.18, z: -0.48, rx: 0, ry: 0 },
+    aim: { x: 0.12, y: -0.17, z: -0.44, rx: -0.2, ry: 0 }, build: () => buildToolkit('engineer'),
   },
   gasproj: {
     id: 'gasproj', name: 'Livens Projector', control: 'lob', ammoKind: 'drums',
@@ -447,9 +495,9 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     hipFov: 60, adsFov: 54, emplaced: true, scope: false, heat: false,
     spreadHip: 0, spreadAds: 0, category: 'gas', sound: 'gas_pop', tracerChance: 0,
     ammoName: 'Gas drums', controlsHint: 'Aim reticle · LMB launch · mind the wind · R reload',
-    minRange: 70, maxRange: 200,
-    hip: { x: 0.05, y: -0.26, z: -0.32, rx: 0, ry: 0 },
-    aim: { x: 0.05, y: -0.26, z: -0.32, rx: 0, ry: 0 }, build: buildGasProjector,
+    minRange: 70, maxRange: 200, eyeHeight: 1.34,
+    hip: { x: 0.06, y: -0.38, z: -0.3, rx: 0, ry: 0 },
+    aim: { x: 0.06, y: -0.38, z: -0.3, rx: 0, ry: 0 }, build: buildGasProjector,
   },
 }
 

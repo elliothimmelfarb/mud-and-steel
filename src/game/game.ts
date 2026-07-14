@@ -36,7 +36,7 @@ import {
 } from '../sim/sim'
 import { buildSections, sectionAt } from '../sim/trench'
 import { updateUnits } from '../sim/soldiers'
-import { updateEnemies } from '../sim/enemies'
+import { updateEnemies, spawnEnemy } from '../sim/enemies'
 import { updateVehicles, spawnVehicle } from '../sim/vehicles'
 import { updateProjectiles, spawnFlare } from '../sim/projectiles'
 import { updateBullets, standSurface } from '../sim/ballistics'
@@ -364,6 +364,7 @@ export class Game {
       events: this.events, rand: forkRand(seed, 'combat'),
       mods: this.mods, flowDirty: true, night: false,
       possessedSoldierId: -1, possessedUnitId: -1,
+      fpsFeedback: [],
     }
 
     // Restore a saved position. Order matters: defences first (sandbags bump
@@ -1056,6 +1057,52 @@ export class Game {
     this.fpsMode.enter(u, c)
   }
 
+  // -------------------------------------------------------------------------
+  // FPS Lab hooks (see fpsLab.ts) — spawn any weapon and embody it on demand,
+  // without pointer lock or the build → place → possess flow.
+  // -------------------------------------------------------------------------
+
+  /** Drop a fresh crew of `kind` on a free slot and step straight into it. */
+  debugPossessKind(kind: UnitKindId): boolean {
+    const s = this.ctx.s
+    if (this.fpsMode.active) this.fpsMode.exit()
+    // Sweep the field so nothing from a previous pick (or an HMR reload) stacks
+    // in view — the lab only ever inhabits one unit at a time.
+    for (const u of s.units) {
+      if (u.disbanded) continue
+      u.disbanded = true
+      const sl = s.slots.find((x) => x.id === u.slotId)
+      if (sl) sl.unitId = null
+    }
+    // Pick a free slot of the right placement, nearest the centre of the front
+    // line, so every weapon is inspected from the same representative spot.
+    const placement = UNIT_DEFS[kind].placement
+    const cand = s.slots.filter((sl) => sl.kind === placement && sl.unitId === null)
+    const pool = cand.length ? cand : s.slots.filter((sl) => sl.unitId === null)
+    pool.sort((a, b) =>
+      Math.hypot(a.pos.x, a.pos.z - WORLD.frontTrenchZ) -
+      Math.hypot(b.pos.x, b.pos.z - WORLD.frontTrenchZ))
+    const slot = pool[0]
+    if (!slot) return false
+    const u = this.createUnit(kind, slot.id, false)
+    if (!u) return false
+    const c = u.crew.find((cr) => cr.hp > 0)
+    if (!c) return false
+    this.fpsMode.debugUnlocked = true
+    this.fpsMode.enter(u, c)
+    return true
+  }
+
+  /** Line up a rank of German infantry downrange for live-fire testing. */
+  debugSpawnTargets(count = 8, range = 70): void {
+    const s = this.ctx.s
+    const z = WORLD.frontTrenchZ - range
+    for (let i = 0; i < count; i++) {
+      const x = (i - (count - 1) / 2) * 6
+      spawnEnemy(this.ctx, 'einf', x, z + (this.runRand() - 0.5) * 8, -1)
+    }
+  }
+
   /** Keyboard-only placement cursor step. */
   moveKbCursor(dx: number, dz: number): void {
     if (!this.buildSelection) return
@@ -1392,8 +1439,11 @@ export class Game {
       this.chevrons.count = 0
     }
 
-    // Bullets in flight.
-    this.rounds.sync(s.bullets)
+    // Bullets in flight. The renderer needs the camera's world position to
+    // billboard each streak about its own flight axis and to drop rounds
+    // sitting right on top of it (see RoundRenderer.sync).
+    const roundCam = this.renderer.camera.position
+    this.rounds.sync(s.bullets, roundCam.x, roundCam.y, roundCam.z)
 
     // Gas.
     const blobCount = collectGasBlobs(this.ctx, this.gasBuf)

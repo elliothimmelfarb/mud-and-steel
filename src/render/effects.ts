@@ -1237,8 +1237,13 @@ export class EffectsSystem {
 
     // Flesh: a brief dark spray thrown back off the wound. The blood that
     // settles on a kill is handled separately — this is the strike itself.
+    // `nx/ny/nz` IS -velocity here (see ballistics.ts's impact fx call for
+    // 'flesh'), so everything below throws back roughly toward the shooter.
     if (surface === 'flesh') {
-      const n = 3 + (Math.random() < 0.5 ? 1 : 0)
+      // Main spray — unchanged in spirit, just now respecting `mul` like every
+      // other spawn in this file (it never did before; low-particle-density
+      // settings should thin this out same as everything else).
+      const n = this.n1(3 + (Math.random() < 0.5 ? 1 : 0))
       for (let i = 0; i < n; i++) {
         const ang = Math.random() * TWO_PI
         const sp = rr(0.6, 2.2)
@@ -1253,6 +1258,37 @@ export class EffectsSystem {
           SPR.SOFT, 0.04, 1.1, 0,
         )
       }
+      // A tighter, faster cone hugging -velocity: a couple of small droplets
+      // flicked harder and straighter than the main spray above, arcing under
+      // full gravity so they read as flung matter rather than settling haze.
+      // Jitter is a small offset off the cone axis, not a full-circle fan —
+      // that's what keeps this "tight" next to the wider spray it sits inside.
+      const nb = this.n0(2)
+      for (let i = 0; i < nb; i++) {
+        const jx = rr(-0.4, 0.4), jz = rr(-0.4, 0.4)
+        this.alp.spawn(
+          x, y, z,
+          nx * rr(3, 6) + jx * 2, ny * rr(2, 4) + rr(0.5, 1.5), nz * rr(3, 6) + jz * 2,
+          t0 + rr(0, 0.02), rr(0.18, 0.32),
+          rr(0.05, 0.09), rr(0.1, 0.17),
+          0.3, 0.04, 0.035, rr(0.45, 0.6),
+          Math.random() * TWO_PI, rr(-3, 3),
+          -9.8, 0,
+          SPR.SOFT, 0.03, 1, 0,
+        )
+      }
+      // One faint low mist hanging at the wound — restrained, memorial not
+      // spectacle (see blood()'s comment below, which holds for this too).
+      this.alp.spawn(
+        x, y + rr(-0.05, 0.1), z,
+        rr(-0.15, 0.15), rr(0.1, 0.3), rr(-0.15, 0.15),
+        t0 + rr(0, 0.05), rr(0.5, 0.9),
+        rr(0.08, 0.12), rr(0.22, 0.32),
+        0.28, 0.05, 0.045, rr(0.14, 0.2) * this.strobeMul(),
+        Math.random() * TWO_PI, rr(-0.3, 0.3),
+        -1, 0.3,
+        SPR.DUST, 0.08, 1.2, 0.15,
+      )
       return
     }
 
@@ -1276,14 +1312,23 @@ export class EffectsSystem {
       puffSpr, 0.06, 1.2, 0.2,
     )
 
-    // Kicked clods / spray.
+    // Kicked clods / spray. Mud and dirt punch a taller, NARROWER geyser than
+    // a generic kick — a round striking loose ground drives debris mostly UP
+    // through the hole it just made, not sideways — while a sandbagged
+    // parapet throws actual hessian-fibre chunks (DEBRIS), not clods of earth.
+    const geyser = surface === 'mud' || surface === 'dirt'
+    const spLo = geyser ? 0.4 : 1.5, spHi = geyser ? 1.6 : 5
+    const vyLo = geyser ? 4 : 2, vyHi = geyser ? 9 : 6
     const nc = this.n0(clods)
     for (let i = 0; i < nc; i++) {
       const ang = Math.random() * TWO_PI
-      const sp = rr(1.5, 5)
-      const vy = rr(2, 6)
+      const sp = rr(spLo, spHi)
+      const vy = rr(vyLo, vyHi)
       const life = ((2 * vy) / 9.8) * rr(0.8, 1.1)
       const shade = rr(0.75, 1.15)
+      const spr = surface === 'sandbag'
+        ? SPR.DEBRIS
+        : wet && Math.random() < 0.5 ? SPR.SPLASH : (Math.random() < 0.5 ? SPR.DIRT_A : SPR.DIRT_B)
       this.alp.spawn(
         x, y + 0.05, z,
         nx * sp * 0.4 + Math.cos(ang) * sp, vy, nz * sp * 0.4 + Math.sin(ang) * sp,
@@ -1292,28 +1337,75 @@ export class EffectsSystem {
         pr * shade, pg * shade, pb * shade, rr(0.7, 0.9),
         Math.random() * TWO_PI, rr(-6, 6),
         -9.8, 0,
-        wet && Math.random() < 0.5 ? SPR.SPLASH : (Math.random() < 0.5 ? SPR.DIRT_A : SPR.DIRT_B), 0.02, 0.5, 0,
+        spr, 0.02, 0.5, 0,
       )
     }
 
+    // Mud/dirt: the low skirt of dust every real geyser throws out sideways
+    // at ground level even while the clods themselves go mostly straight up.
+    if (geyser) {
+      const ndu = this.n0(2)
+      for (let i = 0; i < ndu; i++) {
+        const ang = Math.random() * TWO_PI
+        const shade = rr(0.75, 1.15)
+        this.alp.spawn(
+          x + Math.cos(ang) * 0.12, y + 0.05, z + Math.sin(ang) * 0.12,
+          Math.cos(ang) * rr(0.6, 1.3), rr(0.15, 0.4), Math.sin(ang) * rr(0.6, 1.3),
+          t0 + rr(0, 0.05), rr(0.8, 1.5),
+          rr(0.12, 0.2), rr(0.3, 0.46),
+          pr * shade, pg * shade, pb * shade, rr(0.14, 0.2),
+          Math.random() * TWO_PI, rr(-0.5, 0.5),
+          0, 0.7,
+          SPR.DUST, 0.08, 1.2, 0.2,
+        )
+      }
+    }
+
     // Sparks: always a couple off steel, otherwise only on a real ricochet.
+    // Steel gets its own brighter, tighter, shorter-lived fan — this is the
+    // one surface where sparks should really pop, not just accompany a puff.
     if (spark || surface === 'steel') {
-      const nsp = this.n1(surface === 'steel' ? 3 : 2)
+      const isSteel = surface === 'steel'
+      const nsp = this.n1(isSteel ? 6 : 2)
       for (let i = 0; i < nsp; i++) {
         const ang = Math.random() * TWO_PI
         const sp = rr(4, 12)
+        // Tighter fan: more of the kick goes into the directional (nx/nz)
+        // term and less into the perpendicular scatter than the generic case.
+        const fan = isSteel ? 0.32 : 0.5
+        const dirLo = isSteel ? 4 : 2, dirHi = isSteel ? 8 : 5
         this.add.spawn(
           x + nx * 0.05, y + ny * 0.05 + 0.04, z + nz * 0.05,
-          nx * rr(2, 5) + Math.cos(ang) * sp * 0.5, ny * rr(1, 3) + rr(1, 4), nz * rr(2, 5) + Math.sin(ang) * sp * 0.5,
-          t0, rr(0.12, 0.3),
+          nx * rr(dirLo, dirHi) + Math.cos(ang) * sp * fan,
+          ny * rr(1, 3) + rr(1, 4),
+          nz * rr(dirLo, dirHi) + Math.sin(ang) * sp * fan,
+          t0, isSteel ? rr(0.06, 0.16) : rr(0.12, 0.3),
           rr(0.08, 0.14), rr(0.02, 0.05),
-          1, 0.8, 0.42, 0.9 * this.strobeMul(),
+          1, isSteel ? 0.86 : 0.8, isSteel ? 0.5 : 0.42, (isSteel ? 1 : 0.9) * this.strobeMul(),
           Math.random() * TWO_PI, 0,
           -10, 0,
           SPR.SPARK, 0.02, 0.8, 0,
         )
       }
       if (spark) this.flash(x + nx * 0.2, y + 0.2, z + nz * 0.2, 0xffd08a, 30, 0.06)
+    }
+
+    // Steel: a thin wisp of smoke off the hot strike point, on top of the
+    // spark fan and the existing ricochet light pop above.
+    if (surface === 'steel') {
+      const nsm = this.n0(1)
+      for (let i = 0; i < nsm; i++) {
+        this.alp.spawn(
+          x + nx * 0.1, y + ny * 0.1 + 0.06, z + nz * 0.1,
+          nx * rr(0.2, 0.5), rr(0.4, 0.8), nz * rr(0.2, 0.5),
+          t0 + rr(0, 0.05), rr(0.5, 0.9),
+          rr(0.08, 0.14), rr(0.24, 0.36),
+          0.55, 0.53, 0.5, rr(0.14, 0.2),
+          Math.random() * TWO_PI, rr(-0.4, 0.4),
+          0, 0.9,
+          SPR.SMOKE_B, 0.08, 1.2, 0.15,
+        )
+      }
     }
   }
 
