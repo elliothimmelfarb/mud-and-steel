@@ -666,6 +666,11 @@ interface FlashSlot {
   i0: number
   decay: number
   t: number
+  // Whether this slot is mid-flash. The light itself stays visible=true forever
+  // (parked at intensity 0 when idle) so the scene's active light count never
+  // changes — toggling it would force three.js to recompile shader programs
+  // mid-firefight. Same discipline as roundRenderer's tracer-light pool.
+  active: boolean
 }
 
 interface EmitterSlot {
@@ -796,12 +801,17 @@ export class EffectsSystem {
     scene.add(this.rainPts)
 
     // --- flash light pool -------------------------------------------------
+    // Lights are created visible=true forever and parked at intensity 0 when
+    // idle; `active` tracks whether a slot is mid-flash. Never toggling
+    // visibility keeps the scene's active light count constant, so a forward
+    // renderer never recompiles its light programs mid-firefight — the same
+    // discipline as roundRenderer's tracer-light pool (see buildTracerLights).
     for (let i = 0; i < FLASH_POOL; i++) {
       const light = new THREE.PointLight(0xffffff, 0, 40, 2)
       light.castShadow = false
-      light.visible = false
+      light.visible = true
       scene.add(light)
-      this.flashSlots.push({ light, i0: 0, decay: 0.2, t: 1 })
+      this.flashSlots.push({ light, i0: 0, decay: 0.2, t: 1, active: false })
     }
 
     // --- emitter slots ----------------------------------------------------
@@ -894,12 +904,14 @@ export class EffectsSystem {
     // flash light envelopes
     for (let i = 0; i < this.flashSlots.length; i++) {
       const f = this.flashSlots[i]
-      if (!f.light.visible) continue
+      if (!f.active) continue
       f.t += dt
       const k = 1 - f.t / f.decay
       if (k <= 0) {
+        // Park at intensity 0 but leave the light visible — dropping the active
+        // light count is what forces a shader recompile (see the pool comment).
         f.light.intensity = 0
-        f.light.visible = false
+        f.active = false
       } else {
         f.light.intensity = f.i0 * k * k
       }
@@ -1716,7 +1728,7 @@ export class EffectsSystem {
     f.t = 0
     f.light.intensity = f.i0
     f.light.distance = Math.min(12 + intensity * 0.15, 80)
-    f.light.visible = true
+    f.active = true
   }
 
   dispose(): void {
