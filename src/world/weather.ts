@@ -57,12 +57,34 @@ export class Weather {
     s.wetness = Math.max(0, Math.min(1,
       s.wetness + s.rain * WEATHER.rainWetRate * dt - (1 - s.rain) * WEATHER.dryRate * dt))
 
-    // Time drifts slowly during play; big jumps happen between waves.
-    // Always move FORWARD around the clock — the sun never runs backwards.
+    // Time drifts slowly during play; big jumps happen between waves. Always
+    // move FORWARD around the clock — the sun never runs backwards. The glide is
+    // governed in ELEVATION space: it slows near the horizon so the sun lingers
+    // on dawn/dusk (where the light is best) instead of ripping through it, and
+    // it's rate-capped so even a full night→day wave jump falls over ~40-60s of
+    // watchable sky rather than snapping. See WEATHER.todGlide/todHorizonLinger.
     let todDelta = this.todTarget - s.tod
-    todDelta -= Math.floor(todDelta) // shortest forward distance in [0,1)
-    if (todDelta > 0.001) s.tod += todDelta * Math.min(1, dt * 0.1)
-    s.tod += 0.00018 * dt
+    todDelta -= Math.floor(todDelta) // forward distance to the target in [0,1)
+    const elevNow = Math.sin((s.tod - 0.25) * Math.PI * 2)
+    const horizonScale = 1 - WEATHER.todHorizonLinger * (1 - smooth01(Math.abs(elevNow) / 0.22))
+    // Only glide toward a target within a bit more than half a day AHEAD. Two
+    // very different states both read as a LARGE forward delta, and skipping the
+    // glide is the right call for both: (a) ambient drift has nudged the clock a
+    // hair PAST a target it already reached — the forward-wrap inflates that to
+    // ~1.0, and gliding it would chase the sun a full lap (the "sun races after
+    // a wave settles" bug this guard exists to kill); (b) a night wave re-targets
+    // 0.97 while the clock has already drifted deep into night — the sun is
+    // effectively there, so holding position beats racing it up through noon and
+    // back down. A genuine forward transition worth gliding (day→night ≈0.65,
+    // dusk→night ≈0.27, the per-wave day step 0.11) is always well under 0.8.
+    if (todDelta > 0.0006 && todDelta < 0.8) {
+      // Soften the last sliver so the sun settles into the target instead of
+      // stopping dead; capped by todGlide so the traverse rate stays cinematic.
+      const settle = todDelta < 0.02 ? Math.max(0.3, todDelta / 0.02) : 1
+      s.tod += Math.min(todDelta, WEATHER.todGlide * horizonScale * settle * dt)
+    }
+    // Ambient drift also lingers a little near the horizon (a parked dawn crawls).
+    s.tod += WEATHER.todDrift * dt * (0.4 + 0.6 * horizonScale)
     s.tod -= Math.floor(s.tod)
     s.night = Math.sin((s.tod - 0.25) * Math.PI * 2) < 0.02
 
@@ -105,4 +127,10 @@ export class Weather {
       blowsTowardPlayer: s.windZ > 0.35,     // gas warning: it will drift onto your line
     }
   }
+}
+
+/** Smootherstep-clamped 0..1 ramp (mirrors sky.ts's helper). */
+function smooth01(v: number): number {
+  const t = v < 0 ? 0 : v > 1 ? 1 : v
+  return t * t * (3 - 2 * t)
 }

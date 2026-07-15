@@ -50,6 +50,22 @@ const TRACER_BRIT = new THREE.Color('#ffce6e')
 const TRACER_GER = new THREE.Color('#ff5f3c')
 const BALL_TINT = new THREE.Color('#d8cdb4')
 
+// Cast-light tints for the moving tracer-light pool — deliberately WARMER and
+// whiter than the streak tints above so the light thrown onto mud, sandbags and
+// faces reads as real fire-light, not a coloured dot smeared across the ground.
+const TRACER_LIGHT_BRIT = 0xffb050
+const TRACER_LIGHT_GER = 0xff6a40
+// Pool size by render quality (q0 off, q1, q2). A small FIXED pool of moving
+// PointLights is re-bound each frame to the nearest in-flight tracers — the
+// impression of every nearby round glowing without one light per bullet. The
+// count only ever changes in the settings menu (setQuality), never per frame,
+// so a forward renderer never recompiles its light programs mid-firefight.
+const TRACER_LIGHT_SIZES: readonly number[] = [0, 3, 5]
+const TRACER_LIGHT_MAX = 5
+// A tracer past this camera distance casts light too faint to notice — cull it
+// from selection so the pool always spends its lights on the near, visible rounds.
+const TRACER_LIGHT_RANGE = 60
+
 // Head-dot sizing: a small, only mildly distance-scaled world size so it reads
 // as a crisp bright mote at any range and can never balloon into a slab. It
 // grows a little with range (countering perspective shrink, the way a HUD
@@ -167,6 +183,25 @@ export class RoundRenderer {
   private head: THREE.InstancedMesh
   private effects: EffectsSystem | null
 
+  // Moving tracer-light pool (see TRACER_LIGHT_SIZES). Owned here because this
+  // is the one place that already loops every live bullet each frame with its
+  // world position, velocity, tracer flag, team and camera distance in hand.
+  private scene: THREE.Scene
+  private tracerLights: THREE.PointLight[] = []
+  private tlQuality: 0 | 1 | 2
+  // Per-slot state: the bullet id each light is currently riding (-1 = free),
+  // and the bullet-array index bound to it THIS frame (-1 = none). Ids give
+  // frame-to-frame continuity so a light rides one round smoothly instead of
+  // teleporting between rounds and strobing.
+  private tlBoundId = new Int32Array(TRACER_LIGHT_MAX).fill(-1)
+  private tlTargetIdx = new Int32Array(TRACER_LIGHT_MAX).fill(-1)
+  // Nearest-K selection scratch (K = pool size ≤ TRACER_LIGHT_MAX), zero-alloc.
+  private selIdx = new Int32Array(TRACER_LIGHT_MAX)
+  private selId = new Int32Array(TRACER_LIGHT_MAX)
+  private selDist = new Float64Array(TRACER_LIGHT_MAX)
+  private selUsed = new Uint8Array(TRACER_LIGHT_MAX)
+  private selCount = 0
+
   // scratch — zero per-frame allocation
   private m = new THREE.Matrix4()
   private q = new THREE.Quaternion()
@@ -179,8 +214,10 @@ export class RoundRenderer {
   private up = new THREE.Vector3()
   private basis = new THREE.Matrix4()
 
-  constructor(scene: THREE.Scene, effects: EffectsSystem | null = null) {
+  constructor(scene: THREE.Scene, effects: EffectsSystem | null = null, quality: 0 | 1 | 2 = 2) {
     this.effects = effects
+    this.scene = scene
+    this.tlQuality = quality
     // Unit quad translated so it grows backwards along -X from the head; the
     // head sits at the bullet's real position and the tail trails the flight
     // path. Local +Y is the width axis, feathered by `tex`; local Z carries no
@@ -252,6 +289,36 @@ export class RoundRenderer {
     this.glow.instanceMatrix.needsUpdate = true
     this.core.instanceMatrix.needsUpdate = true
     this.head.instanceMatrix.needsUpdate = true
+
+    this.buildTracerLights()
+  }
+
+  /**
+   * (Re)build the moving tracer-light pool for the current quality tier. Lights
+   * are created once per tier and left `visible = true` forever at intensity 0
+   * when idle — toggling visibility or count is what forces a forward-renderer
+   * material recompile, so we only ever do that here, on the (rare) menu action.
+   */
+  private buildTracerLights(): void {
+    for (const l of this.tracerLights) { this.scene.remove(l); l.dispose() }
+    this.tracerLights.length = 0
+    const n = TRACER_LIGHT_SIZES[this.tlQuality] ?? 0
+    for (let i = 0; i < n; i++) {
+      const l = new THREE.PointLight(TRACER_LIGHT_BRIT, 0, 15, 2)
+      l.castShadow = false
+      l.visible = true // never toggled — see the doc above
+      this.scene.add(l)
+      this.tracerLights.push(l)
+    }
+    this.tlBoundId.fill(-1)
+    this.tlTargetIdx.fill(-1)
+  }
+
+  /** Menu-only: resize the tracer-light pool to a new quality tier. */
+  setQuality(q: 0 | 1 | 2): void {
+    if (q === this.tlQuality) return
+    this.tlQuality = q
+    this.buildTracerLights()
   }
 
   private hide(mesh: THREE.InstancedMesh, i: number): void {
@@ -271,9 +338,14 @@ export class RoundRenderer {
    * billboard for a dot this small, and it means this call site never had to
    * change to hand the renderer a `THREE.Camera` reference.
    */
-  sync(bullets: Bullet[], camX: number, camY: number, camZ: number): void {
+  sync(bullets: Bullet[], camX: number, camY: number, camZ: number, nightFactor = 0, dt = 0): void {
     const n = Math.min(bullets.length, MAX)
     const ref = COMBAT.bulletSpeed
+    // Tracer-light selection is worth doing only after dark (their cast light is
+    // invisible by day) and only when the pool exists (quality gating).
+    const lightsActive = this.tracerLights.length > 0 && nightFactor >= 0.05
+    const lightK = this.tracerLights.length
+    this.selCount = 0
     for (let i = 0; i < n; i++) {
       const b = bullets[i]
       const speed = Math.hypot(b.vel.x, b.vel.y, b.vel.z) || 1
@@ -317,6 +389,28 @@ export class RoundRenderer {
       this.q.setFromRotationMatrix(this.basis)
 
       const tracer = b.tracer
+
+      // Nearest-K tracer selection for the moving light pool: keep the K rounds
+      // closest to the camera (past K they're too faint to cast useful light).
+      // Worst-of-K eviction, zero-alloc; the actual light binding happens after
+      // the loop so it can keep continuity with last frame (see bindTracerLights).
+      if (lightsActive && tracer && camDist < TRACER_LIGHT_RANGE) {
+        if (this.selCount < lightK) {
+          this.selIdx[this.selCount] = i
+          this.selId[this.selCount] = b.id
+          this.selDist[this.selCount] = camDist
+          this.selCount++
+        } else {
+          let worst = 0
+          for (let k = 1; k < lightK; k++) if (this.selDist[k] > this.selDist[worst]) worst = k
+          if (camDist < this.selDist[worst]) {
+            this.selIdx[worst] = i
+            this.selId[worst] = b.id
+            this.selDist[worst] = camDist
+          }
+        }
+      }
+
       // Slower spent rounds draw shorter — a subtle read on energy without
       // simulating drag on the streak itself.
       const speedK = Math.min(1.4, Math.max(0.5, speed / ref))
@@ -391,6 +485,74 @@ export class RoundRenderer {
     this.head.instanceMatrix.needsUpdate = true
     if (this.glow.instanceColor) this.glow.instanceColor.needsUpdate = true
     if (this.head.instanceColor) this.head.instanceColor.needsUpdate = true
+
+    this.bindTracerLights(bullets, nightFactor, dt, lightsActive)
+  }
+
+  /**
+   * Drive the moving tracer-light pool from this frame's nearest-K selection.
+   * Continuity by bullet id: a light already riding a still-selected round keeps
+   * riding it (smooth), a light whose round left the set is freed and eased
+   * dark, and freshly-selected rounds ignite from intensity 0 in place on a free
+   * light — never flying a lit light across the field. Intensity eases toward a
+   * night- and speed-scaled target; position snaps so the light truly rides the
+   * round downrange. Zero allocation.
+   */
+  private bindTracerLights(bullets: Bullet[], nightFactor: number, dt: number, active: boolean): void {
+    const lights = this.tracerLights
+    const nL = lights.length
+    if (nL === 0) return
+    const ease = dt > 0 ? Math.min(1, dt * 16) : 1
+    // Daytime / feature-off: ease every light dark and drop all bindings.
+    if (!active) {
+      for (let k = 0; k < nL; k++) {
+        lights[k].intensity += (0 - lights[k].intensity) * ease
+        this.tlBoundId[k] = -1
+        this.tlTargetIdx[k] = -1
+      }
+      return
+    }
+
+    const sel = this.selCount
+    for (let s = 0; s < sel; s++) this.selUsed[s] = 0
+    for (let k = 0; k < nL; k++) this.tlTargetIdx[k] = -1
+
+    // Pass 1: keep existing bindings whose bullet is still selected (ride).
+    for (let k = 0; k < nL; k++) {
+      const id = this.tlBoundId[k]
+      if (id < 0) continue
+      let match = -1
+      for (let s = 0; s < sel; s++) if (this.selUsed[s] === 0 && this.selId[s] === id) { match = s; break }
+      if (match >= 0) { this.tlTargetIdx[k] = this.selIdx[match]; this.selUsed[match] = 1 }
+      else this.tlBoundId[k] = -1 // its round left the near set — free the light
+    }
+
+    // Pass 2: bind freshly-selected rounds to free lights, igniting from dark.
+    for (let s = 0; s < sel; s++) {
+      if (this.selUsed[s] === 1) continue
+      let free = -1
+      for (let k = 0; k < nL; k++) if (this.tlBoundId[k] < 0 && this.tlTargetIdx[k] < 0) { free = k; break }
+      if (free < 0) break
+      this.tlTargetIdx[free] = this.selIdx[s]
+      this.tlBoundId[free] = this.selId[s]
+      this.selUsed[s] = 1
+      lights[free].intensity = 0 // ignite in place, don't fly a lit light in
+    }
+
+    // Pass 3: drive each light — ride its bound round, or ease dark if unbound.
+    const scale = this.effects ? this.effects.lightScale : 1
+    for (let k = 0; k < nL; k++) {
+      const l = lights[k]
+      const ti = this.tlTargetIdx[k]
+      if (ti < 0) { l.intensity += (0 - l.intensity) * ease; continue }
+      const b = bullets[ti]
+      l.position.set(b.pos.x, b.pos.y, b.pos.z)
+      l.color.setHex(b.team === 'brit' ? TRACER_LIGHT_BRIT : TRACER_LIGHT_GER)
+      const spd = Math.hypot(b.vel.x, b.vel.y, b.vel.z)
+      const fade = Math.min(1, spd / COMBAT.bulletSpeed)
+      const target = (6 + nightFactor * 30) * fade * scale
+      l.intensity += (target - l.intensity) * ease
+    }
   }
 
   dispose(): void {
@@ -404,5 +566,7 @@ export class RoundRenderer {
     this.glow.parent?.remove(this.glow)
     this.core.parent?.remove(this.core)
     this.head.parent?.remove(this.head)
+    for (const l of this.tracerLights) { this.scene.remove(l); l.dispose() }
+    this.tracerLights.length = 0
   }
 }

@@ -684,7 +684,10 @@ const ALPHA_CAP: readonly number[] = [2200, 4000, 6000]
 const QUALITY_MUL: readonly number[] = [0.45, 0.7, 1]
 
 const EMITTER_SLOTS = 32
-const FLASH_POOL = 6
+// Bumped 6→8: muzzle flashes now throw real, brighter ground light in both
+// views (see muzzleFlash), so a machine-gun burst mustn't round-robin-evict the
+// shell-impact/explosion light the player values out of the shared pool.
+const FLASH_POOL = 8
 const TWO_PI = Math.PI * 2
 
 // Palette (muted, Western Front)
@@ -707,6 +710,15 @@ export class EffectsSystem {
   private reduceFlashes = false
   /** Combined spawn-count multiplier (quality x settings). */
   private mul = 1
+  /** Time-of-day darkness (0 day … 1 full dark), pushed in each frame by Game. */
+  private night = 0
+  /**
+   * Brightness scale for dynamic fire-light under photosensitivity mode. Read by
+   * RoundRenderer's tracer-light pool so it dims in lockstep with the flash
+   * strobe cap. Public because RoundRenderer owns that pool but shares this
+   * setting. Mirrors strobeMul()'s 0.45 factor.
+   */
+  lightScale = 1
 
   private time = 0
   private disposed = false
@@ -827,6 +839,12 @@ export class EffectsSystem {
 
   setReduceFlashes(v: boolean): void {
     this.reduceFlashes = v
+    this.lightScale = v ? 0.45 : 1
+  }
+
+  /** Push in the frame's time-of-day darkness (0 day … 1 full dark). */
+  setNight(nightFactor: number): void {
+    this.night = nightFactor < 0 ? 0 : nightFactor > 1 ? 1 : nightFactor
   }
 
   private updateMul(): void {
@@ -1187,14 +1205,21 @@ export class EffectsSystem {
         SPR.DEBRIS, 0.02, 0.5, 0,
       )
     }
-    // A pop of dynamic light so muzzle fire actually lights the mud at night.
-    // First person (core off) is lit by FpsMode's own camera-mounted flash lamp.
-    if (core) {
-      if (isBig) {
-        this.flash(x + dx * 1.2 * sc, y + 0.4, z + dz * 1.2 * sc, 0xffc070, 170, 0.12)
-      } else {
-        this.flash(x + dx * 0.5 * sc, y + 0.15, z + dz * 0.5 * sc, 0xffb060, 26, 0.05)
-      }
+    // A pop of dynamic light so muzzle fire actually lights the mud. Fires in
+    // BOTH views now — `core` gates only the world flash SPRITE (the first-person
+    // viewmodel draws its own barrel-welded flash), but the ground light is
+    // called with the true world muzzle position either way, so first person
+    // finally gets the same warm pool on the trench floor that third person does.
+    // Scaled by `night`: a subtle warm lick by day, a real stab of light after
+    // dark. Warm-tinted (never white) so bloom + chromatic aberration clip warm.
+    // Pushed a touch further down-range so the inverse-square falloff spares the
+    // camera-close viewmodel barrel (which the barrel-welded flash sprite already
+    // lights) and lands its warm pool out on the mud where it's wanted — this is
+    // what stops a boresighted burst white-clipping the near gun into a CA fringe.
+    if (isBig) {
+      this.flash(x + dx * 1.8 * sc, y + 0.35, z + dz * 1.8 * sc, 0xffc070, 80 + this.night * 90, 0.14)
+    } else {
+      this.flash(x + dx * 1.0 * sc, y + 0.12, z + dz * 1.0 * sc, 0xffb45a, 32 + this.night * 55, 0.07)
     }
   }
 

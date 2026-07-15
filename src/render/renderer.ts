@@ -151,6 +151,24 @@ export class GameRenderer {
     })
   }
 
+  /**
+   * Fake dark-adaptation: lift tone-map exposure as night falls (1.25 day →
+   * 1.45 full dark) so the darker, cooler night ambient stays legible — charging
+   * enemies remain visible — while every muzzle flash, tracer light and flare
+   * reads as a genuine stab of light out of the dark. The paired bloom trim
+   * stops the lifted exposure from veiling the frame into milky grey. Driven off
+   * the same shared nightFactor as everything else, so the whole frame agrees.
+   */
+  setNightExposure(nightFactor: number): void {
+    const nf = nightFactor < 0 ? 0 : nightFactor > 1 ? 1 : nightFactor
+    this.renderer.toneMappingExposure = 1.25 + nf * 0.14
+    // Trim bloom harder at night: the lifted exposure already amplifies the
+    // muzzle-flash sprite, and heavy bloom is what smears it into a white
+    // CA-fringed blob near the frame edge. Less bloom keeps the flash a bright
+    // warm STAR rather than a veil.
+    if (this.bloom.enabled) this.bloom.strength = 0.32 - nf * 0.11
+  }
+
   /** Kick the shellshock effect (0..1). Decays on its own. */
   addShock(v: number): void {
     this.shock = Math.min(1, this.shock + v)
