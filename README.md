@@ -46,6 +46,8 @@ The gunfeel is built to carry the weapon's weight:
 
 | | |
 |---|---|
+| **Handled weapons** | Each weapon is a hand-built model in your hands — the SMLE's snub nose-cap, bolt and charger of .303; the Lewis's finned cooling shroud and pan drum; the Vickers's corrugated water jacket, condenser hose and feeding belt; the Webley's fluted cylinder; a waffle-gridded Mills bomb; the flame lance's burner and gauge |
+| **The 18-pounder** | A real field gun, not a grey plate: a recoiling barrel and interrupted-screw breech, hydro-pneumatic recuperators, a dial sight and brass handwheels, framed by a low shield you sight *over* — right-click lays the shot through a magnified telescopic gun sight with a ranged graticule |
 | **Muzzle flash** | A barrel-welded burst of fire that flickers frame to frame — not a decal |
 | **Tracers** | Grow out of the muzzle and streak downrange as glowing comet heads; yours burn amber, theirs ember-red |
 | **Recoil** | A spring model that kicks, climbs over a burst, and recovers to your true aim — the 18-pounder lurches the view, shakes the screen and slams its barrel home |
@@ -53,7 +55,7 @@ The gunfeel is built to carry the weapon's weight:
 | **Incoming** | A supersonic *crack* and a flinch as a round snaps past your head |
 | **Feedback** | Hit markers, a distinct kill marker, and directional indicators pointing back at whoever's hitting you |
 
-> A dev harness lives at [`localhost:5173/?fpslab`](http://localhost:5173/?fpslab) — it drops you straight onto a sandbox battlefield with one-click embodiment of every weapon, plus **Invincible** and **Clear foes** toggles for studying feel.
+> A dev harness lives at [`localhost:5173/?fpslab`](http://localhost:5173/?fpslab) — it drops you straight onto a sandbox battlefield with one-click embodiment of every weapon. **Inspect** floats the gun onto a turntable to spin, drag and zoom through every angle; **Invincible** (default on) pins you so enemy fire never cuts a study short; **Clear foes** and **Flash❄** freeze the field for inspection. Deep-link a weapon with `?fpslab&w=fieldgun&inspect&spin`.
 
 ## Systems that make it different
 

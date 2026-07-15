@@ -297,7 +297,14 @@ export class Scenery {
     this.sandbags.instanceMatrix.needsUpdate = true
   }
 
-  syncUnits(units: Unit[]): void {
+  /**
+   * @param possessedUnitId  While the player is manning an emplaced weapon in
+   *   first person, its WORLD platform mesh is hidden — the camera sits inside
+   *   the gun, so the full-size shield/wheels/barrel would otherwise wall the
+   *   view 360° around and occlude the first-person viewmodel. Pass -1 (the
+   *   default) to show every platform, e.g. in the commander view.
+   */
+  syncUnits(units: Unit[], possessedUnitId = -1): void {
     const live = new Set<number>()
     for (const u of units) {
       if (u.disbanded) continue
@@ -317,6 +324,7 @@ export class Scenery {
         this.scene.add(g)
         this.unitProps.set(u.id, g)
       }
+      g.visible = u.id !== possessedUnitId // you operate it from the inside; don't wall the view
       g.position.set(u.pos.x, this.terrain.heightAt(u.pos.x, u.pos.z), u.pos.z)
       const gunner = u.crew.find((c) => c.hp > 0)
       if (gunner) g.rotation.y = -gunner.facing

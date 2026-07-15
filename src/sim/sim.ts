@@ -100,6 +100,14 @@ export interface Ctx {
    */
   possessedUnitId: number
   /**
+   * FPS Lab only: while true, the possessed soldier can be hit (so hurt feedback
+   * still fires) but is never dropped below a sliver of hp — killSoldier never
+   * runs on him, so a lethal round can't leave him stuck in the 'dead' stance
+   * with a corpse under the camera. FpsMode mirrors its `debugInvincible` here
+   * each frame and tops his hp back up. Always false in a normal game.
+   */
+  fpsInvincible: boolean
+  /**
    * Transient first-person feedback for the embodied player: hit/kill
    * confirmations on rounds the possessed soldier fired, and directional
    * "you were hit from over there" signals when he is the one struck. This

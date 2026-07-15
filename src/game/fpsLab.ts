@@ -46,6 +46,15 @@ export interface FpsLabApi {
   invincible(on?: boolean): boolean
   /** Wipe every enemy off the field for undisturbed inspection. */
   clearFoes(): void
+  /** Turntable: float the current weapon out front to examine from every angle.
+   *  Omit the argument to toggle; returns the resulting state. */
+  inspect(on?: boolean): boolean
+  /** Nudge the turntable orientation (radians): +yaw spins right, +pitch tips up. */
+  rotate(dYaw: number, dPitch?: number): void
+  /** Auto-spin the turntable so every side comes round on its own. */
+  spin(on: boolean): void
+  /** Dolly the inspected model nearer (−) or further (+). */
+  zoomModel(dz: number): void
   list(): LabWeapon[]
   current(): string
 }
@@ -66,28 +75,12 @@ export function startFpsLab(game: Game): void {
   requestAnimationFrame(dismiss)
 
   // Keep the embodied man on his feet so a test session isn't cut short by the
-  // German rifles downrange. On by default. Pinning hp each animation frame —
-  // after a sim tick has applied its damage but before the next frame's death
-  // check in FpsMode.update — means even a sniper's one-shot can't drop him.
-  // Toggle it OFF to exercise damage feedback (hurt vignette / directional hits).
-  const labState = { invincible: true }
-  const possessedSoldier = () => {
-    const id = game.ctx.possessedSoldierId
-    if (id < 0) return null
-    for (const u of game.ctx.s.units) {
-      if (u.disbanded) continue
-      for (const c of u.crew) if (c.id === id) return c
-    }
-    return null
-  }
-  const pin = (): void => {
-    if (labState.invincible) {
-      const s = possessedSoldier()
-      if (s && s.hp > 0) { s.hp = s.maxHp; s.suppression = 0; s.gasExposure = 0 }
-    }
-    requestAnimationFrame(pin)
-  }
-  requestAnimationFrame(pin)
+  // German rifles downrange. On by default. The actual pin lives inside
+  // FpsMode.update() (game.fpsMode.debugInvincible), BEFORE the death check —
+  // ordering-proof, so unlike the old separate-rAF pin even a one-shot that
+  // dropped hp to 0 can't slip a death through. Toggle it OFF to exercise damage
+  // feedback (hurt vignette / directional hits).
+  game.fpsMode.debugInvincible = true
 
   const api: FpsLabApi = {
     enter: (kind) => game.debugPossessKind(kind),
@@ -99,21 +92,48 @@ export function startFpsLab(game: Game): void {
     freezeFlash: (on) => game.fpsMode.debugFreezeFlash(on),
     targets: (count, range) => game.debugSpawnTargets(count, range),
     invincible: (on) => {
-      labState.invincible = on === undefined ? !labState.invincible : on
-      return labState.invincible
+      const v = on === undefined ? !game.fpsMode.debugInvincible : on
+      game.fpsMode.debugInvincible = v
+      return v
     },
     clearFoes: () => { game.ctx.s.enemies.length = 0 },
+    inspect: (on) => {
+      const v = on === undefined ? !game.fpsMode.debugInspectActive() : on
+      game.fpsMode.debugInspectMode(v)
+      return v
+    },
+    rotate: (dYaw, dPitch) => game.fpsMode.debugInspectRotate(dYaw, dPitch ?? 0),
+    spin: (on) => game.fpsMode.debugInspectSpin(on),
+    zoomModel: (dz) => game.fpsMode.debugInspectZoom(dz),
     list: () => WEAPONS.slice(),
     current: () => game.fpsMode.debugName,
   }
   ;(window as unknown as { __fpslab: FpsLabApi }).__fpslab = api
 
-  buildPanel(game, api)
+  const panel = buildPanel(game, api)
+
+  // Deep-link: ?fpslab&w=<kind>[&inspect][&spin] boots straight into a weapon
+  // (optionally on the turntable). Survives dev-server reloads, so a screenshot
+  // pass always lands in the same state without a scripted enter() afterwards.
+  // Drives the panel setters (not the api directly) so the buttons/pad stay in
+  // sync with the turntable state.
+  const q = new URLSearchParams(location.search)
+  const autoKind = q.get('w') as UnitKindId | null
+  if (autoKind && WEAPONS.some((w) => w.kind === autoKind)) {
+    const tryAuto = (): void => {
+      if (game.modalOpen) { requestAnimationFrame(tryAuto); return } // wait out the briefing
+      if (!api.enter(autoKind)) { requestAnimationFrame(tryAuto); return }
+      if (q.has('inspect')) panel.setInspect(true)
+      if (q.has('spin')) panel.setSpin(true)
+    }
+    requestAnimationFrame(tryAuto)
+  }
+
   // eslint-disable-next-line no-console
   console.log('[FPS Lab] ready — window.__fpslab. Weapons:', WEAPONS.map((w) => w.kind).join(', '))
 }
 
-function buildPanel(game: Game, api: FpsLabApi): void {
+function buildPanel(game: Game, api: FpsLabApi): { setInspect: (on: boolean) => void; setSpin: (on: boolean) => void } {
   const panel = document.createElement('div')
   panel.setAttribute('data-fpslab', '') // FpsMode lets clicks on this through
   panel.style.cssText =
@@ -166,14 +186,66 @@ function buildPanel(game: Game, api: FpsLabApi): void {
   })
   invBtn.dataset.active = '1'
   invBtn.style.background = '#2f4a24'
+  // Turntable inspect: float the current weapon out front and spin it. The pad
+  // + Spin button appear once Inspect is lit.
+  // Inspect/Spin state lives in these setters so BOTH the panel buttons AND the
+  // deep-link (?inspect/?spin) drive the same path — the engine flag, the button
+  // lit state and the drag-pad visibility never desync, and clicking a button is
+  // always an explicit set (no blind toggle that could invert after a deep-link).
+  const inspectState = { on: false, spin: false }
+  const setInspectBtn = (b: HTMLButtonElement, on: boolean, label: string, lit: string): void => {
+    b.textContent = on ? `${label} ✓` : label
+    if (on) { b.dataset.active = '1'; b.style.background = lit } else { delete b.dataset.active; b.style.background = '#2a2519' }
+  }
+  const spinBtn = mkBtn('Spin', () => setSpin(!inspectState.spin))
+  const inspectBtn = mkBtn('Inspect', () => setInspect(!inspectState.on))
+  function setInspect(on: boolean): void {
+    inspectState.on = on
+    api.inspect(on)
+    setInspectBtn(inspectBtn, on, 'Inspect', '#3a4a5a')
+    pad.style.display = on ? 'flex' : 'none'
+  }
+  function setSpin(on: boolean): void {
+    inspectState.spin = on
+    api.spin(on)
+    setInspectBtn(spinBtn, on, 'Spin', '#4a3a1e')
+  }
+
   tools.append(
     mkBtn('Fire', () => api.fire()),
     mkBtn('Targets', () => api.targets(8, 70)),
     mkBtn('Flash❄', () => { flashHeld.on = !flashHeld.on; api.freezeFlash(flashHeld.on) }),
     invBtn,
     mkBtn('Clear foes', () => api.clearFoes()),
+    inspectBtn,
+    spinBtn,
   )
   panel.appendChild(tools)
+
+  // Drag-to-rotate / scroll-to-zoom pad (data-fpslab, so FpsMode lets its events
+  // through rather than treating them as mouselook/trigger).
+  const pad = document.createElement('div')
+  pad.setAttribute('data-fpslab', '')
+  pad.style.cssText =
+    'display:none;align-items:center;justify-content:center;text-align:center;' +
+    'margin-top:7px;height:56px;border:1px dashed #5a5038;border-radius:5px;' +
+    'background:rgba(58,74,90,0.18);color:#c9c0a4;font-size:10px;cursor:grab;user-select:none;touch-action:none'
+  pad.textContent = 'drag to rotate · scroll to zoom'
+  const drag = { on: false, x: 0, y: 0 }
+  pad.addEventListener('pointerdown', (e) => {
+    drag.on = true; drag.x = e.clientX; drag.y = e.clientY
+    pad.setPointerCapture(e.pointerId); pad.style.cursor = 'grabbing'
+  })
+  pad.addEventListener('pointermove', (e) => {
+    if (!drag.on) return
+    api.rotate((e.clientX - drag.x) * 0.012, -(e.clientY - drag.y) * 0.012)
+    drag.x = e.clientX; drag.y = e.clientY
+  })
+  const endDrag = (e: PointerEvent): void => { drag.on = false; pad.style.cursor = 'grab'; try { pad.releasePointerCapture(e.pointerId) } catch { /* ignore */ } }
+  pad.addEventListener('pointerup', endDrag)
+  pad.addEventListener('pointercancel', endDrag)
+  pad.addEventListener('wheel', (e) => { e.preventDefault(); api.zoomModel(e.deltaY > 0 ? 0.09 : -0.09) }, { passive: false })
+  panel.appendChild(pad)
 
   const hint = document.createElement('div')
   hint.style.cssText = 'margin-top:7px;opacity:0.6;font-size:10px'
@@ -182,4 +254,5 @@ function buildPanel(game: Game, api: FpsLabApi): void {
 
   document.body.appendChild(panel)
   void game
+  return { setInspect, setSpin }
 }

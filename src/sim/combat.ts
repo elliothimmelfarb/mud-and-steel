@@ -166,6 +166,14 @@ export function damageSoldier(
     const d = ctx.s.director.dmgByCategory
     d[category] = (d[category] ?? 0) + dmg
   }
+  // FPS Lab invincibility: the possessed man takes the hit (morale/suppression
+  // above still fire his hurt feedback) but is floored at a sliver so killSoldier
+  // never runs — no 'dead' stance soft-lock, no stray corpse. FpsMode restores
+  // him to full next frame. Scoped tightly to the possessed man; nil in real play.
+  if (ctx.fpsInvincible && target.id === ctx.possessedSoldierId) {
+    if (target.hp < 1) target.hp = 1
+    return
+  }
   if (target.hp <= 0) {
     killSoldier(ctx, target, sourceTeam, shooterUnitId)
   }
