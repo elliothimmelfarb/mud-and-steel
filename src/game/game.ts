@@ -364,6 +364,7 @@ export class Game {
       events: this.events, rand: forkRand(seed, 'combat'),
       mods: this.mods, flowDirty: true, night: false,
       possessedSoldierId: -1, possessedUnitId: -1,
+      fpsInvincible: false,
       fpsFeedback: [],
     }
 
@@ -1406,9 +1407,11 @@ export class Game {
     }
     this.soldiers.finish()
 
-    // Scenery sync.
+    // Scenery sync. Hide the possessed emplacement's world platform in first
+    // person — the camera sits inside it, so its full-size mesh would wall the
+    // view and hide the first-person viewmodel (see syncUnits).
     this.scenery.syncDefences(s.defences, w.night)
-    this.scenery.syncUnits(s.units)
+    this.scenery.syncUnits(s.units, this.fpsMode.active ? this.ctx.possessedUnitId : -1)
     this.scenery.syncVehicles(s.vehicles)
 
     // Burning wrecks.

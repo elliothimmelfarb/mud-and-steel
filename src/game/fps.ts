@@ -125,7 +125,19 @@ export class FpsMode {
   // FPS Lab: when set, the mode runs without the browser pointer lock so a
   // harness can drive yaw/pitch/trigger from script and inspect every weapon.
   debugUnlocked = false
+  // FPS Lab invincibility: pinned inside update() BEFORE the death check (not on
+  // a separate rAF), so not even a one-shot that dropped hp to 0 can end the
+  // session — the restore and the check live in the same function, ordering-proof.
+  debugInvincible = false
   private flashHold = false
+  // FPS Lab turntable: lift the active viewmodel front-and-centre and spin it so
+  // every side of the gun can be examined. Overrides the normal weapon pose while
+  // `inspect` is on (see poseInspect); has no effect in a normal game session.
+  private inspect = false
+  private inspectYaw = 0
+  private inspectPitch = 0
+  private inspectDist = 1.15
+  private inspectSpin = false
 
   // three.js
   private flashLight: THREE.PointLight
@@ -171,6 +183,7 @@ export class FpsMode {
   private hudRoot: HTMLDivElement
   private crosshair!: HTMLDivElement
   private scopeEl!: HTMLDivElement
+  private gunsightEl!: HTMLDivElement
   private ammoEl!: HTMLDivElement
   private ammoLabelEl!: HTMLDivElement
   private controlsEl!: HTMLDivElement
@@ -308,14 +321,17 @@ export class FpsMode {
       this.vmCache.set(kind, v)
     }
     this.vm = v
-    // Weld the flash billboards to this gun's muzzle. Adding to the new group
-    // detaches them from the old one; positioning in the group's local space
-    // means they ride every pose the barrel does.
+    // Weld the flash billboards to this gun's muzzle. Adding to the new node
+    // detaches them from the old one; positioning in its local space means they
+    // ride every pose the barrel does. Prefer the RECOIL sub-part when a weapon
+    // has one (the field gun): its rest frame coincides with the group's, so
+    // vm.muzzle stays the right local offset, and the flash then rides the barrel
+    // back on recoil instead of hanging in space ahead of the receded crown.
     this.flashT = 0
     this.flashHold = false // never carry a held-lit lab flash across a weapon swap
     this.muzzleFlash.visible = false
     this.muzzleFlashCore.visible = false
-    v.group.add(this.muzzleFlash, this.muzzleFlashCore)
+    ;(v.recoilPart ?? v.group).add(this.muzzleFlash, this.muzzleFlashCore)
     this.positionMuzzleFlash(0)
   }
 
@@ -340,6 +356,7 @@ export class FpsMode {
     this.active = false
     this.game.ctx.possessedSoldierId = -1
     this.game.ctx.possessedUnitId = -1
+    this.game.ctx.fpsInvincible = false // no possessed man to shield once we're out
     if (document.pointerLockElement) document.exitPointerLock()
     if (this.vm) this.vm.group.visible = false
     this.flashLight.intensity = 0
@@ -600,6 +617,23 @@ export class FpsMode {
     this.flashHold = on
     if (on) this.igniteBarrelFlash()
   }
+  /**
+   * Turntable inspect: float the active weapon front-and-centre and let the
+   * harness spin it on two axes to examine the model from every side. Toggling
+   * it on seeds a three-quarter view; off restores the normal hands/emplacement
+   * pose next frame.
+   */
+  debugInspectMode(on: boolean): void {
+    this.inspect = on
+    if (on) { this.inspectYaw = 0.7; this.inspectPitch = 0.18 }
+  }
+  debugInspectActive(): boolean { return this.inspect }
+  debugInspectRotate(dYaw: number, dPitch: number): void {
+    this.inspectYaw += dYaw
+    this.inspectPitch = clamp(this.inspectPitch + dPitch, -1.45, 1.45)
+  }
+  debugInspectZoom(dz: number): void { this.inspectDist = clamp(this.inspectDist + dz, 0.55, 2.4) }
+  debugInspectSpin(on: boolean): void { this.inspectSpin = on }
   get debugName(): string { return this.profile?.name ?? '' }
 
   /**
@@ -612,9 +646,12 @@ export class FpsMode {
   private muzzleWorldPos(): { x: number; y: number; z: number } {
     const vm = this.vm
     if (!vm) { const c = this.game.renderer.camera.position; return { x: c.x, y: c.y, z: c.z } }
-    vm.group.updateWorldMatrix(true, false)
+    // Anchor to the recoiling part when there is one so the ejecta leaves from the
+    // barrel's ACTUAL (receded) crown mid-recoil, matching the flash weld above.
+    const anchor = vm.recoilPart ?? vm.group
+    anchor.updateWorldMatrix(true, false)
     this._muzzleWorld.copy(vm.muzzle)
-    vm.group.localToWorld(this._muzzleWorld)
+    anchor.localToWorld(this._muzzleWorld)
     return { x: this._muzzleWorld.x, y: this._muzzleWorld.y, z: this._muzzleWorld.z }
   }
 
@@ -758,6 +795,18 @@ export class FpsMode {
     const g = this.game
     if (!this.active || !s || !u) return
 
+    // FPS Lab invincibility — pin the man before the death check below so a lab
+    // session is never cut short by German fire, not even by a lethal one-shot
+    // (the previous separate-rAF pin skipped restores once hp hit 0 and let those
+    // through). The sim-side guard (ctx.fpsInvincible, mirrored here) stops
+    // killSoldier from ever running on him so no lethal round leaves him stuck in
+    // the 'dead' stance; this tops his hp back up and clears suppression/gas.
+    g.ctx.fpsInvincible = this.debugInvincible
+    if (this.debugInvincible) {
+      s.hp = s.maxHp; s.suppression = 0; s.gasExposure = 0
+      if (s.stance === 'dead') s.stance = 'stand' // belt-and-braces: recover any non-combat kill
+    }
+
     // Death is not negotiable.
     if (s.hp <= 0) {
       g.renderer.addShock(0.9)
@@ -839,6 +888,7 @@ export class FpsMode {
     this.climbPitch -= this.climbPitch * Math.min(1, dt * 6)
     this.swayYaw -= this.swayYaw * Math.min(1, dt * 8)
     this.fovKick -= this.fovKick * Math.min(1, dt * 8)
+    if (this.inspect && this.inspectSpin) this.inspectYaw += dt * 0.7
     this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 300)
     this.updateMuzzleFlash(dt)
     const canAds = !this.profile.emplaced || this.profile.control === 'directgun'
@@ -1072,8 +1122,12 @@ export class FpsMode {
   private poseViewmodel(moveLen: number, sprinting: boolean): void {
     const vm = this.vm
     if (!vm) return
-    // Looking through the scope: the rifle drops away so the optic fills the eye.
-    const scopedAway = this.profile.scope && this.ads > 0.85
+    // FPS Lab turntable: float the model out front and spin it; skip the normal
+    // hands/emplacement pose, recoil, bolt cycle and scope-away entirely.
+    if (this.inspect) { this.poseInspect(); return }
+    // Looking through the optic (sniper scope OR the field-gun dial sight): the
+    // weapon drops away so the magnified sight picture fills the eye.
+    const scopedAway = (this.profile.scope || !!this.profile.gunsight) && this.ads > 0.85
     vm.group.visible = !scopedAway
     if (scopedAway) return
     const t = this.swayT
@@ -1142,6 +1196,24 @@ export class FpsMode {
     }
   }
 
+  /**
+   * Turntable pose (FPS Lab): hold the weapon dead-centre at `inspectDist` and
+   * orient it by the two accumulated inspect angles so every side — breech,
+   * sights, muzzle, underside — can be brought into view. Bolt/recoil sub-parts
+   * keep whatever rest transform their builder gave them.
+   */
+  private poseInspect(): void {
+    const vm = this.vm
+    vm.group.visible = true
+    vm.group.position.set(0, -0.12, -this.inspectDist)
+    vm.group.rotation.set(this.inspectPitch, this.inspectYaw, 0)
+    // Settle the recoil/bolt sub-parts to rest — the normal pose path (which
+    // drives them off `kick`) is skipped here, so a gun fired an instant before
+    // inspecting would otherwise sit frozen mid-recoil for the whole turntable.
+    if (vm.recoilPart && vm.restRecoilZ !== undefined) vm.recoilPart.position.z = vm.restRecoilZ
+    if (vm.bolt) { vm.bolt.rotation.z = -0.9; vm.bolt.position.z = 0.02 }
+  }
+
   // -------------------------------------------------------------------------
   // HUD
   // -------------------------------------------------------------------------
@@ -1154,8 +1226,9 @@ export class FpsMode {
     const locked = this.locked
 
     // Sight picture: the aperture tightens as the weapon comes to the shoulder
-    // and opens slightly while moving. It disappears under the sniper optic.
-    const scoped = p.scope && this.ads > 0.6
+    // and opens slightly while moving. It disappears under an optic (the sniper
+    // telescope OR the field-gun dial sight).
+    const scoped = (p.scope || !!p.gunsight) && this.ads > 0.6
     const moving = this.moveInput().len > 0.1
     const gap = 11 - this.ads * 6 + (moving ? 4 : 0) + s.suppression * 10
     this.crosshair.style.setProperty('--sight-gap', `${gap.toFixed(1)}px`)
@@ -1163,7 +1236,11 @@ export class FpsMode {
     this.crosshair.style.opacity = String(locked && !scoped ? 1 : 0)
     this.crosshair.classList.toggle('fps-sight--ads', this.ads > 0.65)
     this.crosshair.classList.toggle('fps-sight--blocked', this.reloadT > 0 || this.boltT > 0.08)
-    this.scopeEl.style.opacity = String(scoped ? Math.min(1, (this.ads - 0.6) / 0.3) : 0)
+    // Fade in whichever optic this weapon lays through — the plain reticle scope
+    // for the sniper, the amber telescopic graticule for the gun.
+    const opticAlpha = scoped ? Math.min(1, (this.ads - 0.6) / 0.3) : 0
+    this.scopeEl.style.opacity = String(p.scope ? opticAlpha : 0)
+    this.gunsightEl.style.opacity = String(p.gunsight ? opticAlpha : 0)
 
     this.hintEl.textContent = locked
       ? `${s.name.first} ${s.name.last} · ${p.name} — M or Esc to return to command`
@@ -1242,6 +1319,45 @@ export class FpsMode {
     this.scopeEl.appendChild(reticleV)
     this.scopeEl.appendChild(reticleH)
     root.appendChild(this.scopeEl)
+
+    // Artillery telescopic gun sight (the 18-pounder lays through this): a round
+    // amber-tinted field with a laid graticule — a fine crosshair, a central
+    // aiming pip, a range ladder falling below the line of sight and deflection
+    // ticks to either side. Fades in on ADS in place of the plain scope surround.
+    this.gunsightEl = document.createElement('div')
+    this.gunsightEl.style.cssText = 'position:absolute;inset:0;opacity:0;transition:opacity 0.1s;pointer-events:none'
+    const gunVign = document.createElement('div')
+    gunVign.style.cssText =
+      'position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,' +
+      'rgba(120,86,36,0.15) 0%, rgba(120,86,36,0.05) 26%, rgba(0,0,0,0) 31%,' +
+      'rgba(6,8,10,0.62) 34%, #05070a 46%)'
+    this.gunsightEl.appendChild(gunVign)
+    const gunRing = document.createElement('div')
+    gunRing.style.cssText =
+      'position:absolute;left:50%;top:50%;width:64vmin;height:64vmin;transform:translate(-50%,-50%);' +
+      'border-radius:50%;border:1.5px solid rgba(230,192,122,0.22);box-shadow:inset 0 0 42px rgba(0,0,0,0.55)'
+    this.gunsightEl.appendChild(gunRing)
+    const gunReticle = document.createElement('div')
+    gunReticle.style.cssText =
+      'position:absolute;left:50%;top:50%;width:62vmin;height:62vmin;transform:translate(-50%,-50%)'
+    gunReticle.innerHTML =
+      '<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;overflow:visible">' +
+      '<g fill="none" stroke="#e6c07a" stroke-width="0.35" opacity="0.9" stroke-linecap="round">' +
+      '<line x1="50" y1="10" x2="50" y2="43"/><line x1="50" y1="57" x2="50" y2="90"/>' +
+      '<line x1="10" y1="50" x2="43" y2="50"/><line x1="57" y1="50" x2="90" y2="50"/>' +
+      '<g stroke-width="0.45"><line x1="43.5" y1="61" x2="56.5" y2="61"/>' +
+      '<line x1="45" y1="69" x2="55" y2="69"/><line x1="46" y1="77" x2="54" y2="77"/>' +
+      '<line x1="47" y1="85" x2="53" y2="85"/></g>' +
+      '<g stroke-width="0.45"><line x1="30" y1="47" x2="30" y2="53"/><line x1="40" y1="48" x2="40" y2="52"/>' +
+      '<line x1="60" y1="48" x2="60" y2="52"/><line x1="70" y1="47" x2="70" y2="53"/></g>' +
+      '</g>' +
+      '<path d="M50 50 L47.6 55.4 L52.4 55.4 Z" fill="#e6c07a" stroke="none" opacity="0.95"/>' +
+      '<circle cx="50" cy="50" r="0.9" fill="#e6c07a"/>' +
+      '<g fill="#e6c07a" opacity="0.8" font-family="ui-monospace,monospace" font-size="2.5" text-anchor="middle">' +
+      '<text x="59" y="62">5</text><text x="57.5" y="70">10</text><text x="56.5" y="78">15</text>' +
+      '</g></svg>'
+    this.gunsightEl.appendChild(gunReticle)
+    root.appendChild(this.gunsightEl)
 
     this.crosshair = document.createElement('div')
     this.crosshair.className = 'fps-sight'
