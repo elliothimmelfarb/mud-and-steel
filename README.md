@@ -48,8 +48,8 @@ The gunfeel is built to carry the weapon's weight:
 |---|---|
 | **Handled weapons** | Each weapon is a hand-built model in your hands — the SMLE's snub nose-cap, bolt and charger of .303; the Lewis's finned cooling shroud and pan drum; the Vickers's corrugated water jacket, condenser hose and feeding belt; the Webley's fluted cylinder; a waffle-gridded Mills bomb; the flame lance's burner and gauge |
 | **The 18-pounder** | A real field gun, not a grey plate: a recoiling barrel and interrupted-screw breech, hydro-pneumatic recuperators, a dial sight and brass handwheels, framed by a low shield you sight *over* — right-click lays the shot through a magnified telescopic gun sight with a ranged graticule |
-| **Muzzle flash** | A barrel-welded burst of fire that flickers frame to frame — not a decal |
-| **Tracers** | Grow out of the muzzle and streak downrange as glowing comet heads; yours burn amber, theirs ember-red |
+| **Muzzle flash** | A barrel-welded burst of fire that flickers frame to frame — not a decal — and, after dark, throws a real warm pool of light across the mud in front of you |
+| **Tracers** | Grow out of the muzzle and streak downrange as glowing comet heads; yours burn amber, theirs ember-red. At night each of the nearest rounds carries its own moving light, raking the trench wall and lighting up whatever it passes |
 | **Recoil** | A spring model that kicks, climbs over a burst, and recovers to your true aim — the 18-pounder lurches the view, shakes the screen and slams its barrel home |
 | **Impacts** | Material-specific: dirt geysers, sandbag dust, sparks off steel, a restrained spray off flesh |
 | **Incoming** | A supersonic *crack* and a flinch as a round snaps past your head |
@@ -61,6 +61,7 @@ The gunfeel is built to carry the weapon's weight:
 
 - **Deformable battlefield** — every shell digs a real crater into the heightfield. Craters change cover, pathfinding, and (when it rains) flood into tank-swallowing ponds. The map you finish on is not the map you started with.
 - **Live weather &amp; wind** — gas drifts on a simulated wind field. The vane turns red when your own phosgene will blow back over your parapet.
+- **A continuous day/night sky** — the sun glides through a real arc, lingering on the dawn and dusk it moves slowest through, and a night wave falls dark over the better part of a minute. After dark the battlefield is lit by its own fire: your muzzle flashes pool on the mud, your tracers rake the wire, parachute flares drift overhead, and shell-bursts throb on the clouds — while the same light carves your first-person weapon out of the blackness. Firing reveals the enemy and betrays your position at once.
 - **Morale &amp; suppression** — both armies duck, crawl, break, and rout. Machine-gun fire pins men in the shell holes your own mortars dug for them.
 - **An adaptive enemy** — the director studies what kills its men and buys counters: snipers for your Vickers crews, pioneers for your wire, dispersed storm parties for your artillery. Read the intelligence report between waves.
 - **Named men, letters home** — every soldier has a name. Survivors write procedurally-generated letters home after hard waves; the fallen go on the Roll of Honour with an epitaph.

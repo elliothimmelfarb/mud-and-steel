@@ -46,6 +46,7 @@ import { planWave, updateWaveSpawns, noteWireDensity } from '../sim/waves'
 import { updateBarrages, startCreepingBarrage, resetBarrages } from '../sim/barrage'
 import { rebuildFlow } from '../sim/flow'
 import { FpsMode } from './fps'
+import { setViewmodelEmissive } from './weapons'
 
 export type OrderId = keyof typeof ORDER_DEFS
 
@@ -313,7 +314,7 @@ export class Game {
     this.effects.setParticleScale(this.settings.particleDensity)
     this.effects.setReduceFlashes(this.settings.reduceFlashes)
     this.soldiers = new SoldierRenderer(oldScene)
-    this.rounds = new RoundRenderer(oldScene, this.effects)
+    this.rounds = new RoundRenderer(oldScene, this.effects, this.settings.quality)
     this.scenery = new Scenery(oldScene, this.terrain, seed)
     oldScene.add(this.ghost)
     oldScene.add(this.renderer.camera)
@@ -1135,6 +1136,7 @@ export class Game {
     this.effects?.setQuality(st.quality)
     this.effects?.setParticleScale(st.particleDensity)
     this.effects?.setReduceFlashes(st.reduceFlashes)
+    this.rounds?.setQuality(st.quality)
     this.rig.edgePan = st.edgePan
     this.rig.invertZoom = st.invertZoom
     this.rig.speedMul = st.cameraSpeed
@@ -1295,6 +1297,13 @@ export class Game {
     const w = this.weather.state
 
     this.sky.setConditions(w.tod, w.fog, w.rain)
+    // Fan the frame's darkness out to every night-aware consumer so the whole
+    // frame moves on one number: muzzle/tracer fire-light strength, the
+    // viewmodel's self-glow floor, and the dark-adaptation exposure lift.
+    const nf = this.sky.nightFactor
+    this.effects.setNight(nf)
+    setViewmodelEmissive(nf)
+    this.renderer.setNightExposure(nf)
     // Sharp shadows follow whatever the player is looking at.
     if (this.fpsMode.active) {
       this.sky.setFocus(this.renderer.camera.position.x, this.renderer.camera.position.z)
@@ -1446,7 +1455,7 @@ export class Game {
     // billboard each streak about its own flight axis and to drop rounds
     // sitting right on top of it (see RoundRenderer.sync).
     const roundCam = this.renderer.camera.position
-    this.rounds.sync(s.bullets, roundCam.x, roundCam.y, roundCam.z)
+    this.rounds.sync(s.bullets, roundCam.x, roundCam.y, roundCam.z, nf, dt)
 
     // Gas.
     const blobCount = collectGasBlobs(this.ctx, this.gasBuf)

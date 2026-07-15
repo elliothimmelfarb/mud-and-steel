@@ -125,10 +125,30 @@ export interface WeaponProfile {
 
 const EM = 0.8 // emissive lift so the viewmodel reads even with the sun behind you
 
+// Every viewmodel material, tracked so night can dim their fake self-glow. The
+// constant emissive floor is exactly what made the gun ignore the time of day;
+// at night we drop it and hand the job to real light (fill lamp + muzzle fire).
+const VM_MATERIALS: THREE.MeshStandardMaterial[] = []
+
 function mkMat(color: number, rough: number, metal: number, emissive: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
+  const m = new THREE.MeshStandardMaterial({
     color, roughness: rough, metalness: metal, emissive, emissiveIntensity: EM,
   })
+  VM_MATERIALS.push(m)
+  return m
+}
+
+/**
+ * Scale the shared viewmodel materials' emissive floor by the time of day.
+ * nightFactor 0 (day) keeps the full EM=0.8 lift so the gun reads against a
+ * bright sky; nightFactor 1 (full dark) drops it to ~0.25 — low enough that the
+ * fill lamp, moonlight, muzzle flashes and passing tracers visibly rake the
+ * metal, high enough that no face falls to pure black before any fire lands.
+ * Called once per frame from Game.render (these materials are viewmodel-only).
+ */
+export function setViewmodelEmissive(nightFactor: number): void {
+  const em = EM - nightFactor * 0.55
+  for (let i = 0; i < VM_MATERIALS.length; i++) VM_MATERIALS[i].emissiveIntensity = em
 }
 
 // Viewmodel metals are deliberately LOW-metalness: with no environment map a
@@ -1440,10 +1460,10 @@ function fireGun(profile: WeaponProfile, f: FireCtx): void {
   soldier.facing = f.yaw
   game.audio.play('fieldgun', { x: from.x, y: from.y, z: from.z })
   // Barrel flash is welded to the viewmodel in FpsMode; keep only the world
-  // ejecta and the big burst light out here (core=false).
+  // ejecta out here (core=false). muzzleFlash now throws its own big night-scaled
+  // ground light in both views, so no separate flash() call is needed.
   const m = f.muzzleWorld ?? from
   game.effects.muzzleFlash(m.x, m.y, m.z, f.dir.x, f.dir.z, true, 0.5, false)
-  game.effects.flash(m.x, m.y, m.z, 0xffb060, 34, 0.14)
   void profile
 }
 

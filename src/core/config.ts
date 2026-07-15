@@ -442,6 +442,13 @@ export const WEATHER = {
   mudSlowMax: 0.55,                 // speed multiplier floor in deep mud
   bogChance: 0.3,                   // tank entering a deep flooded crater
   todPerWave: 0.11,                 // day advances between waves
+  // Day/night is governed in ELEVATION space, not clock-phase: d(elev)/d(tod)
+  // peaks at the horizon (the pretty part), so a plain exponential chase whips
+  // the sun through dawn/dusk. Instead the clock GLIDES at a capped rate that
+  // slows near the horizon, so twilight lingers where it's beautiful.
+  todGlide: 0.007,                  // max clock-units/sec during a forced transition (~40-60s night fall)
+  todHorizonLinger: 0.7,            // how much the sun slows at the horizon (→ 0.3× rate there)
+  todDrift: 0.0001,                 // ambient clock progression/sec (~166 real min per in-game day)
 } as const
 
 // ---------------------------------------------------------------------------

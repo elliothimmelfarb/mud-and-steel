@@ -206,7 +206,7 @@ export class FpsMode {
 
     // Viewmodel fill (see field comment). Sits just above and behind the eye so
     // it rakes across the gun from the shooter's side. Off until embodied.
-    this.fillLight = new THREE.PointLight(0xffe8cc, 0, 2.6, 2)
+    this.fillLight = new THREE.PointLight(0xffe8cc, 0, 3.0, 2)
     this.fillLight.position.set(0.1, 0.22, 0.4)
     game.renderer.camera.add(this.fillLight)
 
@@ -301,7 +301,7 @@ export class FpsMode {
     this.game.selectedUnitId = unit.id // keep the unit selected for re-entry
     this.game.input.releaseAll() // no stuck pan keys across the mode switch
     this.vm.group.visible = true
-    this.fillLight.intensity = 4.5
+    // fillLight intensity is now driven per-frame by nightFactor in update().
     this.hudRoot.style.display = 'block'
     document.body.classList.add('ms-fps') // clear the map table off the periscope
     this.hintEl.textContent = `${soldier.name.first} ${soldier.name.last} — M or Esc to return to command`
@@ -889,6 +889,11 @@ export class FpsMode {
     this.swayYaw -= this.swayYaw * Math.min(1, dt * 8)
     this.fovKick -= this.fovKick * Math.min(1, dt * 8)
     if (this.inspect && this.inspectSpin) this.inspectYaw += dt * 0.7
+    // Viewmodel fill: dim by day (so the bright self-lit meshes don't blow out
+    // against the sky), ramped up warm at night so the gun reads as a warm
+    // object floating in cold dark — then the per-shot flashLight punch and the
+    // world muzzle/tracer/flare light carve it out of the blackness on top.
+    this.fillLight.intensity = 2.2 + this.game.sky.nightFactor * 4.3
     this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 300)
     this.updateMuzzleFlash(dt)
     const canAds = !this.profile.emplaced || this.profile.control === 'directgun'

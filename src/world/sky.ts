@@ -21,8 +21,17 @@ const HORIZON_DAWN = new THREE.Color(0xb98a8a)   // dusky rose over the wire
 const SUN_WARM = new THREE.Color(0xffe8c4)
 const SUN_LOW = new THREE.Color(0xff9d5c)        // evening sun
 const SUN_DAWN = new THREE.Color(0xffb49a)       // morning sun
-const MOON = new THREE.Color(0x8a95b5)
+const MOON = new THREE.Color(0x8f9fc8)            // cooler, brighter moonlit blue
 const RAIN_GREY = new THREE.Color(0x555a5e)
+
+// Hemisphere fill shifts from warm daylight to cool moonlight across the night,
+// and the fog melts distant no-man's-land into moonlit blue rather than black —
+// all driven by `nightFactor` so night reads dark-but-legible, not flat-dark.
+const HEMI_SKY_DAY = new THREE.Color(0x9aa4b0)
+const HEMI_SKY_NIGHT = new THREE.Color(0x2b3653)
+const HEMI_GRD_DAY = new THREE.Color(0x4a4436)
+const HEMI_GRD_NIGHT = new THREE.Color(0x161821)
+const FOG_NIGHT = new THREE.Color(0x141b28)
 
 // Sun shadow frustum: a small box that follows a focus point rather than a
 // fixed frustum sized for the whole map. Keeps shadow texels small (sharp)
@@ -39,6 +48,17 @@ export class Sky {
   readonly moonLight: THREE.DirectionalLight
   readonly dome: THREE.Mesh
   readonly flarePool: THREE.PointLight[] = []
+  /**
+   * Master darkness dial, 0 = full day … 1 = full dark, recomputed every frame
+   * in `setConditions` from the sun's elevation. The whole frame moves on this
+   * one number: the viewmodel's fake self-glow drops and its fill lamp ramps
+   * (weapons.ts / fps.ts), muzzle flashes and tracer rounds cast real light
+   * scaled by it (effects.ts / roundRenderer.ts), and tone-map exposure lifts
+   * to keep the darker night legible (renderer.ts). Deliberately its OWN
+   * elevation curve, not `1 - day`: the night ramp wants a different shape than
+   * the (widened) daylight band below.
+   */
+  nightFactor = 0
   private stars: THREE.Points
   private domeUniforms: {
     uZenith: { value: THREE.Color }
@@ -220,8 +240,15 @@ export class Sky {
     this.domeUniforms.uSunDir.value.copy(dir)
     this.applySunTransform()
 
-    const day = smooth01((elev + 0.12) / 0.35)         // 0 night → 1 day
-    const dusk = Math.max(0, 1 - Math.abs(elev) / 0.28) // near horizon
+    // Master darkness dial (see the field doc). Full day a touch above the
+    // horizon, full dark once the sun is well down. Every night-aware consumer
+    // reads this same frame so nothing disagrees.
+    this.nightFactor = smooth01((0.04 - elev) / 0.30)
+
+    // Bands WIDENED so the constant-rate day/night glide (weather.ts) lingers
+    // in a longer golden/blue hour instead of ripping through the pretty part.
+    const day = smooth01((elev + 0.15) / 0.45)         // 0 night → 1 day
+    const dusk = Math.max(0, 1 - Math.abs(elev) / 0.34) // near horizon
     const isMorning = tod < 0.5
 
     // Lighting
@@ -230,8 +257,14 @@ export class Sky {
     this.sun.color.copy(SUN_WARM).lerp(isMorning ? SUN_DAWN : SUN_LOW, dusk)
     this.sun.visible = elev > -0.06
     this.moonLight.position.set(-east * 200, Math.max(0.2, -elev) * 260, -120)
-    this.moonLight.intensity = (1 - day) * 0.3
-    this.hemi.intensity = 0.16 + day * 0.95 * Math.max(0.4, overcast)
+    // A real directional rim on steel and helmets at night — roughly double the
+    // old cap, keyed off nightFactor so it fades with the last of the daylight.
+    this.moonLight.intensity = this.nightFactor * 0.6
+    // Low ambient floor kept for drama, but cooled toward moonlit blue at night
+    // so warm muzzle/tracer/flare light pops against it.
+    this.hemi.intensity = 0.20 + day * 0.9 * Math.max(0.4, overcast)
+    this.hemi.color.copy(HEMI_SKY_DAY).lerp(HEMI_SKY_NIGHT, this.nightFactor)
+    this.hemi.groundColor.copy(HEMI_GRD_DAY).lerp(HEMI_GRD_NIGHT, this.nightFactor)
     this.domeUniforms.uSunGlow.value = day * Math.max(0.15, 1 - rain * 0.8)
 
     // Sky colors
@@ -264,7 +297,7 @@ export class Sky {
     // darkened at night and naturally warm at dawn/dusk via `hor` above.
     const hazeVis = fogAmount * 0.9 + rain * 0.4 + (1 - day) * 0.22
     this.fog.density = 0.0016 + hazeVis * 0.0068
-    this.fog.color.copy(hor).multiplyScalar(0.55 + day * 0.45)
+    this.fog.color.copy(hor).multiplyScalar(0.55 + day * 0.45).lerp(FOG_NIGHT, this.nightFactor * 0.5)
   }
 
   /** Returns true while it's too dark to shoot at unlit men. */
