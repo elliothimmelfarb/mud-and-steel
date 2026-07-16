@@ -17,34 +17,31 @@
  */
 
 import * as THREE from 'three'
-import { PALETTE, bakeAndMerge, fm, localRand, mat, wrapVC, xf, type ColoredPart } from './shared'
+import {
+  PALETTE, bakeAndMerge, fm, localRand, mat, wrapVC, xf, part, clamp01,
+  rivetRow as sharedRivetRow, type ColoredPart,
+} from './shared'
 
 // ---------------------------------------------------------------------------
 // Local detailing helpers
 // ---------------------------------------------------------------------------
 
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v
-}
-
-/** Cheap deterministic hash of a position → [0,1). Feeds per-vertex weathering. */
+/**
+ * Cheap deterministic hash of a position → [0,1). Feeds per-vertex weathering.
+ *
+ * NOTE: this keeps its OWN constants (127.1 / 311.7 / 74.7), distinct from the
+ * shared `hash3` (12.9898 / 78.233 / 37.719). The weathering below — tonal
+ * breakup, mud speckle, rust flecks — was tuned against THIS specific noise
+ * field, so routing it through `hash3` would re-place every fleck and speckle
+ * (a real, if subtle, visual change). Deliberately not consolidated.
+ */
 function vhash(x: number, y: number, z: number): number {
   const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453
   return s - Math.floor(s)
 }
 
-/** Build one coloured part: fresh geometry with scale→rotate→translate applied. */
-function part(
-  geo: THREE.BufferGeometry,
-  hex: number,
-  x = 0, y = 0, z = 0,
-  rx = 0, ry = 0, rz = 0,
-  sx = 1, sy = 1, sz = 1,
-): ColoredPart {
-  return { geo: xf(geo, x, y, z, rx, ry, rz, sx, sy, sz), hex }
-}
-
-/** A row of tiny merged rivets from a→b (world coords). */
+/** A row of tiny merged rivets from a→b. Vehicles' hull rivets are flattened on
+ *  Y (0.55); the row logic itself lives in shared `rivetRow`. */
 function rivetRow(
   out: ColoredPart[],
   a: [number, number, number],
@@ -53,17 +50,7 @@ function rivetRow(
   r: number,
   hex: number,
 ): void {
-  for (let i = 0; i < n; i++) {
-    const t = n === 1 ? 0.5 : i / (n - 1)
-    out.push(part(
-      new THREE.SphereGeometry(r, 4, 3),
-      hex,
-      a[0] + (b[0] - a[0]) * t,
-      a[1] + (b[1] - a[1]) * t,
-      a[2] + (b[2] - a[2]) * t,
-      0, 0, 0, 1, 0.55, 1,
-    ))
-  }
+  sharedRivetRow(out, a, b, n, r, hex, 0.55)
 }
 
 /** A clump of caked-mud blobs around a point — reads clearly near tracks/hooves. */

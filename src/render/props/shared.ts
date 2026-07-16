@@ -53,8 +53,16 @@ export function localRand(seed: number): () => number {
 
 const _col = new THREE.Color()
 
-function clamp01(v: number): number {
+export function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v
+}
+
+/** Cheap deterministic per-position hash in [0,1) (sin-fract). Feeds the
+ *  per-vertex weathering / tonal breakup passes across the prop builders.
+ *  (vehicles.ts keeps its own variant on purpose — see the note there.) */
+export function hash3(x: number, y: number, z: number): number {
+  const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453
+  return s - Math.floor(s)
 }
 
 /** Bake a flat color onto every vertex of `geo`, darkened toward yMin (grounded look). */
@@ -118,6 +126,79 @@ export function bakeAndMerge(parts: ColoredPart[], darken = 0.28): THREE.BufferG
   const result = merged ?? new THREE.BufferGeometry()
   result.computeBoundingSphere()
   return result
+}
+
+// ---------------------------------------------------------------------------
+// ColoredPart primitive vocabulary
+//
+// `part` is the atom: wrap ANY geometry as a ColoredPart with a
+// scale→rotate→translate applied (used directly by vehicles.ts). The `p*`
+// family are the common primitives expressed through `part` and PUSHED onto a
+// parts array (the ergonomic style emplacements.ts builds guns with). One home
+// for both so the xf-and-wrap logic lives once.
+// ---------------------------------------------------------------------------
+
+/** Build one coloured part: fresh geometry with scale→rotate→translate applied. */
+export function part(
+  geo: THREE.BufferGeometry,
+  hex: number,
+  x = 0, y = 0, z = 0,
+  rx = 0, ry = 0, rz = 0,
+  sx = 1, sy = 1, sz = 1,
+): ColoredPart {
+  return { geo: xf(geo, x, y, z, rx, ry, rz, sx, sy, sz), hex }
+}
+
+export function pBox(P: ColoredPart[], hex: number, w: number, h: number, d: number,
+  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0): void {
+  P.push(part(new THREE.BoxGeometry(w, h, d), hex, x, y, z, rx, ry, rz))
+}
+
+export function pCyl(P: ColoredPart[], hex: number, rt: number, rb: number, h: number, seg: number,
+  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, open = false): void {
+  P.push(part(new THREE.CylinderGeometry(rt, rb, h, seg, 1, open), hex, x, y, z, rx, ry, rz))
+}
+
+export function pCone(P: ColoredPart[], hex: number, r: number, h: number, seg: number,
+  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0): void {
+  P.push(part(new THREE.ConeGeometry(r, h, seg), hex, x, y, z, rx, ry, rz))
+}
+
+export function pTorus(P: ColoredPart[], hex: number, r: number, t: number, radial: number, tub: number,
+  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, arc = Math.PI * 2): void {
+  P.push(part(new THREE.TorusGeometry(r, t, radial, tub, arc), hex, x, y, z, rx, ry, rz))
+}
+
+export function pSphere(P: ColoredPart[], hex: number, r: number, wseg: number, hseg: number,
+  x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0): void {
+  P.push(part(new THREE.SphereGeometry(r, wseg, hseg), hex, x, y, z, rx, ry, rz, sx, sy, sz))
+}
+
+/**
+ * A row of `n` small merged rivet/bolt spheres from a→b (world coords).
+ * `squishY` flattens each sphere on Y — vehicles' hull rivets use 0.55, the
+ * guns leave them round (1). A lone rivet (n===1) sits at the midpoint.
+ */
+export function rivetRow(
+  out: ColoredPart[],
+  a: [number, number, number],
+  b: [number, number, number],
+  n: number,
+  r: number,
+  hex: number,
+  squishY = 1,
+): void {
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0.5 : i / (n - 1)
+    out.push(part(
+      new THREE.SphereGeometry(r, 4, 3),
+      hex,
+      a[0] + (b[0] - a[0]) * t,
+      a[1] + (b[1] - a[1]) * t,
+      a[2] + (b[2] - a[2]) * t,
+      0, 0, 0, 1, squishY, 1,
+    ))
+  }
 }
 
 // ---------------------------------------------------------------------------
