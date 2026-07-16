@@ -11,7 +11,7 @@
 
 import * as THREE from 'three'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
-import { PALETTE, localRand, xf, bakeAndMerge, type ColoredPart } from './shared'
+import { PALETTE, localRand, xf, bakeAndMerge, clamp01, hash3, type ColoredPart } from './shared'
 
 // ---------------------------------------------------------------------------
 // Local helpers (pure — no module-level geometry is cached)
@@ -23,16 +23,10 @@ function rgbOf(hex: number): [number, number, number] {
   _c.setHex(hex)
   return [_c.r, _c.g, _c.b]
 }
-function clamp01(v: number): number { return v < 0 ? 0 : v > 1 ? 1 : v }
 function lerp(a: number, b: number, t: number): number { return a + (b - a) * t }
 function smoothstep(a: number, b: number, x: number): number {
   const t = clamp01((x - a) / (b - a))
   return t * t * (3 - 2 * t)
-}
-/** Cheap deterministic position hash in [0,1). */
-function hashNoise(x: number, y: number, z: number): number {
-  const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453
-  return s - Math.floor(s)
 }
 
 /** Remap each vertex's already-baked color in place (spatial grime/scorch/rust passes). */
@@ -151,7 +145,7 @@ export function deadTreeGeometry(rand: () => number): THREE.BufferGeometry {
   const [cr, cg, cb] = rgbOf(0x1c140e)
   recolor(merged, (x, y, z, r, g, b) => {
     const scorch = smoothstep(totalH * 0.5, totalH * 1.02, y) * 0.8
-    const m = 0.82 + 0.32 * hashNoise(x * 6, y * 3, z * 6)
+    const m = 0.82 + 0.32 * hash3(x * 6, y * 3, z * 6)
     return [lerp(r, cr, scorch) * m, lerp(g, cg, scorch) * m, lerp(b, cb, scorch) * m]
   })
   return merged
@@ -212,7 +206,7 @@ export function wirePostGeometry(): THREE.BufferGeometry {
         strength = Math.max(strength, (1 - (e.y - y) / 0.32) * 0.7)
       }
     }
-    const m = 0.9 + 0.2 * hashNoise(x * 20, y * 8, z * 20)
+    const m = 0.9 + 0.2 * hash3(x * 20, y * 8, z * 20)
     return [lerp(r, sr, strength) * m, lerp(g, sg, strength) * m, lerp(b, sb, strength) * m]
   })
   return merged
@@ -313,7 +307,7 @@ export function sandbagGeometry(): THREE.BufferGeometry {
   // Per-vertex dirt mottle + mud toward the underside, so a wall never reads cloned.
   const [mr, mg, mb] = rgbOf(PALETTE.mud)
   recolor(merged, (x, y, z, r, g, b) => {
-    const mott = 0.82 + 0.3 * hashNoise(x * 7, y * 7, z * 7)
+    const mott = 0.82 + 0.3 * hash3(x * 7, y * 7, z * 7)
     const mud = smoothstep(0.16, 0.02, y) * 0.5
     return [lerp(r * mott, mr, mud), lerp(g * mott, mg, mud), lerp(b * mott, mb, mud)]
   })
@@ -461,7 +455,7 @@ export function duckboardGeometry(): THREE.BufferGeometry {
   const [mr, mg, mb] = rgbOf(PALETTE.mud)
   recolor(merged, (x, y, z, r, g, b) => {
     const mud = smoothstep(0.55, 1.0, Math.abs(x) / (length / 2)) * 0.55
-    const n = 0.86 + 0.24 * hashNoise(x * 9, y * 5, z * 9)
+    const n = 0.86 + 0.24 * hash3(x * 9, y * 5, z * 9)
     return [lerp(r, mr, mud) * n, lerp(g, mg, mud) * n, lerp(b, mb, mud) * n]
   })
   return merged
@@ -513,7 +507,7 @@ export function crossGraveGeometry(): THREE.BufferGeometry {
   for (let i = 0; i < mp.count; i++) {
     const x = mp.getX(i), y = mp.getY(i), z = mp.getZ(i)
     if (y < 1e-4) continue
-    mp.setY(i, y * (0.7 + 0.6 * hashNoise(x * 8, 0, z * 8)))
+    mp.setY(i, y * (0.7 + 0.6 * hash3(x * 8, 0, z * 8)))
   }
   mp.needsUpdate = true
   mound.computeVertexNormals()
@@ -522,7 +516,7 @@ export function crossGraveGeometry(): THREE.BufferGeometry {
   const merged = bakeAndMerge(parts, 0.26)
   // Weathered tonal breakup on the timber.
   recolor(merged, (x, y, z, r, g, b) => {
-    const n = 0.8 + 0.34 * hashNoise(x * 10, y * 6, z * 10)
+    const n = 0.8 + 0.34 * hash3(x * 10, y * 6, z * 10)
     return [r * n, g * n, b * n]
   })
   return merged
@@ -549,7 +543,7 @@ export function rubbleGeometry(rand: () => number): THREE.BufferGeometry {
   for (let i = 0; i < mp.count; i++) {
     const x = mp.getX(i), y = mp.getY(i), z = mp.getZ(i)
     if (y < 1e-4) continue
-    mp.setY(i, y * (0.7 + 0.6 * hashNoise(x * 7, 0, z * 7)))
+    mp.setY(i, y * (0.7 + 0.6 * hash3(x * 7, 0, z * 7)))
   }
   mp.needsUpdate = true
   mound.computeVertexNormals()
@@ -605,7 +599,7 @@ export function rubbleGeometry(rand: () => number): THREE.BufferGeometry {
   recolor(merged, (x, y, z, r, g, b) => {
     // Char the +x end of the pile (upper pieces near that end blacken).
     const char = smoothstep(charEnd - 0.35, charEnd, x) * smoothstep(moundH, moundH + 0.03, y) * 0.85
-    const n = 0.84 + 0.28 * hashNoise(x * 8, y * 8, z * 8)
+    const n = 0.84 + 0.28 * hash3(x * 8, y * 8, z * 8)
     return [lerp(r, kr, char) * n, lerp(g, kg, char) * n, lerp(b, kb, char) * n]
   })
   return merged
@@ -647,7 +641,7 @@ export function stakeGeometry(): THREE.BufferGeometry {
     const x = hp.getX(i), z = hp.getZ(i)
     const rr = Math.hypot(x, z)
     if (rr < 1e-4) continue
-    const f = 1 + 0.18 * hashNoise(x * 20, 0, z * 20)
+    const f = 1 + 0.18 * hash3(x * 20, 0, z * 20)
     hp.setX(i, x * f); hp.setZ(i, z * f)
   }
   hp.needsUpdate = true
@@ -664,7 +658,7 @@ export function stakeGeometry(): THREE.BufferGeometry {
 
   const merged = bakeAndMerge(parts, 0.25)
   recolor(merged, (x, y, z, r, g, b) => {
-    const n = 0.82 + 0.32 * hashNoise(x * 14, y * 8, z * 14)
+    const n = 0.82 + 0.32 * hash3(x * 14, y * 8, z * 14)
     const bruise = smoothstep(h - 0.06, h, y) * 0.3 // darkened bruised head
     return [lerp(r, r * 0.5, bruise) * n, lerp(g, g * 0.5, bruise) * n, lerp(b, b * 0.5, bruise) * n]
   })

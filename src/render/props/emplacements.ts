@@ -15,7 +15,10 @@
  */
 
 import * as THREE from 'three'
-import { PALETTE, bakeAndMerge, wrapVC, xf, type ColoredPart } from './shared'
+import {
+  PALETTE, bakeAndMerge, wrapVC, pBox, pCyl, pCone, pTorus, pSphere, rivetRow,
+  type ColoredPart,
+} from './shared'
 import { sandbagGeometry } from './groundcover'
 
 // ---------------------------------------------------------------------------
@@ -38,46 +41,13 @@ const GLASS = 0x93a8a6 // pale reflector tint
 const SANDBAG = PALETTE.sandbag
 
 // ---------------------------------------------------------------------------
-// Primitive-push helpers — each appends one baked-color part. All primitives
-// are indexed and carry position/normal/uv, so they merge cleanly.
+// Primitive-push helpers — each appends one baked-color part. The primitive
+// vocabulary (pBox/pCyl/pCone/pTorus/pSphere) + rivetRow live in shared.ts;
+// the composite helpers below (struts, screws, wheels, tube) are built on them.
+// All primitives are indexed and carry position/normal/uv, so they merge cleanly.
 // ---------------------------------------------------------------------------
 type Parts = ColoredPart[]
 const _up = /*@__PURE__*/ new THREE.Vector3(0, 1, 0)
-
-function pBox(P: Parts, hex: number, w: number, h: number, d: number,
-  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0): void {
-  const g = new THREE.BoxGeometry(w, h, d)
-  xf(g, x, y, z, rx, ry, rz)
-  P.push({ geo: g, hex })
-}
-
-function pCyl(P: Parts, hex: number, rt: number, rb: number, h: number, seg: number,
-  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, open = false): void {
-  const g = new THREE.CylinderGeometry(rt, rb, h, seg, 1, open)
-  xf(g, x, y, z, rx, ry, rz)
-  P.push({ geo: g, hex })
-}
-
-function pCone(P: Parts, hex: number, r: number, h: number, seg: number,
-  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0): void {
-  const g = new THREE.ConeGeometry(r, h, seg)
-  xf(g, x, y, z, rx, ry, rz)
-  P.push({ geo: g, hex })
-}
-
-function pTorus(P: Parts, hex: number, r: number, t: number, radial: number, tub: number,
-  x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, arc = Math.PI * 2): void {
-  const g = new THREE.TorusGeometry(r, t, radial, tub, arc)
-  xf(g, x, y, z, rx, ry, rz)
-  P.push({ geo: g, hex })
-}
-
-function pSphere(P: Parts, hex: number, r: number, wseg: number, hseg: number,
-  x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0): void {
-  const g = new THREE.SphereGeometry(r, wseg, hseg)
-  xf(g, x, y, z, rx, ry, rz, sx, sy, sz)
-  P.push({ geo: g, hex })
-}
 
 /** Round strut between two points (legs, poles, trails). */
 function pStrut(P: Parts, hex: number, ax: number, ay: number, az: number,
@@ -105,13 +75,11 @@ function pBoxStrut(P: Parts, hex: number, ax: number, ay: number, az: number,
   P.push({ geo: g, hex })
 }
 
-/** A row of small rivet/bolt heads between two points. */
+/** A row of small round rivet/bolt heads between two points. Flat-arg adapter
+ *  over shared `rivetRow` (round spheres — squishY defaults to 1). */
 function pRivets(P: Parts, hex: number, ax: number, ay: number, az: number,
   bx: number, by: number, bz: number, n: number, r = 0.011): void {
-  for (let i = 0; i < n; i++) {
-    const t = n === 1 ? 0 : i / (n - 1)
-    pSphere(P, hex, r, 4, 3, ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t)
-  }
+  rivetRow(P, [ax, ay, az], [bx, by, bz], n, r, hex)
 }
 
 /** Small spoked handwheel/traverse wheel whose disc-normal points along `axis`. */

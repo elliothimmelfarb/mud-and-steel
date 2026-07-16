@@ -19,6 +19,44 @@ export interface DirtyRegion { minCol: number; minRow: number; maxCol: number; m
 /** Radius (in cells) of the concavity/AO neighbourhood — dirty regions grow by this. */
 const AO_REACH = 5
 
+/**
+ * One raised earth bank thrown up beside a trench — the enemy-side parapet lip
+ * or the lower parados behind. The two were copy-paste bar these constants; see
+ * `carveTrench`'s `addBank` closure, which reproduces both branches exactly.
+ */
+interface BankSpec {
+  setbackBase: number; setbackOx: number; setbackOz: number; setbackAmp: number
+  kDiv: number
+  l1Freq: number; l1Ox: number; l1Oz: number; l1Amp: number
+  l2Freq: number; l2Ox: number; l2Oz: number; l2Amp: number
+  lumpBase: number
+  gapOx: number; gapOz: number; gapThresh: number; gapFloorBase: number; gapFloorSpan: number
+  heightScale: number
+  /** Floor on lump*gap so parapet dips never drop below the old uniform lip
+   *  height (they'd become firing holes onto crouching men); null = parados. */
+  floor: number | null
+}
+
+const PARAPET_BANK: BankSpec = {
+  setbackBase: 0.65, setbackOx: 5.0, setbackOz: 90.0, setbackAmp: 0.9,
+  kDiv: 1.6,
+  l1Freq: 0.9, l1Ox: 13.7, l1Oz: 29.3, l1Amp: 0.34,
+  l2Freq: 2.4, l2Ox: 2.1, l2Oz: 58.4, l2Amp: 0.2,
+  lumpBase: 0.68,
+  gapOx: 120.0, gapOz: 7.0, gapThresh: 0.3, gapFloorBase: 0.35, gapFloorSpan: 0.65,
+  heightScale: 1, floor: 0.8,
+}
+
+const PARADOS_BANK: BankSpec = {
+  setbackBase: 0.5, setbackOx: 51.1, setbackOz: 67.9, setbackAmp: 0.7,
+  kDiv: 1.05,
+  l1Freq: 0.95, l1Ox: 51.1, l1Oz: 67.9, l1Amp: 0.3,
+  l2Freq: 2.3, l2Ox: 9.4, l2Oz: 21.2, l2Amp: 0.18,
+  lumpBase: 0.72,
+  gapOx: 61.0, gapOz: 88.0, gapThresh: 0.28, gapFloorBase: 0.4, gapFloorSpan: 0.6,
+  heightScale: 0.5, floor: null,
+}
+
 export class Terrain implements TerrainLike {
   readonly width = WORLD.width
   readonly depth = WORLD.depth
@@ -548,6 +586,26 @@ export class Terrain implements TerrainLike {
     // sim (standSurface, slots, duckboards) assumes a uniform TRENCH.depth
     // floor. With the snapshot, overlapping segments agree instead of adding.
     const pre = this.heights.slice()
+
+    // Raise one earth bank (parapet lip / parados) at cell `i`. The parapet and
+    // parados branches were copy-paste bar a dozen constants; drive both from a
+    // BankSpec. The final += keeps each branch's exact multiply chain so the
+    // result is bit-identical to the pre-refactor code (parapet floors lump*gap
+    // and has heightScale 1; parados has no floor and heightScale 0.5).
+    const addBank = (wx: number, wz: number, d: number, i: number, s: BankSpec): void => {
+      const setback = s.setbackBase + (dn.at(wx * 0.20 + s.setbackOx, wz * 0.20 + s.setbackOz) - 0.5) * s.setbackAmp
+      const k = 1 - (d - (halfW + setback)) / s.kDiv
+      const kc = Math.max(0, Math.min(1.1, k))
+      const l1 = dn.at(wx * s.l1Freq + s.l1Ox, wz * s.l1Freq + s.l1Oz)
+      const l2 = dn.at(wx * s.l2Freq + s.l2Ox, wz * s.l2Freq + s.l2Oz)
+      const lump = s.lumpBase + s.l1Amp * l1 + s.l2Amp * l2
+      const gapN = dn.at(wx * 0.14 + s.gapOx, wz * 0.14 + s.gapOz)
+      const gap = gapN < s.gapThresh ? s.gapFloorBase + (gapN / s.gapThresh) * s.gapFloorSpan : 1
+      this.heights[i] += s.floor !== null
+        ? TRENCH.parapetH * s.heightScale * kc * Math.max(s.floor, lump * gap)
+        : TRENCH.parapetH * s.heightScale * kc * lump * gap
+    }
+
     for (let s = 0; s < line.length - 1; s++) {
       const a = line[s], b = line[s + 1]
       const minCol = Math.max(0, Math.floor(this.colAt(Math.min(a.x, b.x) - 5)))
@@ -584,35 +642,39 @@ export class Terrain implements TerrainLike {
             if (target < this.heights[i]) this.heights[i] = target
             this.trench[i] = Math.max(this.trench[i], kk)
           } else if (parapet && wz < pz && d < halfW + 2.4) {
-            // Sandbag parapet lip on the enemy side. Two octaves of bag
-            // lumpiness, an irregular setback so the bag line wanders, and the
-            // odd noise-thresholded gap reading as blast damage.
-            const setback = 0.65 + (dn.at(wx * 0.20 + 5.0, wz * 0.20 + 90.0) - 0.5) * 0.9
-            const k = 1 - (d - (halfW + setback)) / 1.6
-            const kc = Math.max(0, Math.min(1.1, k))
-            const l1 = dn.at(wx * 0.9 + 13.7, wz * 0.9 + 29.3)
-            const l2 = dn.at(wx * 2.4 + 2.1, wz * 2.4 + 58.4)
-            const lump = 0.68 + 0.34 * l1 + 0.2 * l2
-            const gapN = dn.at(wx * 0.14 + 120.0, wz * 0.14 + 7.0)
-            const gap = gapN < 0.3 ? 0.35 + (gapN / 0.3) * 0.65 : 1
-            // The lip is the ACTUAL small-arms cover (bullets are physical);
-            // the 0.8 floor keeps every crest at least as tall as the old
-            // uniform parapet so the visible dips never become firing holes
-            // onto crouching defenders.
-            this.heights[i] += TRENCH.parapetH * kc * Math.max(0.8, lump * gap)
+            // Sandbag parapet lip on the enemy side (the ACTUAL small-arms
+            // cover): two octaves of bag lumpiness, a wandering setback, and
+            // the odd noise-thresholded gap reading as blast damage.
+            addBank(wx, wz, d, i, PARAPET_BANK)
           } else if (parapet && wz > pz && d < halfW + 1.9) {
             // Lower parados behind, same treatment at half height.
-            const setback = 0.5 + (dn.at(wx * 0.20 + 51.1, wz * 0.20 + 67.9) - 0.5) * 0.7
-            const k = 1 - (d - (halfW + setback)) / 1.05
-            const kc = Math.max(0, Math.min(1.1, k))
-            const l1 = dn.at(wx * 0.95 + 51.1, wz * 0.95 + 67.9)
-            const l2 = dn.at(wx * 2.3 + 9.4, wz * 2.3 + 21.2)
-            const lump = 0.72 + 0.3 * l1 + 0.18 * l2
-            const gapN = dn.at(wx * 0.14 + 61.0, wz * 0.14 + 88.0)
-            const gap = gapN < 0.28 ? 0.4 + (gapN / 0.28) * 0.6 : 1
-            this.heights[i] += TRENCH.parapetH * 0.5 * kc * lump * gap
+            addBank(wx, wz, d, i, PARADOS_BANK)
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Iterate every grid cell in the bounding box of the disc of `reach` metres
+   * around (cx,cz), calling cb(col,row,worldX,worldZ,vertexIndex). The precise
+   * in-disc test stays in the callback so each caller reproduces its original
+   * radial math byte-for-byte. (crater/carveTrench keep their own scans: crater
+   * needs the box bounds for its return value + AO ring + dirty union, and
+   * carveTrench measures distance to a segment, not a point.)
+   */
+  private forEachCellInDisc(
+    cx: number, cz: number, reach: number,
+    cb: (c: number, r: number, wx: number, wz: number, i: number) => void,
+  ): void {
+    const minCol = Math.max(0, Math.floor(this.colAt(cx - reach)))
+    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(cx + reach)))
+    const minRow = Math.max(0, Math.floor(this.rowAt(cz - reach)))
+    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(cz + reach)))
+    for (let r = minRow; r <= maxRow; r++) {
+      const wz = this.worldZ(r)
+      for (let c = minCol; c <= maxCol; c++) {
+        cb(c, r, this.worldX(c), wz, this.vi(c, r))
       }
     }
   }
@@ -620,46 +682,29 @@ export class Terrain implements TerrainLike {
   /** A small dug-out spoil mound + local churn (deterministic surface lumps). */
   private spoilHeap(x: number, z: number, height: number, radius: number): void {
     const dn = this.detailNoise
-    const reach = radius * 1.5
-    const minCol = Math.max(0, Math.floor(this.colAt(x - reach)))
-    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + reach)))
-    const minRow = Math.max(0, Math.floor(this.rowAt(z - reach)))
-    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + reach)))
-    for (let r = minRow; r <= maxRow; r++) {
-      const wz = this.worldZ(r)
-      for (let c = minCol; c <= maxCol; c++) {
-        const wx = this.worldX(c)
-        const dn2 = ((wx - x) * (wx - x) + (wz - z) * (wz - z)) / (radius * radius)
-        if (dn2 > 2.25) continue
-        const i = this.vi(c, r)
-        // Never spill into a carved corridor: comm-trench doglegs wander up to
-        // ~10 m off their nominal axis, and a heap stamped on the floor walls
-        // the corridor and floats the duckboards.
-        if (this.trench[i] > 0.02) continue
-        const g = Math.exp(-dn2 * 1.8)
-        const lump = 0.8 + 0.3 * dn.at(wx * 0.8 + 17.0, wz * 0.8 + 44.0)
-        this.heights[i] += height * g * lump
-        const ch = g * 0.35
-        if (ch > this.churn[i]) this.churn[i] = ch
-        if (ch > this.churnVis[i]) this.churnVis[i] = ch
-      }
-    }
+    this.forEachCellInDisc(x, z, radius * 1.5, (_c, _r, wx, wz, i) => {
+      const dn2 = ((wx - x) * (wx - x) + (wz - z) * (wz - z)) / (radius * radius)
+      if (dn2 > 2.25) return
+      // Never spill into a carved corridor: comm-trench doglegs wander up to
+      // ~10 m off their nominal axis, and a heap stamped on the floor walls
+      // the corridor and floats the duckboards.
+      if (this.trench[i] > 0.02) return
+      const g = Math.exp(-dn2 * 1.8)
+      const lump = 0.8 + 0.3 * dn.at(wx * 0.8 + 17.0, wz * 0.8 + 44.0)
+      this.heights[i] += height * g * lump
+      const ch = g * 0.35
+      if (ch > this.churn[i]) this.churn[i] = ch
+      if (ch > this.churnVis[i]) this.churnVis[i] = ch
+    })
   }
 
   private flattenPad(x: number, z: number, radius: number): void {
     const h0 = this.heightAt(x, z)
-    const minCol = Math.max(0, Math.floor(this.colAt(x - radius - 1)))
-    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + radius + 1)))
-    const minRow = Math.max(0, Math.floor(this.rowAt(z - radius - 1)))
-    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + radius + 1)))
-    for (let r = minRow; r <= maxRow; r++) {
-      for (let c = minCol; c <= maxCol; c++) {
-        const d = Math.hypot(this.worldX(c) - x, this.worldZ(r) - z)
-        if (d > radius + 1) continue
-        const i = this.vi(c, r)
-        const k = d < radius ? 1 : 1 - (d - radius)
-        this.heights[i] = this.heights[i] * (1 - k) + h0 * k
-      }
-    }
+    this.forEachCellInDisc(x, z, radius + 1, (_c, _r, wx, wz, i) => {
+      const d = Math.hypot(wx - x, wz - z)
+      if (d > radius + 1) return
+      const k = d < radius ? 1 : 1 - (d - radius)
+      this.heights[i] = this.heights[i] * (1 - k) + h0 * k
+    })
   }
 }

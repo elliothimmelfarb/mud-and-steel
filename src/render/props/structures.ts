@@ -10,7 +10,7 @@
 
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { PALETTE, fm, mat, pm, wrapVC, bakeAndMerge, localRand, type ColoredPart } from './shared'
+import { PALETTE, fm, mat, pm, wrapVC, bakeAndMerge, localRand, clamp01, hash3, type ColoredPart } from './shared'
 import { rubbleGeometry, sandbagGeometry, crossGraveGeometry } from './groundcover'
 
 // ---------------------------------------------------------------------------
@@ -18,16 +18,6 @@ import { rubbleGeometry, sandbagGeometry, crossGraveGeometry } from './groundcov
 // ---------------------------------------------------------------------------
 
 const _sc = new THREE.Color()
-
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v
-}
-
-/** Cheap deterministic per-position hash noise in [0,1). */
-function vnoise(x: number, y: number, z: number): number {
-  const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453
-  return s - Math.floor(s)
-}
 
 interface StoneOpts {
   /** Vertical spacing of the baked mortar-course lines (m). */
@@ -81,7 +71,7 @@ function paintStone(geo: THREE.BufferGeometry, hex: number, o: StoneOpts = {}): 
       if (frac < 0.16) shade *= 1 - band * (1 - frac / 0.16)
     }
     // tonal breakup
-    const n = vnoise(x * 1.7, y * 1.7, z * 1.7)
+    const n = hash3(x * 1.7, y * 1.7, z * 1.7)
     shade *= 1 + noiseAmt * (n - 0.5)
     // soot around openings
     if (char) {
@@ -549,7 +539,7 @@ export function buildDugout(): THREE.Group {
     const pos = mound.getAttribute('position')
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i)
-      const n = vnoise(x * 2.1, y * 2.1, z * 2.1) - 0.5
+      const n = hash3(x * 2.1, y * 2.1, z * 2.1) - 0.5
       pos.setXYZ(i, x * (1 + 0.09 * n), y * (1 + 0.05 * n), z * (1 + 0.09 * n))
     }
     pos.needsUpdate = true
