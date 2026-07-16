@@ -353,10 +353,12 @@ export function buildTankMkIV(): THREE.Group {
       const nl = Math.hypot(nz, ny) || 1
       return [pt[0] - (nz / nl) * 0.2, pt[1] - (ny / nl) * 0.2]
     }
+    // ...and on the OUTER face of the frame (sx is that face): centred at
+    // x = sx - side*0.18 the whole row sat buried inside the 0.5 m slab.
     for (let e = 0; e < loz.length; e++) {
       const ai = inset(loz[e]), bi = inset(loz[(e + 1) % loz.length])
-      rivetRow(p, [sx - side * 0.18, ai[1], ai[0]],
-        [sx - side * 0.18, bi[1], bi[0]], 4, 0.05, rivet)
+      rivetRow(p, [sx + side * 0.01, ai[1], ai[0]],
+        [sx + side * 0.01, bi[1], bi[0]], 4, 0.05, rivet)
     }
   }
 

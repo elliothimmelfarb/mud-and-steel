@@ -190,8 +190,10 @@ export function startModelGallery(app: HTMLElement): void {
   sun.position.set(60, 90, 40)
   sun.castShadow = true
   sun.shadow.mapSize.set(4096, 4096)
-  sun.shadow.camera.left = -130; sun.shadow.camera.right = 130
-  sun.shadow.camera.top = 130; sun.shadow.camera.bottom = -130
+  // Wide enough to cover the full 300×440 m terrain diorama — a tighter box
+  // drew a hard shadow cut-off line across the overview camera.
+  sun.shadow.camera.left = -240; sun.shadow.camera.right = 240
+  sun.shadow.camera.top = 240; sun.shadow.camera.bottom = -240
   sun.shadow.camera.far = 400
   sun.shadow.bias = -0.0004
   sun.shadow.normalBias = 0.02
@@ -356,6 +358,9 @@ export function startModelGallery(app: HTMLElement): void {
       if (terrainDressing) terrainDressing.visible = true
       floor.visible = false
       terrainWet = tv.wet
+      // Real standing water lives in the aWater vertex attribute, refreshed by
+      // setWetness — the uWet uniform alone only wets the shading.
+      terrain?.setWetness(tv.wet)
       camera.position.set(...tv.pos)
       orbit.target.set(...tv.target)
       orbit.dist = camera.position.distanceTo(orbit.target)
@@ -566,7 +571,10 @@ export function startModelGallery(app: HTMLElement): void {
       const ex = items.find((e) => e.id === currentId)
       if (ex) fitObject(getBuilt(ex))
     },
-    wet: (v) => { terrainWet = Math.max(0, Math.min(1, v)) },
+    wet: (v) => {
+      terrainWet = Math.max(0, Math.min(1, v))
+      terrain?.setWetness(terrainWet)
+    },
     current: () => currentId,
     stats: () => ({ triangles: renderer.info.render.triangles, calls: renderer.info.render.calls }),
   }

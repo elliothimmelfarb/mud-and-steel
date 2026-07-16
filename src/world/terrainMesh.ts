@@ -16,9 +16,18 @@ function v3(c: THREE.Color): string {
   return `vec3(${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)})`
 }
 
+/** Grass hexes shared with the instanced clutter tufts (clutter.ts) so ground
+ *  shader and tuft tints can never drift apart. */
+export const GRASS_HEX = { dry: 0x8a7f52, green: 0x596b3c }
+
+/** Revetment board pitch (1/0.28 m) — interpolated into BOTH the color pass
+ *  (plank bands) and the normal pass (board ripple); they must stay in
+ *  lockstep or the lighting ripple beats against the painted grooves. */
+const PLANK_FREQ = '3.5714286'
+
 const PALETTE = {
-  grassDry: v3(new THREE.Color(0x8a7f52)),   // dry khaki summer grass
-  grassGreen: v3(new THREE.Color(0x596b3c)), // greener hollows / fresh patches
+  grassDry: v3(new THREE.Color(GRASS_HEX.dry)),   // dry khaki summer grass
+  grassGreen: v3(new THREE.Color(GRASS_HEX.green)), // greener hollows / fresh patches
   mudWet: v3(new THREE.Color(0x413226)),     // saturated wet brown
   mudDry: v3(new THREE.Color(0x6f5e45)),     // dried pale mud
   earthPale: v3(new THREE.Color(0x80715a)),  // thrown-up subsoil (rims, parapets)
@@ -150,15 +159,21 @@ export class TerrainMesh {
               clamp(macro * 1.2 - 0.08 + (meso - 0.5) * 0.4, 0.0, 1.0));
             grass *= 0.86 + fine * 0.2 + (micro - 0.5) * 0.14;
             // Very-low-frequency patch drift so whole fields are not uniform.
-            float patchDrift = msFbm(wp * 0.031 + 61.2);
+            // One octave is plenty for a ±5% swing (fine/micro dominate above).
+            float patchDrift = msNoise(wp * 0.031 + 61.2);
             grass *= 0.95 + patchDrift * 0.1;
             // Sparse tuft speckle: high-frequency flecks brighten/saturate grass
             // toward yellow-green, only on clean ground, fading out by ~45 m.
+            // Gated: the two noise taps are the priciest in the pass and the
+            // gate is zero for most fragments at RTS range.
             float tuftFade = 1.0 - smoothstep(30.0, 45.0, dist);
             float tuftClean = (1.0 - clamp(vChurn * 2.0, 0.0, 1.0)) * (1.0 - clamp(vWater * 4.0, 0.0, 1.0));
-            float tuftN = msNoise(wp * 8.9 + 51.4) * (0.55 + 0.45 * msNoise(wp * 1.7 + 12.9));
-            float tuftAmt = smoothstep(0.58, 0.82, tuftN) * tuftFade * tuftClean;
-            grass = mix(grass, ${PALETTE.tuft}, tuftAmt * 0.3);
+            float tuftGate = tuftFade * tuftClean;
+            if (tuftGate > 0.001) {
+              float tuftN = msNoise(wp * 8.9 + 51.4) * (0.55 + 0.45 * msNoise(wp * 1.7 + 12.9));
+              float tuftAmt = smoothstep(0.58, 0.82, tuftN) * tuftGate;
+              grass = mix(grass, ${PALETTE.tuft}, tuftAmt * 0.3);
+            }
 
             // Mud: wetness drags it dark and saturated; dry mud bleaches pale.
             float dry = clamp(0.28 + meso * 0.8 + (fine - 0.5) * 0.42 - uWet * 0.62, 0.0, 1.0);
@@ -194,7 +209,7 @@ export class TerrainMesh {
             float revet = clamp(vTrench * 2.0 - 0.9, 0.0, 1.0) * steep;
             gRevet = revet;
             if (revet > 0.001) {
-              float plankPhase = vWpos.y * 3.5714286;   // ~0.28 m board pitch
+              float plankPhase = vWpos.y * ${PLANK_FREQ};   // ~0.28 m board pitch
               float plankId = floor(plankPhase);
               float plankFrac = fract(plankPhase);
               float woodSel = mod(plankId, 2.0);
@@ -243,16 +258,20 @@ export class TerrainMesh {
             // downhill direction (from the world normal xz) so wet churn glints
             // in streaks running downslope, not as a uniform wash.
             float wetAmt = clamp(uWet * (0.25 + vChurn * 0.75 + gPit * 0.35), 0.0, 1.0);
-            vec2 downh = vWorldNormal.xz;
-            float dhl = length(downh);
-            if (dhl > 0.0015) {
-              vec2 dh = downh / dhl;
-              vec2 perp = vec2(-dh.y, dh.x);
-              vec2 ap = vec2(dot(vWpos.xz, perp) * 2.7, dot(vWpos.xz, dh) * 0.5) + 13.0;
-              float streak = msNoise(ap);
-              wetAmt *= 0.5 + 0.85 * smoothstep(0.34, 0.74, streak);
+            // Dry weather is the common case — skip the whole streak
+            // computation (noise tap + vector math) when there is no wetness.
+            if (wetAmt > 0.001) {
+              vec2 downh = vWorldNormal.xz;
+              float dhl = length(downh);
+              if (dhl > 0.0015) {
+                vec2 dh = downh / dhl;
+                vec2 perp = vec2(-dh.y, dh.x);
+                vec2 ap = vec2(dot(vWpos.xz, perp) * 2.7, dot(vWpos.xz, dh) * 0.5) + 13.0;
+                float streak = msNoise(ap);
+                wetAmt *= 0.5 + 0.85 * smoothstep(0.34, 0.74, streak);
+              }
+              roughnessFactor = mix(roughnessFactor, 0.32, wetAmt);
             }
-            roughnessFactor = mix(roughnessFactor, 0.32, clamp(wetAmt, 0.0, 1.0));
           }
           roughnessFactor = mix(roughnessFactor, 0.09, gWaterMix);
           roughnessFactor = clamp(roughnessFactor, 0.05, 1.0);`)
@@ -284,7 +303,7 @@ export class TerrainMesh {
             // Revetment plank ripple: rounded boards tilt up/down across each
             // ~0.28 m band so horizontal planking catches the light.
             if (gRevet > 0.01) {
-              float pf = vWpos.y * 3.5714286;
+              float pf = vWpos.y * ${PLANK_FREQ};
               float boardRip = sin(pf * 6.2831853);
               vec3 tilt = (viewMatrix * vec4(0.0, boardRip * gRevet * 0.25, 0.0, 0.0)).xyz;
               normal = normalize(normal + tilt);
@@ -338,7 +357,7 @@ export class TerrainMesh {
       for (let c = minC; c <= maxC; c++) {
         const i = t.vi(c, r)
         posArr[i * 3 + 1] = t.heights[i]
-        churnArr[i] = t.churn[i]
+        churnArr[i] = t.churnVis[i]
         trenchArr[i] = t.trench[i]
         waterArr[i] = t.water[i]
         aoArr[i] = t.ao[i]

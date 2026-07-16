@@ -164,27 +164,6 @@ export function pm(geo: THREE.BufferGeometry, hex: number, darken = 0.25): THREE
 }
 
 // ---------------------------------------------------------------------------
-// Shared sub-assemblies
-// ---------------------------------------------------------------------------
-
-export function buildSpokedWheel(radius: number): THREE.Group {
-  const g = new THREE.Group()
-  const rim = fm(new THREE.TorusGeometry(radius, radius * 0.12, 5, 12), mat.woodDark)
-  g.add(rim)
-  const hub = fm(new THREE.CylinderGeometry(radius * 0.16, radius * 0.16, radius * 0.24, 6), mat.steelDark)
-  hub.rotation.x = Math.PI / 2
-  g.add(hub)
-  const spokePairs = 3
-  for (let i = 0; i < spokePairs; i++) {
-    const a = (i / spokePairs) * Math.PI
-    const spoke = fm(new THREE.BoxGeometry(radius * 1.85, radius * 0.07, radius * 0.05), mat.woodDark)
-    spoke.rotation.z = a
-    g.add(spoke)
-  }
-  return g
-}
-
-// ---------------------------------------------------------------------------
 // Textures
 // ---------------------------------------------------------------------------
 

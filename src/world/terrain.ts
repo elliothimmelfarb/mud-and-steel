@@ -32,8 +32,13 @@ export class Terrain implements TerrainLike {
   readonly heights: Float32Array
   /** Height right after generation + trench carving — craters measure against this. */
   readonly base: Float32Array
-  /** 0..1 shell-churn (scorch + mud) per vertex; drives shading and mud physics. */
+  /** 0..1 shell-churn (scorch + mud) per vertex; drives mud PHYSICS (mudAt,
+   *  movement cost, bogging). Kept deliberately tight around real blast bowls. */
   readonly churn: Float32Array
+  /** Render-only churn: everything in `churn` PLUS cosmetic ejecta rays around
+   *  fresh craters. The terrain mesh shades from this so shell holes read
+   *  blasted, without widening each shell's gameplay slow-zone. */
+  readonly churnVis: Float32Array
   /** 0..1 trench mask per vertex (1 = inside a trench). */
   readonly trench: Float32Array
   /** 0..1 standing-water coverage per vertex (recomputed as wetness changes). */
@@ -67,6 +72,7 @@ export class Terrain implements TerrainLike {
     this.heights = new Float32Array(vcount)
     this.base = new Float32Array(vcount)
     this.churn = new Float32Array(vcount)
+    this.churnVis = new Float32Array(vcount)
     this.trench = new Float32Array(vcount)
     this.water = new Float32Array(vcount)
     this.ao = new Float32Array(vcount)
@@ -141,7 +147,7 @@ export class Terrain implements TerrainLike {
    */
   crater(x: number, z: number, radius: number, depthM: number): boolean {
     // Box reaches the ejecta apron (2.2r); height work stays inside ~1.65r.
-    const REACH = 2.3
+    const REACH = 2.2
     const minCol = Math.max(0, Math.floor(this.colAt(x - radius * REACH)))
     const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + radius * REACH)))
     const minRow = Math.max(0, Math.floor(this.rowAt(z - radius * REACH)))
@@ -150,10 +156,10 @@ export class Terrain implements TerrainLike {
 
     const dn = this.detailNoise
     const heavy = radius > 3
-    // Deterministic per-crater ejecta/clod phases (keeps ray fans and clod
-    // clusters unique per hole but reproducible on replay).
-    const clodPhase = dn ? dn.at(x * 0.4 + 3.1, z * 0.4 + 7.7) * 6.2832 : 0
-    const clodLobes = dn && dn.at(x * 0.31 + 51.3, z * 0.31 + 9.9) < 0.5 ? 2 : 3
+    // Deterministic per-crater clod phases (unique per hole, reproducible on
+    // replay). Only heavy shells read them.
+    const clodPhase = heavy && dn ? dn.at(x * 0.4 + 3.1, z * 0.4 + 7.7) * 6.2832 : 0
+    const clodLobes = heavy && dn && dn.at(x * 0.31 + 51.3, z * 0.31 + 9.9) < 0.5 ? 2 : 3
     const rimAmp = 0.28 + Math.min(0.2, depthM * 0.07)
 
     for (let r = minRow; r <= maxRow; r++) {
@@ -190,8 +196,15 @@ export class Terrain implements TerrainLike {
           this.heights[i] = h
         }
 
-        // -- churn: bowl scorch near centre + ejecta rays in the apron -------
-        let add = Math.max(0, 1.2 - d) * 0.55
+        // -- churn: bowl scorch near centre is GAMEPLAY mud (churn + churnVis);
+        // the ejecta rays in the apron are shading only (churnVis), so a
+        // shell's slow-zone footprint stays the tight pre-rework bowl.
+        const add = Math.max(0, 1.2 - d) * 0.55
+        if (add > 0) {
+          const ch = this.churn[i] + add
+          this.churn[i] = ch > 1 ? 1 : ch
+        }
+        let addVis = add
         if (dn && d > 1.0 && d < 2.2) {
           const ang = Math.atan2(wz - z, wx - x)
           // Angular noise sampled on a ring → constant along a radius = a ray;
@@ -200,23 +213,31 @@ export class Terrain implements TerrainLike {
           const rays = Math.max(0, (streak - 0.42) / 0.58)
           const fall = Math.max(0, (2.2 - d) / 1.2)
           const ej = rays * fall * 0.55
-          if (ej > add) add = ej
+          if (ej > addVis) addVis = ej
         }
-        const ch = this.churn[i] + add
-        this.churn[i] = ch > 1 ? 1 : ch
+        if (addVis > 0) {
+          const cv = this.churnVis[i] + addVis
+          this.churnVis[i] = cv > 1 ? 1 : cv
+        }
 
         // Blasts shred the trench revetment locally.
         if (d < 0.9 && this.trench[i] > 0) this.trench[i] *= 0.55
       }
     }
     this.craterOps.push({ x, z, r: radius, d: depthM })
-    // Concavity shading changes a ring beyond the blast itself; water reads AO,
-    // so recompute AO first.
-    const aMinC = Math.max(0, minCol - AO_REACH), aMaxC = Math.min(this.cols, maxCol + AO_REACH)
-    const aMinR = Math.max(0, minRow - AO_REACH), aMaxR = Math.min(this.rows, maxRow + AO_REACH)
-    this.computeAO(aMinC, aMinR, aMaxC, aMaxR)
-    this.refreshWater(aMinC, aMinR, aMaxC, aMaxR)
-    this.onDirty?.({ minCol: aMinC, minRow: aMinR, maxCol: aMaxC, maxRow: aMaxR })
+    // AO + water depend only on HEIGHTS, which change within 1.65r — grow that
+    // box (not the churn apron) by the concavity reach. The dirty region for
+    // the mesh is the union: churn texels out to 2.2r + the AO ring.
+    const hMinC = Math.max(0, Math.floor(this.colAt(x - radius * 1.65)) - AO_REACH)
+    const hMaxC = Math.min(this.cols, Math.ceil(this.colAt(x + radius * 1.65)) + AO_REACH)
+    const hMinR = Math.max(0, Math.floor(this.rowAt(z - radius * 1.65)) - AO_REACH)
+    const hMaxR = Math.min(this.rows, Math.ceil(this.rowAt(z + radius * 1.65)) + AO_REACH)
+    this.computeAO(hMinC, hMinR, hMaxC, hMaxR)
+    this.refreshWater(hMinC, hMinR, hMaxC, hMaxR)
+    this.onDirty?.({
+      minCol: Math.min(minCol, hMinC), minRow: Math.min(minRow, hMinR),
+      maxCol: Math.max(maxCol, hMaxC), maxRow: Math.max(maxRow, hMaxR),
+    })
     return true
   }
 
@@ -403,6 +424,11 @@ export class Terrain implements TerrainLike {
       }
     }
 
+    // Everything written to `churn` so far (belt + lane) is gameplay mud that
+    // should shade too; from here on crater() and spoilHeap() maintain both
+    // arrays themselves (ejecta rays go to churnVis only).
+    this.churnVis.set(this.churn)
+
     // 3) Trench lines.
     this.buildTrenchPolylines(rand)
     this.carveTrench(this.frontLine, true)
@@ -514,14 +540,14 @@ export class Terrain implements TerrainLike {
   private carveTrench(line: Vec2[], parapet: boolean): void {
     const halfW = TRENCH.width / 2
     const dn = this.detailNoise
-    // Fire-step: a raised firing ledge on the friendly (south) side of the
-    // front/support trenches. The floor there sits ~0.45 m proud of the main
-    // channel so the section reads step-down/step-up like a real fire trench.
-    const firestepH = 0.45
     // Full-depth floor reaches this far out before the wall ramps up.
     const inner = halfW - 0.35
-    // Fire-step band: nearest 35% of the trench width to the south wall.
-    const stepBand = 0.35 * TRENCH.width
+    // Carve against a SNAPSHOT of the pre-carve surface: adjacent zigzag
+    // segments overlap near every joint, and cutting from the live heights
+    // made those cuts cumulative — measured 5-6 m pits at traverses where the
+    // sim (standSurface, slots, duckboards) assumes a uniform TRENCH.depth
+    // floor. With the snapshot, overlapping segments agree instead of adding.
+    const pre = this.heights.slice()
     for (let s = 0; s < line.length - 1; s++) {
       const a = line[s], b = line[s + 1]
       const minCol = Math.max(0, Math.floor(this.colAt(Math.min(a.x, b.x) - 5)))
@@ -549,12 +575,12 @@ export class Terrain implements TerrainLike {
             // Floor gets a little trodden unevenness so duckboards don't sit on
             // glass (kept on the fire-step too).
             const rut = (dn.at(wx * 0.7 + 3.1, wz * 0.7 + 8.7) - 0.5) * 0.12 * kk
-            let cut = TRENCH.depth * kk - rut
-            // Fire-step ledge on the friendly side, within the full-depth floor.
-            if (parapet && wz > pz && d < inner && halfW - d < stepBand) {
-              cut = TRENCH.depth - firestepH - rut
-            }
-            const target = this.heights[i] - cut
+            const cut = TRENCH.depth * kk - rut
+            // NOTE: no physical fire-step. The sim already models one
+            // synthetically (ballistics.standSurface adds trenchAt*1.55 and
+            // the whole cover model is tuned against a full-depth floor);
+            // carving a real ledge double-counted and exposed crouching men.
+            const target = pre[i] - cut
             if (target < this.heights[i]) this.heights[i] = target
             this.trench[i] = Math.max(this.trench[i], kk)
           } else if (parapet && wz < pz && d < halfW + 2.4) {
@@ -569,7 +595,11 @@ export class Terrain implements TerrainLike {
             const lump = 0.68 + 0.34 * l1 + 0.2 * l2
             const gapN = dn.at(wx * 0.14 + 120.0, wz * 0.14 + 7.0)
             const gap = gapN < 0.3 ? 0.35 + (gapN / 0.3) * 0.65 : 1
-            this.heights[i] += TRENCH.parapetH * kc * lump * gap
+            // The lip is the ACTUAL small-arms cover (bullets are physical);
+            // the 0.8 floor keeps every crest at least as tall as the old
+            // uniform parapet so the visible dips never become firing holes
+            // onto crouching defenders.
+            this.heights[i] += TRENCH.parapetH * kc * Math.max(0.8, lump * gap)
           } else if (parapet && wz > pz && d < halfW + 1.9) {
             // Lower parados behind, same treatment at half height.
             const setback = 0.5 + (dn.at(wx * 0.20 + 51.1, wz * 0.20 + 67.9) - 0.5) * 0.7
@@ -602,11 +632,16 @@ export class Terrain implements TerrainLike {
         const dn2 = ((wx - x) * (wx - x) + (wz - z) * (wz - z)) / (radius * radius)
         if (dn2 > 2.25) continue
         const i = this.vi(c, r)
+        // Never spill into a carved corridor: comm-trench doglegs wander up to
+        // ~10 m off their nominal axis, and a heap stamped on the floor walls
+        // the corridor and floats the duckboards.
+        if (this.trench[i] > 0.02) continue
         const g = Math.exp(-dn2 * 1.8)
         const lump = 0.8 + 0.3 * dn.at(wx * 0.8 + 17.0, wz * 0.8 + 44.0)
         this.heights[i] += height * g * lump
-        const ch = Math.max(0, g * 0.35)
+        const ch = g * 0.35
         if (ch > this.churn[i]) this.churn[i] = ch
+        if (ch > this.churnVis[i]) this.churnVis[i] = ch
       }
     }
   }

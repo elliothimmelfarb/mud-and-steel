@@ -5,7 +5,7 @@
  *
  *   1. grass tufts  — crossed blade-fan billboards, scattered in clumps where
  *      the ground is neither churned nor trenched. Per-instance tint lerps the
- *      terrain grass palette (dry-khaki ↔ green).
+ *      terrain grass palette (dry-khaki ↔ green, shared via GRASS_HEX).
  *   2. stones       — small sunk pebble clusters, anywhere on firm ground.
  *   3. battle debris— splinters, board fragments and the odd rusted dome,
  *      biased INTO the shell-churn belt.
@@ -17,12 +17,20 @@
  * matching the rest of the props family; these meshes live for the Scenery's
  * lifetime, so nothing disposes them per-frame.
  *
+ * The battlefield DEFORMS: every shell re-carves the heightfield (and a resumed
+ * save replays its whole crater history). Each system therefore keeps a tiny
+ * (x, z, yOff) record per instance and re-seats itself from terrain.onDirty —
+ * debris and stones drop into fresh bowls, grass tufts inside a real crater
+ * hide (green grass at the bottom of a new blast hole reads wrong).
+ *
  * Sim/world convention: x west→east, z north→south, y up.
  */
 
 import * as THREE from 'three'
 import { forkRand, type Rand } from '../core/rng'
-import type { Terrain } from '../world/terrain'
+import { WORLD } from '../core/config'
+import type { Terrain, DirtyRegion } from '../world/terrain'
+import { GRASS_HEX } from '../world/terrainMesh'
 import { bakeAndMerge, type ColoredPart } from './props/shared'
 
 // -- shared scratch ----------------------------------------------------------
@@ -34,14 +42,46 @@ const _p = new THREE.Vector3()
 const _sc = new THREE.Vector3()
 const _col = new THREE.Color()
 
-// Terrain grass palette (kept in sync with world/terrainMesh.ts) so tufts read
-// as part of the same field rather than pasted on top.
-const GRASS_DRY = new THREE.Color(0x8a7f52)
-const GRASS_GREEN = new THREE.Color(0x596b3c)
+// Terrain grass palette — same hexes the ground shader uses, so tufts read as
+// part of the field rather than pasted on top.
+const GRASS_DRY = new THREE.Color(GRASS_HEX.dry)
+const GRASS_GREEN = new THREE.Color(GRASS_HEX.green)
 
 // ---------------------------------------------------------------------------
 // Placement helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * One clutter system's re-seat bookkeeping: the instanced mesh plus each
+ * instance's (x, z, yOff) so a terrain deformation can drop it back onto the
+ * new surface without re-deriving anything else.
+ */
+interface ClutterSystem {
+  im: THREE.InstancedMesh
+  /** [x, z, yOff] per instance. */
+  data: Float32Array
+  count: number
+  /** Hide (collapse) instances that end up inside a real crater bowl. */
+  hideInCrater: boolean
+}
+
+function recordInstance(sys: ClutterSystem, x: number, z: number, yOff: number): void {
+  const o = sys.count * 3
+  sys.data[o] = x
+  sys.data[o + 1] = z
+  sys.data[o + 2] = yOff
+}
+
+/**
+ * Nearest-vertex concavity — used to keep placement out of the deep pre-war
+ * bowls that puddle in the rain (craterDepthAt is useless here: generation
+ * re-baselines `base`, so pre-war holes report zero crater depth).
+ */
+function aoAt(t: Terrain, x: number, z: number): number {
+  const c = Math.round(Math.max(0, Math.min(t.cols, t.colAt(x))))
+  const r = Math.round(Math.max(0, Math.min(t.rows, t.rowAt(z))))
+  return t.ao[t.vi(c, r)]
+}
 
 /**
  * Compose an instance matrix at (x,z): sit on the surface, sink by `yOff`, spin
@@ -67,15 +107,23 @@ function placeMatrix(
   out.compose(_p, _q, _sc)
 }
 
-function makeInstanced(
-  geo: THREE.BufferGeometry, mat: THREE.MeshStandardMaterial, cap: number, castShadow: boolean,
-): THREE.InstancedMesh {
+function makeSystem(
+  geo: THREE.BufferGeometry, mat: THREE.MeshStandardMaterial, cap: number,
+  castShadow: boolean, hideInCrater: boolean,
+): ClutterSystem {
   const im = new THREE.InstancedMesh(geo, mat, cap)
   im.castShadow = castShadow
   im.receiveShadow = true
   im.frustumCulled = false
   im.count = 0
-  return im
+  return { im, data: new Float32Array(cap * 3), count: 0, hideInCrater }
+}
+
+function finishSystem(scene: THREE.Scene, sys: ClutterSystem): void {
+  sys.im.count = sys.count
+  sys.im.instanceMatrix.needsUpdate = true
+  if (sys.im.instanceColor) sys.im.instanceColor.needsUpdate = true
+  scene.add(sys.im)
 }
 
 // ---------------------------------------------------------------------------
@@ -123,49 +171,47 @@ function grassTuftGeometry(): THREE.BufferGeometry {
   return bakeAndMerge(parts, 0.32)
 }
 
-function scatterGrass(scene: THREE.Scene, terrain: Terrain, rand: Rand): THREE.InstancedMesh {
+function scatterGrass(scene: THREE.Scene, terrain: Terrain, rand: Rand): ClutterSystem {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: 0.92, metalness: 0, side: THREE.DoubleSide,
   })
-  const cap = 3600
-  const im = makeInstanced(grassTuftGeometry(), mat, cap, false)
+  const sys = makeSystem(grassTuftGeometry(), mat, 3600, false, true)
 
   const halfW = terrain.width / 2 - 3
   const zMin = -terrain.depth / 2 + 30
   const zMax = terrain.depth / 2 - 15
   const target = 3200
-  let n = 0
   let attempts = 0
-  while (n < target && attempts < target * 4) {
+  while (sys.count < target && attempts < target * 4) {
     attempts++
     const cx = (rand() - 0.5) * 2 * halfW
     const cz = zMin + rand() * (zMax - zMin)
-    // Grass only where the soil hasn't been shredded, cut open, or drowned.
+    // Grass only where the soil hasn't been shredded, cut open, or hollowed
+    // into a pit that will puddle in the rain.
     if (terrain.churnAt(cx, cz) > 0.25) continue
     if (terrain.trenchAt(cx, cz) > 0.2) continue
-    if (terrain.craterDepthAt(cx, cz) > 0.35) continue
+    if (aoAt(terrain, cx, cz) > 0.45) continue
     const clump = 2 + ((rand() * 4) | 0) // 2–5 tufts per patch
-    for (let k = 0; k < clump && n < cap; k++) {
+    for (let k = 0; k < clump && sys.count < 3600; k++) {
       const x = cx + (rand() - 0.5) * 1.1
       const z = cz + (rand() - 0.5) * 1.1
       if (terrain.trenchAt(x, z) > 0.25) continue
       const yaw = rand() * Math.PI * 2
       const s = 0.75 + rand() * 0.65
       const sy = s * (0.85 + rand() * 0.5)
-      placeMatrix(terrain, x, z, yaw, 0.45, rand, s, sy, s, -0.015 - rand() * 0.02, _m)
-      im.setMatrixAt(n, _m)
+      const yOff = -0.015 - rand() * 0.02
+      placeMatrix(terrain, x, z, yaw, 0.45, rand, s, sy, s, yOff, _m)
+      sys.im.setMatrixAt(sys.count, _m)
       // Lifted well above the terrain tones: thin double-sided blades catch far
       // less light than the ground plane, so an un-boosted tint reads black.
       _col.copy(GRASS_DRY).lerp(GRASS_GREEN, rand()).multiplyScalar(1.45 + rand() * 0.5)
-      im.setColorAt(n, _col)
-      n++
+      sys.im.setColorAt(sys.count, _col)
+      recordInstance(sys, x, z, yOff)
+      sys.count++
     }
   }
-  im.count = n
-  im.instanceMatrix.needsUpdate = true
-  if (im.instanceColor) im.instanceColor.needsUpdate = true
-  scene.add(im)
-  return im
+  finishSystem(scene, sys)
+  return sys
 }
 
 // ---------------------------------------------------------------------------
@@ -197,37 +243,34 @@ function stoneClusterGeometry(rand: Rand): THREE.BufferGeometry {
   return bakeAndMerge(parts, 0.3)
 }
 
-function scatterStones(scene: THREE.Scene, terrain: Terrain, rand: Rand): THREE.InstancedMesh {
+function scatterStones(scene: THREE.Scene, terrain: Terrain, rand: Rand): ClutterSystem {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.02 })
-  const cap = 520
-  const im = makeInstanced(stoneClusterGeometry(rand), mat, cap, true)
+  const sys = makeSystem(stoneClusterGeometry(rand), mat, 520, true, false)
 
   const halfW = terrain.width / 2 - 3
   const zMin = -terrain.depth / 2 + 24
   const zMax = terrain.depth / 2 - 12
   const target = 500
-  let n = 0
   let attempts = 0
-  while (n < target && attempts < target * 6) {
+  while (sys.count < target && attempts < target * 6) {
     attempts++
     const x = (rand() - 0.5) * 2 * halfW
     const z = zMin + rand() * (zMax - zMin)
-    if (terrain.craterDepthAt(x, z) > 0.35) continue // don't float in future puddles
-    if (terrain.trenchAt(x, z) > 0.85) continue       // keep off the duckboarded floor
+    if (aoAt(terrain, x, z) > 0.5) continue      // keep out of puddling pits
+    if (terrain.trenchAt(x, z) > 0.85) continue  // keep off the duckboarded floor
     const yaw = rand() * Math.PI * 2
     const s = 0.6 + rand() * 0.7
-    placeMatrix(terrain, x, z, yaw, 0.7, rand, s, s * (0.75 + rand() * 0.4), s, -0.04 - rand() * 0.05, _m)
-    im.setMatrixAt(n, _m)
+    const yOff = -0.04 - rand() * 0.05
+    placeMatrix(terrain, x, z, yaw, 0.7, rand, s, s * (0.75 + rand() * 0.4), s, yOff, _m)
+    sys.im.setMatrixAt(sys.count, _m)
     const br = 0.78 + rand() * 0.34
     _col.setRGB(br, br * 0.97, br * 0.92)
-    im.setColorAt(n, _col)
-    n++
+    sys.im.setColorAt(sys.count, _col)
+    recordInstance(sys, x, z, yOff)
+    sys.count++
   }
-  im.count = n
-  im.instanceMatrix.needsUpdate = true
-  if (im.instanceColor) im.instanceColor.needsUpdate = true
-  scene.add(im)
-  return im
+  finishSystem(scene, sys)
+  return sys
 }
 
 // ---------------------------------------------------------------------------
@@ -265,38 +308,37 @@ function debrisGeometry(rand: Rand): THREE.BufferGeometry {
   return bakeAndMerge(parts, 0.32)
 }
 
-function scatterDebris(scene: THREE.Scene, terrain: Terrain, rand: Rand): THREE.InstancedMesh {
+function scatterDebris(scene: THREE.Scene, terrain: Terrain, rand: Rand): ClutterSystem {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0.03 })
-  const cap = 420
-  const im = makeInstanced(debrisGeometry(rand), mat, cap, true)
+  const sys = makeSystem(debrisGeometry(rand), mat, 420, true, false)
 
   const halfW = terrain.width / 2 - 3
-  // The shell-churn belt lives across no-man's land, heaviest short of the wire.
-  const zMin = -175
-  const zMax = 86
+  // The shell-churn belt lives across no-man's land, heaviest short of the
+  // wire — derived from the same config the generator uses, so a retuned map
+  // moves the debris with it.
+  const zMin = WORLD.enemySpawnZ + 25
+  const zMax = WORLD.frontTrenchZ + 6
   const target = 400
-  let n = 0
   let attempts = 0
-  while (n < target && attempts < target * 12) {
+  while (sys.count < target && attempts < target * 12) {
     attempts++
     const x = (rand() - 0.5) * 2 * halfW
     const z = zMin + rand() * (zMax - zMin)
-    if (terrain.churnAt(x, z) <= 0.3) continue      // bias INTO the churn
-    if (terrain.craterDepthAt(x, z) > 0.4) continue // rims yes, deep bowls no
+    if (terrain.churnAt(x, z) <= 0.3) continue // bias INTO the churn
+    if (aoAt(terrain, x, z) > 0.55) continue   // rims yes, deep puddling bowls no
     const yaw = rand() * Math.PI * 2
     const s = 0.6 + rand() * 0.6
-    placeMatrix(terrain, x, z, yaw, 0.8, rand, s, s, s, -0.02 - rand() * 0.02, _m)
-    im.setMatrixAt(n, _m)
+    const yOff = -0.02 - rand() * 0.02
+    placeMatrix(terrain, x, z, yaw, 0.8, rand, s, s, s, yOff, _m)
+    sys.im.setMatrixAt(sys.count, _m)
     const br = 0.72 + rand() * 0.4
     _col.setRGB(br, br * (0.82 + rand() * 0.12), br * 0.7) // warm rust/wood breakup
-    im.setColorAt(n, _col)
-    n++
+    sys.im.setColorAt(sys.count, _col)
+    recordInstance(sys, x, z, yOff)
+    sys.count++
   }
-  im.count = n
-  im.instanceMatrix.needsUpdate = true
-  if (im.instanceColor) im.instanceColor.needsUpdate = true
-  scene.add(im)
-  return im
+  finishSystem(scene, sys)
+  return sys
 }
 
 // ---------------------------------------------------------------------------
@@ -317,42 +359,80 @@ function casingGeometry(): THREE.BufferGeometry {
   return bakeAndMerge(parts, 0.15)
 }
 
-function scatterCasings(scene: THREE.Scene, terrain: Terrain, rand: Rand): THREE.InstancedMesh {
+function scatterCasings(scene: THREE.Scene, terrain: Terrain, rand: Rand): ClutterSystem {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.55 })
-  const cap = 170
-  const im = makeInstanced(casingGeometry(), mat, cap, false)
+  const sys = makeSystem(casingGeometry(), mat, 170, false, false)
 
   const pads = terrain.pads
   const target = 150
   const perPad = pads.length > 0 ? Math.ceil(target / pads.length) : target
-  let n = 0
   for (const pad of pads) {
-    for (let k = 0; k < perPad && n < target; k++) {
+    for (let k = 0; k < perPad && sys.count < target; k++) {
       const ang = rand() * Math.PI * 2
       const rad = rand() * 2.8
       const x = pad.x + Math.cos(ang) * rad
       const z = pad.z + Math.sin(ang) * rad
-      if (terrain.craterDepthAt(x, z) > 0.35) continue
       if (terrain.trenchAt(x, z) > 0.6) continue
       // Casings lie on their side: tip the body horizontal, then random yaw/roll.
       _e.set(Math.PI / 2 + (rand() - 0.5) * 0.5, rand() * Math.PI * 2, (rand() - 0.5) * 0.4, 'XYZ')
       _q.setFromEuler(_e)
       const s = 0.7 + rand() * 0.6
-      _p.set(x, terrain.heightAt(x, z) + 0.008, z)
+      const yOff = 0.008
+      _p.set(x, terrain.heightAt(x, z) + yOff, z)
       _sc.set(s, s, s)
       _m.compose(_p, _q, _sc)
-      im.setMatrixAt(n, _m)
+      sys.im.setMatrixAt(sys.count, _m)
       const br = 0.7 + rand() * 0.42
       _col.setRGB(br, br * (0.9 + rand() * 0.08), br * (0.72 + rand() * 0.12)) // some tarnished
-      im.setColorAt(n, _col)
-      n++
+      sys.im.setColorAt(sys.count, _col)
+      recordInstance(sys, x, z, yOff)
+      sys.count++
     }
   }
-  im.count = n
-  im.instanceMatrix.needsUpdate = true
-  if (im.instanceColor) im.instanceColor.needsUpdate = true
-  scene.add(im)
-  return im
+  finishSystem(scene, sys)
+  return sys
+}
+
+// ---------------------------------------------------------------------------
+// Deformation response
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop every instance inside the dirty region back onto the (re-carved)
+ * surface. Grass hides inside real crater bowls; debris/stones/brass simply
+ * follow the ground down. Skips the GPU re-upload when nothing in the region
+ * actually moved (setWetness fires whole-field dirty events with no height
+ * change).
+ */
+function reseat(t: Terrain, systems: ClutterSystem[], reg: DirtyRegion): void {
+  const minX = t.worldX(Math.max(0, reg.minCol)) - 0.5
+  const maxX = t.worldX(Math.min(t.cols, reg.maxCol)) + 0.5
+  const minZ = t.worldZ(Math.max(0, reg.minRow)) - 0.5
+  const maxZ = t.worldZ(Math.min(t.rows, reg.maxRow)) + 0.5
+  for (const sys of systems) {
+    const arr = sys.im.instanceMatrix.array as Float32Array
+    let moved = false
+    for (let i = 0; i < sys.count; i++) {
+      const x = sys.data[i * 3]
+      const z = sys.data[i * 3 + 1]
+      if (x < minX || x > maxX || z < minZ || z > maxZ) continue
+      const o = i * 16
+      if (sys.hideInCrater && t.craterDepthAt(x, z) > 0.35) {
+        // Collapse the instance (zero basis) — grass doesn't survive a shell.
+        if (arr[o] !== 0 || arr[o + 5] !== 0) {
+          arr.fill(0, o, o + 16)
+          moved = true
+        }
+        continue
+      }
+      const y = t.heightAt(x, z) + sys.data[i * 3 + 2]
+      if (Math.abs(arr[o + 13] - y) > 1e-4) {
+        arr[o + 13] = y
+        moved = true
+      }
+    }
+    if (moved) sys.im.instanceMatrix.needsUpdate = true
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,15 +441,20 @@ function scatterCasings(scene: THREE.Scene, terrain: Terrain, rand: Rand): THREE
 
 /**
  * Build and add all four clutter systems to the scene, placed deterministically
- * from `seed`. Returns the meshes (four InstancedMeshes) in case the caller
- * wants to track them; they persist for the scene's lifetime.
+ * from `seed`, and subscribe them to terrain deformation (chained onDirty, same
+ * pattern as TerrainMesh) so live shells — and a resumed save's replayed crater
+ * history — pull the litter down with the ground. Returns the meshes in case
+ * the caller wants to track them; they persist for the scene's lifetime.
  */
 export function dressClutter(scene: THREE.Scene, terrain: Terrain, seed: number): THREE.InstancedMesh[] {
   const rand = forkRand(seed, 'clutter')
-  return [
+  const systems = [
     scatterGrass(scene, terrain, rand),
     scatterStones(scene, terrain, rand),
     scatterDebris(scene, terrain, rand),
     scatterCasings(scene, terrain, rand),
   ]
+  const prev = terrain.onDirty
+  terrain.onDirty = (r: DirtyRegion) => { prev?.(r); reseat(terrain, systems, r) }
+  return systems.map((s) => s.im)
 }

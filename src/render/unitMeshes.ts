@@ -770,6 +770,10 @@ interface HorseEntry {
 class HorsePool {
   private pool: HorseEntry[] = []
   private used = 0
+  /** Built once; pool growth clones it (shared geometry/materials, names kept).
+   *  The upgraded horse is ~60 merged parts — building 24 of them from scratch
+   *  across the first frames of a cavalry charge stuttered the charge. */
+  private template: THREE.Group | null = null
   constructor(private scene: THREE.Scene) {}
 
   begin(): void { this.used = 0 }
@@ -777,7 +781,8 @@ class HorsePool {
   push(x: number, y: number, z: number, facing: number, phase: number): boolean {
     if (this.used >= 24) return false
     if (this.used >= this.pool.length) {
-      const g = buildHorse()
+      if (!this.template) this.template = buildHorse()
+      const g = this.template.clone(true)
       g.rotation.order = 'YXZ'   // yaw first so gallop pitch stays body-relative
       this.scene.add(g)
       this.pool.push({
