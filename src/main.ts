@@ -22,6 +22,14 @@ function main(): void {
   if (!app) throw new Error('missing #app')
   bootProgress(0.2)
 
+  // Dev-only model/terrain viewer (see game/modelGallery.ts). Boots a studio
+  // scene INSTEAD of the game — no audio, sim or HUD.
+  if (new URLSearchParams(location.search).has('gallery')) {
+    document.getElementById('boot')?.classList.add('done')
+    import('./game/modelGallery').then(({ startModelGallery }) => startModelGallery(app))
+    return
+  }
+
   const settings = loadSettings()
   const audio = new AudioEngine()
   // WebAudio needs a user gesture; unlock on the first interaction.

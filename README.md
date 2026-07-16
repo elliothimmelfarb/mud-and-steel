@@ -56,6 +56,8 @@ The gunfeel is built to carry the weapon's weight:
 | **Feedback** | Hit markers, a distinct kill marker, and directional indicators pointing back at whoever's hitting you |
 
 > A dev harness lives at [`localhost:5173/?fpslab`](http://localhost:5173/?fpslab) — it drops you straight onto a sandbox battlefield with one-click embodiment of every weapon. **Inspect** floats the gun onto a turntable to spin, drag and zoom through every angle; **Invincible** (default on) pins you so enemy fire never cuts a study short; **Clear foes** and **Flash❄** freeze the field for inspection. Deep-link a weapon with `?fpslab&w=fieldgun&inspect&spin`.
+>
+> A second harness lives at [`localhost:5173/?gallery`](http://localhost:5173/?gallery) — a model gallery showing every prop, vehicle, soldier pose, viewmodel and terrain camera preset on a labelled contact sheet or a single-exhibit turntable. Deep-link an exhibit with `?gallery&m=a7v`; script it via `window.__gallery` (list/show/sheet/spin/stats).
 
 ## Systems that make it different
 

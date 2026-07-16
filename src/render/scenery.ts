@@ -15,6 +15,7 @@ import {
   sandbagGeometry, stakeGeometry, tankTrapGeometry, wireCoilGeometry, wirePostGeometry,
   PALETTE,
 } from './props'
+import { dressClutter } from './clutter'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -76,6 +77,10 @@ export class Scenery {
       tree.castShadow = true
       this.scene.add(tree)
     }
+
+    // Instanced ground clutter: grass, stones, battle debris, spent brass. Uses
+    // its own 'clutter' stream so it's stable regardless of the dressing above.
+    dressClutter(this.scene, t, seed)
 
     // Ruined farm + church, mid-field landmarks.
     const ruin1 = buildRuin(rand)
@@ -146,26 +151,45 @@ export class Scenery {
   // -- dynamic sync ------------------------------------------------------------
 
   /**
+   * Session-lived model templates for the heavyweight builders. The upgraded
+   * tanks/guns run to hundreds of merged parts plus per-vertex weathering
+   * passes — building one synchronously in the per-frame sync caused a hitch
+   * exactly on the "tank arrives" beat. Each kind is built ONCE here and every
+   * spawn gets a cheap `clone(true)` (three.js clones share geometry and
+   * materials by reference and keep child names, so 'barrel'/'turret'/wheel
+   * lookups and dead-dressing behave identically).
+   */
+  private templates = new Map<string, THREE.Group>()
+
+  private fromTemplate(kind: string, build: () => THREE.Group): THREE.Group {
+    let t = this.templates.get(kind)
+    if (!t) {
+      t = build()
+      this.templates.set(kind, t)
+    }
+    return t.clone(true)
+  }
+
+  /**
    * Free the GPU resources a dead entity's group owns, before it's dropped.
    *
-   * Geometries in props.ts are always built fresh per builder call (there is no
-   * module-level geometry cache), so every geometry in a per-entity group is
-   * owned by that group and safe to dispose — deduped, since buildTankMkIV
-   * shares one geometry across two meshes via `.clone()`.
+   * `ownedGeometries` — pass true only for groups whose builder ran fresh for
+   * this entity (searchlights/flareposts). Unit/vehicle groups are CLONES of
+   * the session-lived templates above: their geometry is shared, so disposing
+   * it would corrupt the template and every other live clone.
    *
-   * Materials are the opposite: every builder pulls from the shared module-cached
-   * `mat.*` set (via fm/wrapVC/pm), so disposing them would corrupt still-living
-   * props. The ONLY owned materials are the per-instance clones made when a
-   * vehicle is dead-dressed (see syncVehicles) — the caller opts into freeing
-   * those via `ownedMaterials`.
+   * Materials are shared module-cached `mat.*` everywhere, so disposing them
+   * would corrupt still-living props. The ONLY owned materials are the
+   * per-instance clones made when a vehicle is dead-dressed (see
+   * syncVehicles) — the caller opts into freeing those via `ownedMaterials`.
    */
-  private disposeGroup(root: THREE.Object3D, ownedMaterials: boolean): void {
+  private disposeGroup(root: THREE.Object3D, ownedGeometries: boolean, ownedMaterials: boolean): void {
     const geos = new Set<THREE.BufferGeometry>()
     const mats = new Set<THREE.Material>()
     root.traverse((o) => {
       const mesh = o as THREE.Mesh
       if (!mesh.isMesh) return
-      if (mesh.geometry && !geos.has(mesh.geometry)) {
+      if (ownedGeometries && mesh.geometry && !geos.has(mesh.geometry)) {
         geos.add(mesh.geometry)
         mesh.geometry.dispose()
       }
@@ -274,7 +298,7 @@ export class Scenery {
     for (const [id, g] of this.defenceProps) {
       if (!liveIds.has(id)) {
         this.scene.remove(g)
-        this.disposeGroup(g, false) // materials are shared mat.* — geometry only
+        this.disposeGroup(g, true, false) // fresh-built per defence; materials shared mat.*
         this.defenceProps.delete(id)
         const beam = this.beams.get(id)
         if (beam) {
@@ -320,7 +344,7 @@ export class Scenery {
       live.add(u.id)
       let g = this.unitProps.get(u.id)
       if (!g) {
-        g = builder()
+        g = this.fromTemplate(u.kind, builder)
         this.scene.add(g)
         this.unitProps.set(u.id, g)
       }
@@ -332,7 +356,7 @@ export class Scenery {
     for (const [id, g] of this.unitProps) {
       if (!live.has(id)) {
         this.scene.remove(g)
-        this.disposeGroup(g, false) // materials are shared mat.* — geometry only
+        this.disposeGroup(g, false, false) // template clone: geometry + materials both shared
         this.unitProps.delete(id)
       }
     }
@@ -344,7 +368,10 @@ export class Scenery {
       live.add(v.id)
       let entry = this.vehicleProps.get(v.id)
       if (!entry) {
-        const group = v.kind === 'etank' ? buildTankA7V() : v.kind === 'friendlytank' ? buildTankMkIV() : buildArmoredCar()
+        const group = this.fromTemplate(
+          v.kind,
+          v.kind === 'etank' ? buildTankA7V : v.kind === 'friendlytank' ? buildTankMkIV : buildArmoredCar,
+        )
         this.scene.add(group)
         entry = { group, deadDressed: false }
         this.vehicleProps.set(v.id, entry)
@@ -378,8 +405,9 @@ export class Scenery {
       if (!live.has(id)) {
         this.scene.remove(entry.group)
         // Dead-dressed vehicles carry per-instance cloned materials (owned);
-        // otherwise materials are the shared mat.* set. Geometry is always owned.
-        this.disposeGroup(entry.group, entry.deadDressed)
+        // otherwise materials are the shared mat.* set. Geometry belongs to
+        // the session-lived template — never dispose it.
+        this.disposeGroup(entry.group, false, entry.deadDressed)
         this.vehicleProps.delete(id)
       }
     }

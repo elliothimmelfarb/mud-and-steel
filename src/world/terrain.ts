@@ -32,8 +32,13 @@ export class Terrain implements TerrainLike {
   readonly heights: Float32Array
   /** Height right after generation + trench carving — craters measure against this. */
   readonly base: Float32Array
-  /** 0..1 shell-churn (scorch + mud) per vertex; drives shading and mud physics. */
+  /** 0..1 shell-churn (scorch + mud) per vertex; drives mud PHYSICS (mudAt,
+   *  movement cost, bogging). Kept deliberately tight around real blast bowls. */
   readonly churn: Float32Array
+  /** Render-only churn: everything in `churn` PLUS cosmetic ejecta rays around
+   *  fresh craters. The terrain mesh shades from this so shell holes read
+   *  blasted, without widening each shell's gameplay slow-zone. */
+  readonly churnVis: Float32Array
   /** 0..1 trench mask per vertex (1 = inside a trench). */
   readonly trench: Float32Array
   /** 0..1 standing-water coverage per vertex (recomputed as wetness changes). */
@@ -67,6 +72,7 @@ export class Terrain implements TerrainLike {
     this.heights = new Float32Array(vcount)
     this.base = new Float32Array(vcount)
     this.churn = new Float32Array(vcount)
+    this.churnVis = new Float32Array(vcount)
     this.trench = new Float32Array(vcount)
     this.water = new Float32Array(vcount)
     this.ao = new Float32Array(vcount)
@@ -130,48 +136,108 @@ export class Terrain implements TerrainLike {
   /**
    * Carve a crater: gaussian bowl + raised rim, churn the soil, notify the mesh.
    * Returns false when the blast lands off-field.
+   *
+   * Profile detail (all deterministic from x/z/radius/depth + the stored detail
+   * noise, so replayCraterOps reproduces it byte-for-byte):
+   *  - steep inner bowl + a narrow, tall rim crest that scales with depth,
+   *  - a low-amplitude non-radial wobble so bowls aren't perfect dishes,
+   *  - churn-only EJECTA rays out to ~2.2r (no height change → no gameplay
+   *    depth/cover shift; fresh holes read blasted, not stamped),
+   *  - clod lumps flung onto the rim of heavy shells (radius > 3).
    */
   crater(x: number, z: number, radius: number, depthM: number): boolean {
-    const minCol = Math.max(0, Math.floor(this.colAt(x - radius * 1.6)))
-    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + radius * 1.6)))
-    const minRow = Math.max(0, Math.floor(this.rowAt(z - radius * 1.6)))
-    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + radius * 1.6)))
+    // Box reaches the ejecta apron (2.2r); height work stays inside ~1.65r.
+    const REACH = 2.2
+    const minCol = Math.max(0, Math.floor(this.colAt(x - radius * REACH)))
+    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + radius * REACH)))
+    const minRow = Math.max(0, Math.floor(this.rowAt(z - radius * REACH)))
+    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + radius * REACH)))
     if (minCol >= maxCol || minRow >= maxRow) return false
 
     const dn = this.detailNoise
+    const heavy = radius > 3
+    // Deterministic per-crater clod phases (unique per hole, reproducible on
+    // replay). Only heavy shells read them.
+    const clodPhase = heavy && dn ? dn.at(x * 0.4 + 3.1, z * 0.4 + 7.7) * 6.2832 : 0
+    const clodLobes = heavy && dn && dn.at(x * 0.31 + 51.3, z * 0.31 + 9.9) < 0.5 ? 2 : 3
+    const rimAmp = 0.28 + Math.min(0.2, depthM * 0.07)
+
     for (let r = minRow; r <= maxRow; r++) {
       const wz = this.worldZ(r)
       for (let c = minCol; c <= maxCol; c++) {
         const wx = this.worldX(c)
         const d = Math.hypot(wx - x, wz - z) / radius
-        if (d > 1.6) continue
+        if (d > REACH) continue
         const i = this.vi(c, r)
-        // Ragged edge: modulate distance a touch with fine noise so lips and
-        // bowls stop reading as perfect circles at 1 m resolution.
-        const rag = dn ? (dn.at(wx * 0.55 + 11.3, wz * 0.55 + 71.9) - 0.5) * 0.22 : 0
-        const dd = Math.max(0, d + rag * Math.min(1, d))
-        // Bowl inside r, rim between 1.0r and 1.5r.
-        const bowl = Math.exp(-dd * dd * 2.2) * depthM
-        const rim = dd > 0.85 && dd < 1.55 ? Math.sin((dd - 0.85) / 0.7 * Math.PI) * depthM * 0.22 : 0
-        let h = this.heights[i] - bowl + rim
-        // Don't dig bottomless pits where shells land twice.
-        const floor = this.base[i] - Math.max(2.6, depthM * 2.2)
-        if (h < floor) h = floor
-        this.heights[i] = h
-        const ch = this.churn[i] + Math.max(0, 1.2 - d) * 0.55
-        this.churn[i] = ch > 1 ? 1 : ch
+
+        // -- height: bowl + rim + clods, only where they actually live -------
+        if (d <= 1.65) {
+          // Ragged edge: modulate distance a touch with fine noise so lips and
+          // bowls stop reading as perfect circles at 1 m resolution.
+          const rag = dn ? (dn.at(wx * 0.55 + 11.3, wz * 0.55 + 71.9) - 0.5) * 0.22 : 0
+          const dd = Math.max(0, d + rag * Math.min(1, d))
+          // Secondary, lower-frequency non-radial wobble on the bowl wall.
+          const wob = dn ? (dn.at(wx * 0.32 + 40.0, wz * 0.32 + 12.0) - 0.5) * 0.16 : 0
+          const de = Math.max(0, dd + wob * Math.min(1, dd))
+          // Steeper inner bowl (exp 3.0 vs 2.2) — walls read cut, not dished.
+          const bowl = Math.exp(-de * de * 3.0) * depthM
+          // Sharper rim crest: narrower band (0.9..1.4r), taller, depth-scaled.
+          let rim = de > 0.9 && de < 1.4 ? Math.sin((de - 0.9) / 0.5 * Math.PI) * depthM * rimAmp : 0
+          // Heavy shells fling 2-3 clod lumps onto the rim.
+          if (heavy && de > 0.82 && de < 1.4) {
+            const ang = Math.atan2(wz - z, wx - x)
+            const lobe = Math.max(0, Math.sin(ang * clodLobes + clodPhase))
+            rim += lobe * lobe * Math.sin((de - 0.82) / 0.58 * Math.PI) * depthM * 0.16
+          }
+          let h = this.heights[i] - bowl + rim
+          // Don't dig bottomless pits where shells land twice.
+          const floor = this.base[i] - Math.max(2.6, depthM * 2.2)
+          if (h < floor) h = floor
+          this.heights[i] = h
+        }
+
+        // -- churn: bowl scorch near centre is GAMEPLAY mud (churn + churnVis);
+        // the ejecta rays in the apron are shading only (churnVis), so a
+        // shell's slow-zone footprint stays the tight pre-rework bowl.
+        const add = Math.max(0, 1.2 - d) * 0.55
+        if (add > 0) {
+          const ch = this.churn[i] + add
+          this.churn[i] = ch > 1 ? 1 : ch
+        }
+        let addVis = add
+        if (dn && d > 1.0 && d < 2.2) {
+          const ang = Math.atan2(wz - z, wx - x)
+          // Angular noise sampled on a ring → constant along a radius = a ray;
+          // the crater-centre offset makes each hole's fan unique.
+          const streak = dn.at(Math.cos(ang) * 3.0 + x * 0.15, Math.sin(ang) * 3.0 + z * 0.15)
+          const rays = Math.max(0, (streak - 0.42) / 0.58)
+          const fall = Math.max(0, (2.2 - d) / 1.2)
+          const ej = rays * fall * 0.55
+          if (ej > addVis) addVis = ej
+        }
+        if (addVis > 0) {
+          const cv = this.churnVis[i] + addVis
+          this.churnVis[i] = cv > 1 ? 1 : cv
+        }
+
         // Blasts shred the trench revetment locally.
         if (d < 0.9 && this.trench[i] > 0) this.trench[i] *= 0.55
       }
     }
     this.craterOps.push({ x, z, r: radius, d: depthM })
-    // Concavity shading changes a ring beyond the blast itself; water reads AO,
-    // so recompute AO first.
-    const aMinC = Math.max(0, minCol - AO_REACH), aMaxC = Math.min(this.cols, maxCol + AO_REACH)
-    const aMinR = Math.max(0, minRow - AO_REACH), aMaxR = Math.min(this.rows, maxRow + AO_REACH)
-    this.computeAO(aMinC, aMinR, aMaxC, aMaxR)
-    this.refreshWater(aMinC, aMinR, aMaxC, aMaxR)
-    this.onDirty?.({ minCol: aMinC, minRow: aMinR, maxCol: aMaxC, maxRow: aMaxR })
+    // AO + water depend only on HEIGHTS, which change within 1.65r — grow that
+    // box (not the churn apron) by the concavity reach. The dirty region for
+    // the mesh is the union: churn texels out to 2.2r + the AO ring.
+    const hMinC = Math.max(0, Math.floor(this.colAt(x - radius * 1.65)) - AO_REACH)
+    const hMaxC = Math.min(this.cols, Math.ceil(this.colAt(x + radius * 1.65)) + AO_REACH)
+    const hMinR = Math.max(0, Math.floor(this.rowAt(z - radius * 1.65)) - AO_REACH)
+    const hMaxR = Math.min(this.rows, Math.ceil(this.rowAt(z + radius * 1.65)) + AO_REACH)
+    this.computeAO(hMinC, hMinR, hMaxC, hMaxR)
+    this.refreshWater(hMinC, hMinR, hMaxC, hMaxR)
+    this.onDirty?.({
+      minCol: Math.min(minCol, hMinC), minRow: Math.min(minRow, hMinR),
+      maxCol: Math.max(maxCol, hMaxC), maxRow: Math.max(maxRow, hMaxR),
+    })
     return true
   }
 
@@ -263,6 +329,7 @@ export class Terrain implements TerrainLike {
     this.detailNoise = detail
     const rand = forkRand(seed, 'terrain')
     const frontZ = WORLD.frontTrenchZ
+    const supportZ = WORLD.supportTrenchZ
 
     // Ridged fBm in [0,1] — sharp-crested broken ground.
     const ridged = (x: number, z: number, oct: number): number => {
@@ -279,7 +346,12 @@ export class Terrain implements TerrainLike {
 
     // 1) Landform: rolling ground + broad ridges + ridged breakup + hummocks
     //    + fine roughness, defenders on a gentle rise to the south. No-man's
-    //    land carries a base churn belt, heaviest just short of the wire.
+    //    land carries a base churn belt, heaviest just short of the wire, now
+    //    clumped into blast fields. The rear fields (south of the support line)
+    //    carry faint plough furrows.
+    // Furrow direction: axis-aligned rows rotated ~10° so they don't align to x.
+    const furrowCos = 0.9848, furrowSin = 0.1736
+    const furrowK = (2 * Math.PI) / 1.4 // ~1.4 m wavelength
     for (let r = 0; r <= this.rows; r++) {
       const z = this.worldZ(r)
       const rise = (z + this.depth / 2) / this.depth // 0 north → 1 south
@@ -294,6 +366,8 @@ export class Terrain implements TerrainLike {
         const t = 1 - Math.min(1, Math.abs(frontZ - 20 - z) / 95)
         beltW = t * t
       }
+      // Rear plough furrows fade in south of the support line.
+      const furrowFade = z > supportZ - 6 ? Math.min(1, (z - (supportZ - 6)) / 14) : 0
       for (let c = 0; c <= this.cols; c++) {
         const x = this.worldX(c)
         const i = this.vi(c, r)
@@ -302,44 +376,77 @@ export class Terrain implements TerrainLike {
         const rg = ridged(x * 0.03, z * 0.03, 3) - 0.42
         const hum = detail.at(x * 0.065 + 31, z * 0.065 + 17) - 0.5
         const mic = detail.fbm(x * 0.31 + 57, z * 0.31 + 23, 2) - 0.5
-        this.heights[i] =
-          (roll * 4.0 + broad * 3.4 + rg * 1.7 + hum * 0.55 + mic * 0.22) * flatten + rise * 2.2
+        let h = (roll * 4.0 + broad * 3.4 + rg * 1.7 + hum * 0.55 + mic * 0.22) * flatten + rise * 2.2
+        if (furrowFade > 0) {
+          // ~0.05 m ripples, banded so the ploughing isn't perfectly uniform.
+          const u = x * furrowCos + z * furrowSin
+          const band = 0.62 + 0.38 * detail.at(x * 0.02 + 70, z * 0.02 + 30)
+          h += Math.sin(u * furrowK) * 0.05 * furrowFade * band
+        }
+        this.heights[i] = h
         if (beltW > 0) {
           const m = detail.fbm(x * 0.05 + 91, z * 0.05 + 47, 3)
-          const ch = beltW * Math.max(0, Math.min(1, m * 1.9 - 0.55)) * 0.8
+          // A second, lower-frequency mask clumps the churn into blast fields
+          // with cleaner unblasted gaps between them.
+          const clump = detail.at(x * 0.021 + 13, z * 0.021 + 61)
+          const clumpMask = Math.max(0, Math.min(1, (clump - 0.4) / 0.35))
+          const ch = beltW * Math.max(0, Math.min(1, m * 1.9 - 0.55)) * clumpMask * 0.95
           if (ch > this.churn[i]) this.churn[i] = ch
         }
       }
     }
 
     // 2) A shallow sunken lane / old streambed crossing no-man's land (cover
-    //    feature), with a ragged noisy edge instead of a clean band.
+    //    feature), with a ragged, two-octave noisy edge and an uneven floor
+    //    instead of a clean band.
     const laneZ = -40 + (rand() - 0.5) * 50
     {
-      const rMin = Math.max(0, Math.floor(this.rowAt(laneZ - 26)))
-      const rMax = Math.min(this.rows, Math.ceil(this.rowAt(laneZ + 26)))
+      const rMin = Math.max(0, Math.floor(this.rowAt(laneZ - 30)))
+      const rMax = Math.min(this.rows, Math.ceil(this.rowAt(laneZ + 30)))
       for (let r = rMin; r <= rMax; r++) {
         const z = this.worldZ(r)
         for (let c = 0; c <= this.cols; c++) {
           const x = this.worldX(c)
           const meander = Math.sin(x * 0.02 + seed % 7) * 14
-          const w = 7 + (detail.at(x * 0.09 + 5, z * 0.09 + 9) - 0.5) * 3.2
+          // Two-octave ragged bank width.
+          const w = 7 + (detail.at(x * 0.09 + 5, z * 0.09 + 9) - 0.5) * 3.4
+            + (detail.at(x * 0.28 + 22, z * 0.28 + 3) - 0.5) * 1.8
           const d = Math.abs(z - (laneZ + meander))
           if (d < w) {
             const i = this.vi(c, r)
             const k = 0.5 + 0.5 * Math.cos(Math.PI * d / w)
-            this.heights[i] -= k * 1.0
+            // Uneven, churned streambed floor.
+            const rag = (detail.at(x * 0.4 + 2, z * 0.4 + 8) - 0.5) * 0.25 * k
+            this.heights[i] -= k * 1.0 + rag
             this.churn[i] = Math.max(this.churn[i], k * 0.3)
           }
         }
       }
     }
 
+    // Everything written to `churn` so far (belt + lane) is gameplay mud that
+    // should shade too; from here on crater() and spoilHeap() maintain both
+    // arrays themselves (ejecta rays go to churnVis only).
+    this.churnVis.set(this.churn)
+
     // 3) Trench lines.
     this.buildTrenchPolylines(rand)
     this.carveTrench(this.frontLine, true)
     this.carveTrench(this.supportLine, true)
     for (const line of this.commLines) this.carveTrench(line, false)
+
+    // 3b) Spoil heaps flanking each communication trench — dug-out earth thrown
+    //     to the sides. Small mounds + churn, kept low so they never wall the
+    //     corridor.
+    for (const cx of TRENCH.commTrenchXs) {
+      const nHeaps = 2 + (rand() < 0.5 ? 1 : 0)
+      for (let hIdx = 0; hIdx < nHeaps; hIdx++) {
+        const side = rand() < 0.5 ? -1 : 1
+        const hz = frontZ + 8 + rand() * (supportZ - frontZ - 16)
+        const hx = cx + side * (TRENCH.width / 2 + 1.6 + rand() * 1.4) + (rand() - 0.5) * 3
+        this.spoilHeap(hx, hz, 0.3 + rand() * 0.15, 1.6 + rand() * 0.6)
+      }
+    }
 
     // 4) Emplacement pads: flat discs behind the lines.
     const padSpots: Vec2[] = []
@@ -433,6 +540,14 @@ export class Terrain implements TerrainLike {
   private carveTrench(line: Vec2[], parapet: boolean): void {
     const halfW = TRENCH.width / 2
     const dn = this.detailNoise
+    // Full-depth floor reaches this far out before the wall ramps up.
+    const inner = halfW - 0.35
+    // Carve against a SNAPSHOT of the pre-carve surface: adjacent zigzag
+    // segments overlap near every joint, and cutting from the live heights
+    // made those cuts cumulative — measured 5-6 m pits at traverses where the
+    // sim (standSurface, slots, duckboards) assumes a uniform TRENCH.depth
+    // floor. With the snapshot, overlapping segments agree instead of adding.
+    const pre = this.heights.slice()
     for (let s = 0; s < line.length - 1; s++) {
       const a = line[s], b = line[s + 1]
       const minCol = Math.max(0, Math.floor(this.colAt(Math.min(a.x, b.x) - 5)))
@@ -452,28 +567,81 @@ export class Terrain implements TerrainLike {
           const d = Math.hypot(wx - px, wz - pz)
           const i = this.vi(c, r)
           if (d < halfW + 0.6) {
-            // Smooth-walled cut to full depth; floor gets a little trodden
-            // unevenness so duckboards don't sit on glass.
-            const k = d < halfW - 0.5 ? 1 : 1 - (d - (halfW - 0.5)) / 1.1
-            const kk = Math.max(0, Math.min(1, k))
+            // Steeper, cut wall: full depth to `inner`, then a short 0.7 m
+            // ramp raised to a convex power so the wall stays deep and the lip
+            // stays crisp (revetted, not eroded).
+            const kraw = d < inner ? 1 : 1 - (d - inner) / 0.7
+            const kk = Math.pow(Math.max(0, Math.min(1, kraw)), 0.72)
+            // Floor gets a little trodden unevenness so duckboards don't sit on
+            // glass (kept on the fire-step too).
             const rut = (dn.at(wx * 0.7 + 3.1, wz * 0.7 + 8.7) - 0.5) * 0.12 * kk
             const cut = TRENCH.depth * kk - rut
-            const target = this.heights[i] - cut
+            // NOTE: no physical fire-step. The sim already models one
+            // synthetically (ballistics.standSurface adds trenchAt*1.55 and
+            // the whole cover model is tuned against a full-depth floor);
+            // carving a real ledge double-counted and exposed crouching men.
+            const target = pre[i] - cut
             if (target < this.heights[i]) this.heights[i] = target
             this.trench[i] = Math.max(this.trench[i], kk)
-          } else if (parapet && wz < pz && d < halfW + 2.2) {
-            // Sandbag parapet lip on the enemy side — slightly lumpy, like
-            // stacked bags rather than an extruded curb.
-            const k = 1 - (d - (halfW + 0.6)) / 1.6
-            const lump = 0.8 + 0.4 * dn.at(wx * 0.9 + 13.7, wz * 0.9 + 29.3)
-            this.heights[i] += TRENCH.parapetH * Math.max(0, k) * lump
-          } else if (parapet && wz > pz && d < halfW + 1.6) {
-            // Lower parados behind.
-            const k = 1 - (d - (halfW + 0.6)) / 1.0
-            const lump = 0.85 + 0.3 * dn.at(wx * 0.9 + 51.1, wz * 0.9 + 67.9)
-            this.heights[i] += TRENCH.parapetH * 0.5 * Math.max(0, k) * lump
+          } else if (parapet && wz < pz && d < halfW + 2.4) {
+            // Sandbag parapet lip on the enemy side. Two octaves of bag
+            // lumpiness, an irregular setback so the bag line wanders, and the
+            // odd noise-thresholded gap reading as blast damage.
+            const setback = 0.65 + (dn.at(wx * 0.20 + 5.0, wz * 0.20 + 90.0) - 0.5) * 0.9
+            const k = 1 - (d - (halfW + setback)) / 1.6
+            const kc = Math.max(0, Math.min(1.1, k))
+            const l1 = dn.at(wx * 0.9 + 13.7, wz * 0.9 + 29.3)
+            const l2 = dn.at(wx * 2.4 + 2.1, wz * 2.4 + 58.4)
+            const lump = 0.68 + 0.34 * l1 + 0.2 * l2
+            const gapN = dn.at(wx * 0.14 + 120.0, wz * 0.14 + 7.0)
+            const gap = gapN < 0.3 ? 0.35 + (gapN / 0.3) * 0.65 : 1
+            // The lip is the ACTUAL small-arms cover (bullets are physical);
+            // the 0.8 floor keeps every crest at least as tall as the old
+            // uniform parapet so the visible dips never become firing holes
+            // onto crouching defenders.
+            this.heights[i] += TRENCH.parapetH * kc * Math.max(0.8, lump * gap)
+          } else if (parapet && wz > pz && d < halfW + 1.9) {
+            // Lower parados behind, same treatment at half height.
+            const setback = 0.5 + (dn.at(wx * 0.20 + 51.1, wz * 0.20 + 67.9) - 0.5) * 0.7
+            const k = 1 - (d - (halfW + setback)) / 1.05
+            const kc = Math.max(0, Math.min(1.1, k))
+            const l1 = dn.at(wx * 0.95 + 51.1, wz * 0.95 + 67.9)
+            const l2 = dn.at(wx * 2.3 + 9.4, wz * 2.3 + 21.2)
+            const lump = 0.72 + 0.3 * l1 + 0.18 * l2
+            const gapN = dn.at(wx * 0.14 + 61.0, wz * 0.14 + 88.0)
+            const gap = gapN < 0.28 ? 0.4 + (gapN / 0.28) * 0.6 : 1
+            this.heights[i] += TRENCH.parapetH * 0.5 * kc * lump * gap
           }
         }
+      }
+    }
+  }
+
+  /** A small dug-out spoil mound + local churn (deterministic surface lumps). */
+  private spoilHeap(x: number, z: number, height: number, radius: number): void {
+    const dn = this.detailNoise
+    const reach = radius * 1.5
+    const minCol = Math.max(0, Math.floor(this.colAt(x - reach)))
+    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + reach)))
+    const minRow = Math.max(0, Math.floor(this.rowAt(z - reach)))
+    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + reach)))
+    for (let r = minRow; r <= maxRow; r++) {
+      const wz = this.worldZ(r)
+      for (let c = minCol; c <= maxCol; c++) {
+        const wx = this.worldX(c)
+        const dn2 = ((wx - x) * (wx - x) + (wz - z) * (wz - z)) / (radius * radius)
+        if (dn2 > 2.25) continue
+        const i = this.vi(c, r)
+        // Never spill into a carved corridor: comm-trench doglegs wander up to
+        // ~10 m off their nominal axis, and a heap stamped on the floor walls
+        // the corridor and floats the duckboards.
+        if (this.trench[i] > 0.02) continue
+        const g = Math.exp(-dn2 * 1.8)
+        const lump = 0.8 + 0.3 * dn.at(wx * 0.8 + 17.0, wz * 0.8 + 44.0)
+        this.heights[i] += height * g * lump
+        const ch = g * 0.35
+        if (ch > this.churn[i]) this.churn[i] = ch
+        if (ch > this.churnVis[i]) this.churnVis[i] = ch
       }
     }
   }
