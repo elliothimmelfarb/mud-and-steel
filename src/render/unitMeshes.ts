@@ -101,98 +101,287 @@ function mergeGeos(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
   return out
 }
 
+// --- small builders: limbs read as cloth-wrapped octagonal (chamfered) prisms.
+// An 8-gon at soldier scale gives rounded cloth without the cost of a cylinder;
+// a slight taper sells the wrap. All limb prisms hang from the pivot at y=0. ---
+
+/** 8-gon prism hanging from the pivot (y=0) down to y=-len; rTop at the pivot,
+ *  rBot at the tip. wx/dz squash the octagon into an oval cross-section. */
+function prismDown(
+  rTop: number, rBot: number, len: number, wx = 1, dz = 1, hSeg = 1,
+): THREE.BufferGeometry {
+  const g = new THREE.CylinderGeometry(rTop, rBot, len, 8, hSeg)
+  g.rotateY(Math.PI / 8)              // a flat faces front, not an edge
+  if (wx !== 1 || dz !== 1) g.scale(wx, 1, dz)
+  g.translate(0, -len / 2, 0)
+  return g
+}
+
+/** Short 8-gon band centred at yc — puttee ridges, cuffs, belts, flares. */
+function ring8(
+  radius: number, h: number, yc: number, wx = 1, dz = 1,
+): THREE.BufferGeometry {
+  const g = new THREE.CylinderGeometry(radius, radius, h, 8, 1)
+  g.rotateY(Math.PI / 8)
+  if (wx !== 1 || dz !== 1) g.scale(wx, 1, dz)
+  g.translate(0, yc, 0)
+  return g
+}
+
+/** Upright chamfered slab (torso masses) spanning y0..y1; topR/botR taper it. */
+function column8(
+  halfX: number, halfZ: number, y0: number, y1: number, topR = 1, botR = 1,
+): THREE.BufferGeometry {
+  const len = y1 - y0
+  const g = new THREE.CylinderGeometry(topR, botR, len, 8, 1)
+  g.rotateY(Math.PI / 8)
+  g.scale(halfX, 1, halfZ)
+  g.translate(0, y0 + len / 2, 0)
+  return g
+}
+
+/** Creep mud up from the lowest vertices — grounds boots in the Flanders muck. */
+function mudFoot(g: THREE.BufferGeometry, yTop: number, yBot: number, amt: number): THREE.BufferGeometry {
+  const pos = g.getAttribute('position')
+  const col = g.getAttribute('color')
+  const span = Math.max(1e-4, yTop - yBot)
+  for (let i = 0; i < pos.count; i++) {
+    const t = Math.min(1, Math.max(0, (yTop - pos.getY(i)) / span))
+    const k = 1 - amt * t * t
+    col.setX(i, col.getX(i) * k)
+    col.setY(i, col.getY(i) * k)
+    col.setZ(i, col.getZ(i) * k)
+  }
+  return g
+}
+
+/** Thigh: cloth-wrapped octagonal prism with a breeches puff at the hip.
+ *  Hangs from the hip pivot down to the knee (-THIGH_L). */
 function thighGeo(): THREE.BufferGeometry {
-  return bake(new THREE.BoxGeometry(0.15, THIGH_L, 0.17).translate(0, -THIGH_L / 2, 0), 1, 1, 1)
+  const main = bake(prismDown(0.092, 0.078, THIGH_L, 0.84, 1.0), 1, 1, 1)
+  // Breeches overhang: a fuller band puffed out over the top of the thigh.
+  const puff = bake(ring8(0.108, 0.14, -0.075, 0.9, 1.05), 1, 1, 1)
+  return mergeGeos([main, puff])
 }
-/** Knee-to-sole: trouser, wrapped puttee, dark boot with a toe. Pivot at knee. */
+
+/** Knee-to-sole: bloused trouser, ridged puttee wrap, ammo boot with a distinct
+ *  heel block and toe cap. Pivot at the knee; sole near y=-0.485 so the standing
+ *  leg meets the ground. Boot points -z (forward). */
 function calfGeo(): THREE.BufferGeometry {
-  const trouser = bake(new THREE.BoxGeometry(0.135, 0.18, 0.155).translate(0, -0.09, 0), 1, 1, 1)
-  const puttee = bake(new THREE.BoxGeometry(0.115, 0.235, 0.135).translate(0, -0.295, 0), 0.85, 0.80, 0.66)
-  const boot = bake(new THREE.BoxGeometry(0.105, 0.10, 0.26).translate(0, -0.435, -0.045), 0.33, 0.29, 0.26)
-  return mergeGeos([trouser, puttee, boot])
+  const parts: THREE.BufferGeometry[] = []
+  const PU: [number, number, number] = [0.86, 0.80, 0.64]
+  const BOOT: [number, number, number] = [0.34, 0.30, 0.27]
+  const BOOT_D: [number, number, number] = [0.27, 0.24, 0.21]
+  // Trouser bloused over the puttee top (slight knee overhang lip).
+  parts.push(bake(prismDown(0.086, 0.07, 0.17, 0.82, 0.94), 1, 1, 1))
+  parts.push(bake(ring8(0.094, 0.045, -0.02, 0.84, 0.96), 1, 1, 1))
+  // Puttee: four shallow stacked bands with alternating radius = wrap ridges.
+  const bandY = [-0.185, -0.245, -0.305, -0.365]
+  for (let i = 0; i < 4; i++) {
+    parts.push(bake(ring8(i % 2 === 0 ? 0.074 : 0.082, 0.062, bandY[i], 0.86, 0.94), ...PU))
+  }
+  // Boot: ankle upper, sole+toe, heel block, toe cap.
+  parts.push(bake(new THREE.BoxGeometry(0.10, 0.085, 0.155).translate(0, -0.42, -0.02), ...BOOT))
+  parts.push(bake(new THREE.BoxGeometry(0.106, 0.05, 0.24).translate(0, -0.462, -0.05), ...BOOT))
+  parts.push(bake(new THREE.BoxGeometry(0.10, 0.06, 0.075).translate(0, -0.452, 0.058), ...BOOT_D))
+  parts.push(bake(new THREE.BoxGeometry(0.094, 0.05, 0.055).translate(0, -0.44, -0.148), ...BOOT_D))
+  return mudFoot(mergeGeos(parts), -0.30, -0.49, 0.42)
 }
-/** Tunic with belt, cross-straps, ammo pouches, collar. Pivot at hip. */
+
+/** Field tunic + '08 webbing: chamfered torso with a skirt flare, four pockets,
+ *  shoulder straps, cross-straps with a buckle, two rows of ammo pouches, a
+ *  water bottle on the right hip and a bayonet scabbard on the left. Pivot at
+ *  the hip, +y to the shoulders. Kit bakes drab tones over the per-team tint. */
 function torsoGeo(): THREE.BufferGeometry {
-  const chest = bake(new THREE.BoxGeometry(0.38, TORSO_H, 0.23).translate(0, TORSO_H / 2, 0), 1, 1, 1)
-  const belt = bake(new THREE.BoxGeometry(0.40, 0.07, 0.25).translate(0, 0.16, 0), 0.52, 0.49, 0.42)
-  const strapL = bake(new THREE.BoxGeometry(0.075, 0.34, 0.016).translate(-0.10, 0.37, -0.122), 0.62, 0.58, 0.48)
-  const strapR = bake(new THREE.BoxGeometry(0.075, 0.34, 0.016).translate(0.10, 0.37, -0.122), 0.62, 0.58, 0.48)
-  const pouchL = bake(new THREE.BoxGeometry(0.09, 0.10, 0.05).translate(-0.10, 0.245, -0.135), 0.80, 0.76, 0.62)
-  const pouchR = bake(new THREE.BoxGeometry(0.09, 0.10, 0.05).translate(0.10, 0.245, -0.135), 0.80, 0.76, 0.62)
-  const collar = bake(new THREE.BoxGeometry(0.20, 0.05, 0.16).translate(0, TORSO_H + 0.005, -0.01), 0.90, 0.87, 0.78)
-  return mergeGeos([chest, belt, strapL, strapR, pouchL, pouchR, collar])
+  const parts: THREE.BufferGeometry[] = []
+  const WEB: [number, number, number] = [0.60, 0.57, 0.47]
+  const WEB_D: [number, number, number] = [0.48, 0.45, 0.38]
+  const POUCH: [number, number, number] = [0.72, 0.68, 0.55]
+  const FLAP: [number, number, number] = [0.90, 0.87, 0.78]
+  const LEATHER: [number, number, number] = [0.40, 0.34, 0.27]
+  // Main tunic mass (chamfered slab, chest a touch wider than the waist).
+  parts.push(bake(column8(0.195, 0.118, 0.05, 0.52, 1.06, 0.94), 1, 1, 1))
+  // Tunic skirt flaring below the belt.
+  parts.push(bake(column8(0.198, 0.122, 0.0, 0.17, 0.92, 1.06), 1, 1, 1))
+  // Belt.
+  parts.push(bake(ring8(1, 0.055, 0.155, 0.205, 0.128), ...LEATHER))
+  // Collar.
+  parts.push(bake(new THREE.BoxGeometry(0.20, 0.05, 0.17).translate(0, TORSO_H + 0.005, -0.005), ...FLAP))
+  // Shoulder straps.
+  parts.push(bake(new THREE.BoxGeometry(0.055, 0.022, 0.15).translate(-0.135, 0.505, -0.01), ...FLAP))
+  parts.push(bake(new THREE.BoxGeometry(0.055, 0.022, 0.15).translate(0.135, 0.505, -0.01), ...FLAP))
+  // Breast + skirt pockets (front is -z).
+  const pk = (x: number, y: number): THREE.BufferGeometry =>
+    bake(new THREE.BoxGeometry(0.10, 0.11, 0.035).translate(x, y, -0.118), ...FLAP)
+  parts.push(pk(-0.105, 0.365), pk(0.105, 0.365), pk(-0.115, 0.075), pk(0.115, 0.075))
+  // Cross-straps over the chest (X) with a buckle where they meet.
+  const sL = new THREE.BoxGeometry(0.05, 0.44, 0.02); sL.rotateZ(0.62); sL.translate(0, 0.33, -0.125)
+  const sR = new THREE.BoxGeometry(0.05, 0.44, 0.02); sR.rotateZ(-0.62); sR.translate(0, 0.33, -0.125)
+  parts.push(bake(sL, ...WEB), bake(sR, ...WEB))
+  parts.push(bake(new THREE.BoxGeometry(0.05, 0.045, 0.025).translate(0, 0.33, -0.132), ...WEB_D))
+  // Ammo pouches: two rows of three across the chest.
+  for (let r = 0; r < 2; r++) {
+    for (let c = -1; c <= 1; c++) {
+      parts.push(bake(
+        new THREE.BoxGeometry(0.072, 0.07, 0.045).translate(c * 0.088, 0.30 - r * 0.085, -0.14),
+        ...POUCH))
+    }
+  }
+  // Water bottle on the right hip (+x).
+  const wb = new THREE.CylinderGeometry(0.052, 0.052, 0.10, 8); wb.rotateY(Math.PI / 8)
+  wb.translate(0.198, 0.12, 0.03)
+  parts.push(bake(wb, 0.66, 0.62, 0.50))
+  const cap = new THREE.CylinderGeometry(0.03, 0.03, 0.02, 6); cap.rotateY(Math.PI / 6)
+  cap.translate(0.198, 0.175, 0.03)
+  parts.push(bake(cap, ...WEB_D))
+  // Bayonet scabbard hanging at the left hip (-x).
+  const sc = new THREE.BoxGeometry(0.028, 0.32, 0.04); sc.rotateX(-0.12); sc.translate(-0.185, -0.01, 0.06)
+  parts.push(bake(sc, ...LEATHER))
+  parts.push(bake(new THREE.BoxGeometry(0.04, 0.05, 0.05).translate(-0.185, 0.15, 0.045), ...WEB_D))
+  return mergeGeos(parts)
 }
+
+/** Head: cranium with a narrowed jaw + chin hint and a neck stub so the helmet
+ *  doesn't float. Bakes ~white; the instance color supplies skin/mask tone,
+ *  the neck a touch darker for the shadow under the jaw. */
 function headGeo(): THREE.BufferGeometry {
-  const g = new THREE.SphereGeometry(0.095, 8, 6)
-  g.scale(0.92, 1.02, 0.98)
-  return bake(g, 1, 1, 1)
+  const parts: THREE.BufferGeometry[] = []
+  const cranium = new THREE.SphereGeometry(0.093, 8, 6)
+  cranium.scale(0.95, 1.0, 0.98); cranium.translate(0, 0.015, 0)
+  parts.push(bake(cranium, 1, 1, 1))
+  // Jaw: narrower lower block pushed slightly forward (front is -z).
+  parts.push(bake(new THREE.BoxGeometry(0.12, 0.075, 0.13).translate(0, -0.058, -0.012), 1, 1, 1))
+  // Chin.
+  parts.push(bake(new THREE.BoxGeometry(0.055, 0.04, 0.045).translate(0, -0.088, -0.055), 1, 1, 1))
+  // Neck stub toward the collar.
+  const neck = new THREE.CylinderGeometry(0.05, 0.055, 0.10, 8); neck.rotateY(Math.PI / 8)
+  neck.translate(0, -0.075, 0.005)
+  parts.push(bake(neck, 0.82, 0.80, 0.78))
+  return mergeGeos(parts)
 }
-/** Brodie: shallow flattened bowl over a wide flat brim. Shares the head matrix. */
+
+/** Brodie: a wide, thin brim under a shallow bowl with a tiny top boss.
+ *  Shares the head matrix. */
 function helmetBritGeo(): THREE.BufferGeometry {
-  const bowl = new THREE.SphereGeometry(0.115, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.42)
-  bowl.scale(1, 0.60, 1)
-  bowl.translate(0, 0.032, 0)
-  const brim = new THREE.CylinderGeometry(0.178, 0.192, 0.016, 14)
-  brim.translate(0, 0.044, 0)
-  return mergeGeos([bake(bowl, 1, 1, 1), bake(brim, 0.92, 0.92, 0.92)])
+  // Deep enough to clear the cranium crown (head yMax 0.108): rim tucks under the
+  // brim (~0.039) while the bowl top reaches ~0.120 so no skull pokes through.
+  const bowl = new THREE.SphereGeometry(0.115, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.46)
+  bowl.scale(1, 0.80, 1); bowl.translate(0, 0.028, 0)
+  // Broad thin brim, edge angled down a hair (topR < botR).
+  const brim = new THREE.CylinderGeometry(0.188, 0.198, 0.012, 16); brim.translate(0, 0.04, 0)
+  const boss = new THREE.CylinderGeometry(0.016, 0.02, 0.014, 8); boss.translate(0, 0.122, 0)
+  return mergeGeos([bake(bowl, 1, 1, 1), bake(brim, 0.94, 0.94, 0.94), bake(boss, 0.90, 0.90, 0.90)])
 }
-/** Stahlhelm: deep dome, flared ear/neck skirt, small front visor lip. */
+
+/** Stahlhelm: a deep dome dropped at the back, a flared ear/neck skirt, a front
+ *  visor lip and the two signature side lugs. */
 function helmetGermanGeo(): THREE.BufferGeometry {
-  const dome = new THREE.SphereGeometry(0.118, 12, 7, 0, Math.PI * 2, 0, Math.PI * 0.55)
-  dome.scale(1, 0.88, 1.06)
-  dome.translate(0, 0.042, 0.005)
-  const skirt = new THREE.CylinderGeometry(0.128, 0.158, 0.055, 12)
-  skirt.scale(1, 1, 1.12)
-  skirt.translate(0, -0.004, 0.008)
-  const visor = new THREE.BoxGeometry(0.13, 0.014, 0.05)
-  visor.translate(0, 0.014, -0.148)
-  return mergeGeos([bake(dome, 1, 1, 1), bake(skirt, 0.95, 0.95, 0.95), bake(visor, 0.90, 0.90, 0.90)])
+  const dome = new THREE.SphereGeometry(0.116, 12, 7, 0, Math.PI * 2, 0, Math.PI * 0.56)
+  dome.scale(1, 0.90, 1.05); dome.translate(0, 0.04, 0.008)
+  // Flared skirt, deeper at the back (+z) for the neck guard.
+  const skirt = new THREE.CylinderGeometry(0.122, 0.156, 0.06, 14)
+  skirt.scale(1, 1, 1.14); skirt.translate(0, -0.01, 0.012)
+  const visor = new THREE.BoxGeometry(0.15, 0.016, 0.055); visor.translate(0, 0.012, -0.15)
+  // Ventilation lugs sticking out either side.
+  const lugL = new THREE.CylinderGeometry(0.014, 0.014, 0.03, 6); lugL.rotateZ(Math.PI / 2); lugL.translate(-0.14, 0.03, 0.01)
+  const lugR = new THREE.CylinderGeometry(0.014, 0.014, 0.03, 6); lugR.rotateZ(Math.PI / 2); lugR.translate(0.14, 0.03, 0.01)
+  return mergeGeos([
+    bake(dome, 1, 1, 1), bake(skirt, 0.96, 0.96, 0.96), bake(visor, 0.92, 0.92, 0.92),
+    bake(lugL, 0.78, 0.78, 0.78), bake(lugR, 0.78, 0.78, 0.78),
+  ])
 }
+
+/** Upper sleeve: cloth-wrapped octagonal prism, slight taper to the elbow. */
 function armUpGeo(): THREE.BufferGeometry {
-  return bake(new THREE.BoxGeometry(0.105, UPARM_L, 0.115).translate(0, -UPARM_L / 2, 0), 1, 1, 1)
+  return bake(prismDown(0.058, 0.052, UPARM_L, 0.95, 1.05), 1, 1, 1)
 }
-/** Sleeve with a bare hand at the wrist. Pivot at elbow. */
+
+/** Forearm sleeve tapering to a rolled cuff, then a bare fist at the wrist.
+ *  The fist bakes warm (>1) so the drab team instance color still reads skin. */
 function armLoGeo(): THREE.BufferGeometry {
-  const sleeve = bake(new THREE.BoxGeometry(0.09, 0.24, 0.10).translate(0, -0.12, 0), 1, 1, 1)
-  // Hand tone bakes >1 so multiplying by the drab uniform instance color
-  // still lands on a skin-ish tan.
-  const hand = bake(new THREE.BoxGeometry(0.055, 0.075, 0.06).translate(0, -0.275, 0), 1.55, 1.30, 1.05)
-  return mergeGeos([sleeve, hand])
+  const parts: THREE.BufferGeometry[] = []
+  parts.push(bake(prismDown(0.052, 0.042, 0.235, 0.95, 1.02), 1, 1, 1))
+  parts.push(bake(ring8(0.05, 0.03, -0.225, 0.98, 1.05), 0.92, 0.90, 0.82))
+  const fist = new THREE.SphereGeometry(0.045, 6, 5); fist.scale(0.9, 0.95, 1.05); fist.translate(0, -0.275, 0.005)
+  parts.push(bake(fist, 1.55, 1.30, 1.05))
+  return mergeGeos(parts)
 }
+
 /**
- * SMLE-ish rifle, muzzle toward -z, pivot at the receiver: full wood stock,
- * dropped butt, exposed barrel + front sight, receiver with a bolt handle
- * sticking right, box magazine. Real colors are baked (wood/dark metal);
- * the instance color stays near-white.
+ * SMLE, muzzle toward -z, pivot at the receiver: full wood stock with a dropped
+ * butt and metal butt plate, barrel with a nose cap at the muzzle, receiver with
+ * a right-side bolt handle knob, pronounced box magazine, trigger-guard loop,
+ * front blade + rear leaf sights, and a leather sling down the left side. Real
+ * wood/metal/leather tones are baked; the instance color stays near-white.
  */
 function rifleGeo(): THREE.BufferGeometry {
   const WOOD: [number, number, number] = [0.36, 0.26, 0.16]
   const METAL: [number, number, number] = [0.30, 0.31, 0.34]
-  const forestock = bake(new THREE.BoxGeometry(0.05, 0.06, 0.72).translate(0, -0.005, -0.30), ...WOOD)
-  const buttG = new THREE.BoxGeometry(0.05, 0.095, 0.30)
-  buttG.rotateX(0.12)
-  buttG.translate(0, -0.022, 0.24)
-  const butt = bake(buttG, ...WOOD)
-  const barrelG = new THREE.CylinderGeometry(0.016, 0.016, 0.30, 6)
-  barrelG.rotateX(Math.PI / 2)
-  barrelG.translate(0, 0.012, -0.60)
-  const barrel = bake(barrelG, ...METAL)
-  const receiver = bake(new THREE.BoxGeometry(0.055, 0.075, 0.16).translate(0, 0.005, 0.02), ...METAL)
-  const bolt = bake(new THREE.BoxGeometry(0.06, 0.022, 0.022).translate(0.05, 0.02, 0.045), ...METAL)
-  const mag = bake(new THREE.BoxGeometry(0.035, 0.07, 0.10).translate(0, -0.065, -0.02), ...METAL)
-  const sightF = bake(new THREE.BoxGeometry(0.012, 0.035, 0.02).translate(0, 0.035, -0.73), ...METAL)
-  const sightR = bake(new THREE.BoxGeometry(0.04, 0.02, 0.02).translate(0, 0.048, -0.06), ...METAL)
-  return mergeGeos([forestock, butt, barrel, receiver, bolt, mag, sightF, sightR])
+  const METAL_D: [number, number, number] = [0.20, 0.21, 0.23]
+  const LEATHER: [number, number, number] = [0.30, 0.22, 0.14]
+  const parts: THREE.BufferGeometry[] = []
+  // Wood: forestock + dropped butt with a metal butt plate.
+  parts.push(bake(new THREE.BoxGeometry(0.05, 0.062, 0.72).translate(0, -0.005, -0.30), ...WOOD))
+  const butt = new THREE.BoxGeometry(0.052, 0.098, 0.30); butt.rotateX(0.12); butt.translate(0, -0.024, 0.24)
+  parts.push(bake(butt, ...WOOD))
+  const plate = new THREE.BoxGeometry(0.05, 0.10, 0.02); plate.rotateX(0.12); plate.translate(0, -0.041, 0.392)
+  parts.push(bake(plate, ...METAL_D))
+  // Barrel + nose cap at the muzzle.
+  const barrel = new THREE.CylinderGeometry(0.015, 0.016, 0.30, 8); barrel.rotateX(Math.PI / 2); barrel.translate(0, 0.012, -0.60)
+  parts.push(bake(barrel, ...METAL))
+  parts.push(bake(new THREE.BoxGeometry(0.042, 0.05, 0.06).translate(0, 0.008, -0.72), ...METAL_D))
+  // Receiver, pronounced magazine.
+  parts.push(bake(new THREE.BoxGeometry(0.056, 0.078, 0.17).translate(0, 0.006, 0.02), ...METAL))
+  parts.push(bake(new THREE.BoxGeometry(0.045, 0.09, 0.11).translate(0, -0.072, -0.02), ...METAL_D))
+  // Trigger-guard loop + trigger.
+  const guard = new THREE.TorusGeometry(0.024, 0.005, 4, 10); guard.rotateY(Math.PI / 2); guard.translate(0, -0.05, 0.0)
+  parts.push(bake(guard, ...METAL_D))
+  parts.push(bake(new THREE.BoxGeometry(0.012, 0.03, 0.012).translate(0, -0.045, 0.0), ...METAL_D))
+  // Bolt: stub + spherical handle knob on the right (+x).
+  parts.push(bake(new THREE.BoxGeometry(0.055, 0.02, 0.02).translate(0.05, 0.022, 0.05), ...METAL))
+  const knob = new THREE.SphereGeometry(0.016, 6, 5); knob.translate(0.082, 0.022, 0.05)
+  parts.push(bake(knob, ...METAL))
+  // Sights: front blade + rear leaf.
+  parts.push(bake(new THREE.BoxGeometry(0.012, 0.035, 0.02).translate(0, 0.036, -0.73), ...METAL_D))
+  parts.push(bake(new THREE.BoxGeometry(0.045, 0.028, 0.014).translate(0, 0.05, -0.06), ...METAL_D))
+  // Sling: thin flat strap down the left (-x) side, stock to forestock.
+  const sling = new THREE.BoxGeometry(0.008, 0.05, 0.66); sling.rotateX(0.02); sling.translate(-0.03, -0.055, -0.14)
+  parts.push(bake(sling, ...LEATHER))
+  return mergeGeos(parts)
 }
-/** Pack with a blanket roll on top and a mess tin strapped to the back. */
+
+/** Large pack: canvas satchel, blanket roll on top, rolled groundsheet beneath,
+ *  mess tin + entrenching-tool head & helve on the rear face, strap ridges and a
+ *  respirator satchel on top. Instance color is the drab pack tone; kit bakes
+ *  cooler (steel) or warmer (wood) offsets over it. Outer face is +z. */
 function packGeo(): THREE.BufferGeometry {
-  const main = bake(new THREE.BoxGeometry(0.30, 0.30, 0.14), 1, 1, 1)
-  const rollG = new THREE.CylinderGeometry(0.055, 0.055, 0.34, 7)
-  rollG.rotateZ(Math.PI / 2)
-  rollG.translate(0, 0.19, 0)
-  const roll = bake(rollG, 0.82, 0.76, 0.62)
-  const tin = bake(new THREE.BoxGeometry(0.13, 0.13, 0.035).translate(0, -0.01, 0.085), 0.60, 0.60, 0.55)
-  return mergeGeos([main, roll, tin])
+  const parts: THREE.BufferGeometry[] = []
+  const CANVAS: [number, number, number] = [0.95, 0.90, 0.78]
+  const STRAP: [number, number, number] = [0.66, 0.60, 0.50]
+  const STEEL: [number, number, number] = [0.90, 1.00, 1.50]
+  const WOOD: [number, number, number] = [1.35, 1.05, 0.72]
+  // Main body.
+  parts.push(bake(new THREE.BoxGeometry(0.30, 0.30, 0.14), 1, 1, 1))
+  // Blanket roll on top (horizontal cylinder along x).
+  const roll = new THREE.CylinderGeometry(0.055, 0.055, 0.34, 8); roll.rotateZ(Math.PI / 2); roll.translate(0, 0.185, 0.0)
+  parts.push(bake(roll, ...CANVAS))
+  // Rolled groundsheet beneath the pack.
+  const ground = new THREE.CylinderGeometry(0.05, 0.05, 0.32, 8); ground.rotateZ(Math.PI / 2); ground.translate(0, -0.185, 0.01)
+  parts.push(bake(ground, 0.80, 0.78, 0.68))
+  // Mess tin on the rear face.
+  parts.push(bake(new THREE.BoxGeometry(0.14, 0.13, 0.035).translate(0.0, -0.02, 0.09), ...STEEL))
+  // Entrenching-tool head (T) on the rear face.
+  parts.push(bake(new THREE.BoxGeometry(0.13, 0.045, 0.03).translate(0.02, 0.10, 0.085), ...STEEL))
+  parts.push(bake(new THREE.BoxGeometry(0.03, 0.10, 0.03).translate(0.02, 0.05, 0.085), ...STEEL))
+  // Entrenching-tool helve strapped diagonally.
+  const helve = new THREE.CylinderGeometry(0.014, 0.014, 0.30, 6); helve.rotateZ(0.5); helve.translate(-0.02, -0.02, 0.082)
+  parts.push(bake(helve, ...WOOD))
+  // Strap ridges over the rolls.
+  parts.push(bake(new THREE.BoxGeometry(0.03, 0.34, 0.02).translate(-0.09, 0.0, 0.075), ...STRAP))
+  parts.push(bake(new THREE.BoxGeometry(0.03, 0.34, 0.02).translate(0.09, 0.0, 0.075), ...STRAP))
+  // Respirator satchel perched on top.
+  parts.push(bake(new THREE.BoxGeometry(0.16, 0.09, 0.07).translate(-0.02, 0.27, 0.02), 0.90, 0.88, 0.80))
+  return mergeGeos(parts)
 }
 
 // ---------------------------------------------------------------------------

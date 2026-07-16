@@ -33,6 +33,7 @@ import { SoldierRenderer, type SoldierPose } from '../render/unitMeshes'
 import { WEAPON_PROFILES, setViewmodelEmissive } from './weapons'
 import { Terrain } from '../world/terrain'
 import { TerrainMesh } from '../world/terrainMesh'
+import { Scenery } from '../render/scenery'
 import type { UnitKindId } from '../core/types'
 
 // ---------------------------------------------------------------------------
@@ -232,6 +233,7 @@ export function startModelGallery(app: HTMLElement): void {
   // Terrain diorama, built lazily on first request.
   let terrain: Terrain | null = null
   let terrainMesh: TerrainMesh | null = null
+  let terrainDressing: THREE.Group | null = null
   let terrainWet = 0
   const ensureTerrain = (): void => {
     if (terrain) return
@@ -239,6 +241,21 @@ export function startModelGallery(app: HTMLElement): void {
     terrainMesh = new TerrainMesh(terrain)
     terrainMesh.mesh.visible = false
     scene.add(terrainMesh.mesh)
+    // Dress the diorama: trees, ruins, defences and the instanced ground clutter.
+    // Scenery adds all of that (plus the frustumCulled=false clutter meshes, which
+    // always render) straight onto the scene, so collect everything it adds into
+    // one group we can hide alongside terrainMesh — otherwise the battlefield
+    // dressing would stay visible over every other exhibit and the contact sheet.
+    // Scenery's live-sync pools start at count=0 and are never synced here, so the
+    // static dressing is all that shows.
+    const before = new Set(scene.children)
+    new Scenery(scene, terrain, 115599)
+    terrainDressing = new THREE.Group()
+    for (const child of scene.children.slice()) {
+      if (!before.has(child)) terrainDressing.add(child) // reparents off the scene root
+    }
+    terrainDressing.visible = false
+    scene.add(terrainDressing)
   }
 
   // -- orbit camera -----------------------------------------------------------
@@ -326,6 +343,7 @@ export function startModelGallery(app: HTMLElement): void {
     for (const s of labels) s.visible = false
     soldiersVisible = false
     if (terrainMesh) terrainMesh.mesh.visible = false
+    if (terrainDressing) terrainDressing.visible = false
     floor.visible = true
   }
 
@@ -335,6 +353,7 @@ export function startModelGallery(app: HTMLElement): void {
       hideAll()
       ensureTerrain()
       if (terrainMesh) terrainMesh.mesh.visible = true
+      if (terrainDressing) terrainDressing.visible = true
       floor.visible = false
       terrainWet = tv.wet
       camera.position.set(...tv.pos)
@@ -391,7 +410,7 @@ export function startModelGallery(app: HTMLElement): void {
     for (const s of labels) s.visible = true
     const rows = Math.ceil((items.length + 1) / SHEET_COLS)
     orbit.target.set(0, 0, 0)
-    orbit.dist = Math.max(SHEET_COLS, rows) * SHEET_CELL * 1.15
+    orbit.dist = Math.max(SHEET_COLS, rows) * SHEET_CELL * 0.92
     orbit.yaw = 0
     orbit.pitch = -0.72
     applyOrbit()

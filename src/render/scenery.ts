@@ -15,6 +15,7 @@ import {
   sandbagGeometry, stakeGeometry, tankTrapGeometry, wireCoilGeometry, wirePostGeometry,
   PALETTE,
 } from './props'
+import { dressClutter } from './clutter'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -76,6 +77,10 @@ export class Scenery {
       tree.castShadow = true
       this.scene.add(tree)
     }
+
+    // Instanced ground clutter: grass, stones, battle debris, spent brass. Uses
+    // its own 'clutter' stream so it's stable regardless of the dressing above.
+    dressClutter(this.scene, t, seed)
 
     // Ruined farm + church, mid-field landmarks.
     const ruin1 = buildRuin(rand)

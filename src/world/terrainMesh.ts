@@ -25,6 +25,12 @@ const PALETTE = {
   scorch: v3(new THREE.Color(0x251f18)),     // burnt shell scorch
   trenchFloor: v3(new THREE.Color(0x3a3123)),
   water: v3(new THREE.Color(0x333f37)),      // murky green-brown standing water
+  plankLight: v3(new THREE.Color(0x6f5636)), // revetment board — weathered pale brown
+  plankDark: v3(new THREE.Color(0x4a3826)),  // revetment board — darker brown
+  tuft: v3(new THREE.Color(0x8f9a48)),        // brighter yellow-green grass fleck
+  ash: v3(new THREE.Color(0x726a5c)),         // pale ash speck in scorch cores
+  oxide: v3(new THREE.Color(0x5c3120)),       // reddish oxide ring around scorch
+  foam: v3(new THREE.Color(0x7c7c6e)),        // pale scum/foam rim on water margins
 }
 
 export class TerrainMesh {
@@ -86,14 +92,17 @@ export class TerrainMesh {
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>
           attribute float aChurn; attribute float aTrench; attribute float aWater; attribute float aAO;
-          varying float vChurn; varying float vTrench; varying float vWater; varying float vAO; varying vec3 vWpos;`)
+          varying float vChurn; varying float vTrench; varying float vWater; varying float vAO; varying vec3 vWpos;
+          varying vec3 vWorldNormal;`)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
           vChurn = aChurn; vTrench = aTrench; vWater = aWater; vAO = aAO;
-          vWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;`)
+          vWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+          vWorldNormal = normalize(mat3(modelMatrix) * normal);`)
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uWet; uniform float uTime;
           varying float vChurn; varying float vTrench; varying float vWater; varying float vAO; varying vec3 vWpos;
+          varying vec3 vWorldNormal;
 
           // Seamless procedural ground noise (Hoskins hash — no sin precision
           // issues, no texture wrap seams).
@@ -117,7 +126,7 @@ export class TerrainMesh {
 
           // Cross-chunk scratch (set in the color pass, reused for roughness
           // and normal detail).
-          float gFine; float gMicro; float gPit; float gMud; float gWaterMix;`)
+          float gFine; float gMicro; float gPit; float gMud; float gWaterMix; float gRevet;`)
         .replace('#include <color_fragment>', `#include <color_fragment>
           {
             vec2 wp = vWpos.xz;
@@ -140,6 +149,16 @@ export class TerrainMesh {
             vec3 grass = mix(${PALETTE.grassDry}, ${PALETTE.grassGreen},
               clamp(macro * 1.2 - 0.08 + (meso - 0.5) * 0.4, 0.0, 1.0));
             grass *= 0.86 + fine * 0.2 + (micro - 0.5) * 0.14;
+            // Very-low-frequency patch drift so whole fields are not uniform.
+            float patchDrift = msFbm(wp * 0.031 + 61.2);
+            grass *= 0.95 + patchDrift * 0.1;
+            // Sparse tuft speckle: high-frequency flecks brighten/saturate grass
+            // toward yellow-green, only on clean ground, fading out by ~45 m.
+            float tuftFade = 1.0 - smoothstep(30.0, 45.0, dist);
+            float tuftClean = (1.0 - clamp(vChurn * 2.0, 0.0, 1.0)) * (1.0 - clamp(vWater * 4.0, 0.0, 1.0));
+            float tuftN = msNoise(wp * 8.9 + 51.4) * (0.55 + 0.45 * msNoise(wp * 1.7 + 12.9));
+            float tuftAmt = smoothstep(0.58, 0.82, tuftN) * tuftFade * tuftClean;
+            grass = mix(grass, ${PALETTE.tuft}, tuftAmt * 0.3);
 
             // Mud: wetness drags it dark and saturated; dry mud bleaches pale.
             float dry = clamp(0.28 + meso * 0.8 + (fine - 0.5) * 0.42 - uWet * 0.62, 0.0, 1.0);
@@ -153,10 +172,46 @@ export class TerrainMesh {
             // Thrown-up pale subsoil on crater rims and parapets.
             col = mix(col, ${PALETTE.earthPale} * (0.88 + fine * 0.22),
               clamp(crest * (0.5 + vChurn * 0.7), 0.0, 0.85));
+            // Reddish oxide ring in the transition between churned mud and scorch.
+            float oxide = smoothstep(0.40, 0.62, vChurn) * (1.0 - smoothstep(0.66, 0.84, vChurn));
+            col = mix(col, ${PALETTE.oxide}, oxide * 0.38);
             // Scorch where the ground is churned to ruin.
-            col = mix(col, ${PALETTE.scorch}, clamp(vChurn * vChurn * 1.25, 0.0, 1.0) * (0.5 + fine * 0.32));
+            float scorchAmt = clamp(vChurn * vChurn * 1.25, 0.0, 1.0);
+            col = mix(col, ${PALETTE.scorch}, scorchAmt * (0.5 + fine * 0.32));
+            // Pale ash flecks scattered through the scorch core.
+            float ashFleck = smoothstep(0.70, 0.86, micro);
+            col = mix(col, ${PALETTE.ash}, ashFleck * scorchAmt * 0.45);
+            // Clod shadow speckle on churned mud (close range only, stronger than
+            // the uniform micro grain so ruts read as broken earth up close).
+            float clodFade = 1.0 - smoothstep(16.0, 52.0, dist);
+            float clod = smoothstep(0.52, 0.78, micro);
+            col *= 1.0 - clod * mudMix * clodFade * 0.34;
             // Trodden trench floors.
             col = mix(col, ${PALETTE.trenchFloor} * (0.85 + fine * 0.3), vTrench * 0.62);
+            // Trench revetment: horizontal plank banding on the steep trench walls
+            // (floors stay trodden — they are flat, so steepness gates them out).
+            float steep = 1.0 - smoothstep(0.45, 0.75, vWorldNormal.y);
+            float revet = clamp(vTrench * 2.0 - 0.9, 0.0, 1.0) * steep;
+            gRevet = revet;
+            if (revet > 0.001) {
+              float plankPhase = vWpos.y * 3.5714286;   // ~0.28 m board pitch
+              float plankId = floor(plankPhase);
+              float plankFrac = fract(plankPhase);
+              float woodSel = mod(plankId, 2.0);
+              vec3 plank = mix(${PALETTE.plankLight}, ${PALETTE.plankDark}, woodSel);
+              plank *= 0.82 + fine * 0.28 + (micro - 0.5) * 0.18;
+              // Dark groove between adjacent boards.
+              float groove = smoothstep(0.0, 0.10, plankFrac) * (1.0 - smoothstep(0.90, 1.0, plankFrac));
+              plank *= 0.58 + 0.42 * groove;
+              // Vertical post uprights every ~1.6 m along the trench-running axis
+              // (whichever world axis carries the larger trench component).
+              float postCoord = abs(vWorldNormal.x) > abs(vWorldNormal.z) ? vWpos.z : vWpos.x;
+              float postFrac = fract(postCoord * 0.625);   // ~1.6 m post spacing
+              float postEdge = min(postFrac, 1.0 - postFrac);
+              float post = 1.0 - smoothstep(0.05, 0.12, postEdge);
+              plank = mix(plank, ${PALETTE.plankDark} * 0.72, post * 0.6);
+              col = mix(col, plank, revet);
+            }
             // Concavity AO: pits and trench bottoms shade down (deeper when wet).
             col *= 1.0 - pit * (0.34 + uWet * 0.2);
 
@@ -166,8 +221,16 @@ export class TerrainMesh {
             gWaterMix = wtr;
             col *= 1.0 - smoothstep(0.02, 0.3, wtr) * (1.0 - wtr) * 0.35;
             float shim = sin(wp.x * 2.1 + uTime * 0.6) * sin(wp.y * 2.7 - uTime * 0.45) * 0.5 + 0.5;
+            // Grazing-angle fresnel-ish brightening from the world-space view vector.
+            vec3 viewDirW = normalize(cameraPosition - vWpos);
+            float wfres = pow(1.0 - clamp(viewDirW.y, 0.0, 1.0), 4.0);
             vec3 waterCol = ${PALETTE.water} * (0.82 + shim * 0.12 + meso * 0.14);
+            waterCol *= 1.0 + wfres * 0.4;
             col = mix(col, waterCol, wtr * 0.92);
+            // Pale scum/foam rim where the water depth crosses the shallow margin.
+            float foamRim = smoothstep(0.06, 0.14, vWater) - smoothstep(0.16, 0.26, vWater);
+            foamRim = clamp(foamRim, 0.0, 1.0);
+            col = mix(col, ${PALETTE.foam}, foamRim * 0.5);
             // Damp sheen darkening on wet churned ground.
             col *= 1.0 - uWet * 0.15 * vChurn * (1.0 - wtr);
             diffuseColor.rgb = col;
@@ -175,7 +238,22 @@ export class TerrainMesh {
         .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
           // Dry ground micro variation, rain slick on churned mud, mirror pools.
           roughnessFactor -= (gFine - 0.5) * 0.1 + (gMicro - 0.5) * 0.06;
-          roughnessFactor = mix(roughnessFactor, 0.38, clamp(uWet * (0.25 + vChurn * 0.75 + gPit * 0.35), 0.0, 1.0));
+          {
+            // Anisotropic wet sheen: stretch the roughness reduction along the
+            // downhill direction (from the world normal xz) so wet churn glints
+            // in streaks running downslope, not as a uniform wash.
+            float wetAmt = clamp(uWet * (0.25 + vChurn * 0.75 + gPit * 0.35), 0.0, 1.0);
+            vec2 downh = vWorldNormal.xz;
+            float dhl = length(downh);
+            if (dhl > 0.0015) {
+              vec2 dh = downh / dhl;
+              vec2 perp = vec2(-dh.y, dh.x);
+              vec2 ap = vec2(dot(vWpos.xz, perp) * 2.7, dot(vWpos.xz, dh) * 0.5) + 13.0;
+              float streak = msNoise(ap);
+              wetAmt *= 0.5 + 0.85 * smoothstep(0.34, 0.74, streak);
+            }
+            roughnessFactor = mix(roughnessFactor, 0.32, clamp(wetAmt, 0.0, 1.0));
+          }
           roughnessFactor = mix(roughnessFactor, 0.09, gWaterMix);
           roughnessFactor = clamp(roughnessFactor, 0.05, 1.0);`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -202,6 +280,14 @@ export class TerrainMesh {
               float rip = sin(vWpos.x * 1.4 + uTime * 1.1) * sin(vWpos.z * 1.1 - uTime * 0.8);
               vec3 flat_ = (viewMatrix * vec4(rip * 0.02, 1.0, -rip * 0.016, 0.0)).xyz;
               normal = normalize(mix(normal, normalize(flat_), gWaterMix * 0.75));
+            }
+            // Revetment plank ripple: rounded boards tilt up/down across each
+            // ~0.28 m band so horizontal planking catches the light.
+            if (gRevet > 0.01) {
+              float pf = vWpos.y * 3.5714286;
+              float boardRip = sin(pf * 6.2831853);
+              vec3 tilt = (viewMatrix * vec4(0.0, boardRip * gRevet * 0.25, 0.0, 0.0)).xyz;
+              normal = normalize(normal + tilt);
             }
           }`)
     }
