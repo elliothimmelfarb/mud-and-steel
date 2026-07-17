@@ -315,6 +315,111 @@ export function sandbagGeometry(): THREE.BufferGeometry {
 }
 
 // ---------------------------------------------------------------------------
+// Trench revetment — sandbag courses and plank walls that line the trench
+// ---------------------------------------------------------------------------
+
+/** One low-poly sandbag (~70 tris) for stacked courses; centred, resting on y=0. */
+function lowSandbag(rand: () => number, _hex: number): THREE.BufferGeometry {
+  const bag = new THREE.SphereGeometry(0.27, 7, 5)
+  bag.scale(1.2 + rand() * 0.15, 0.6, 0.82)
+  const pos = bag.getAttribute('position')
+  for (let i = 0; i < pos.count; i++) {
+    let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i)
+    const fold = 0.05 * Math.sin(x * 5 + z * 3 + rand() * 0.01)
+    x *= 1 + fold; z *= 1 + fold
+    pos.setXYZ(i, x, y, z)
+  }
+  pos.needsUpdate = true
+  bag.computeVertexNormals()
+  bag.rotateY((rand() - 0.5) * 0.5)
+  bag.translate(0, 0.16, 0)
+  return bag
+}
+
+/**
+ * A ~2.3 m run of sandbag revetment — two staggered courses of bags, laid as a
+ * parapet cap. Bags carry per-bag scale/rotation/tone jitter so a long wall of
+ * these instances never reads cloned. Local +X runs along the wall, bags face
+ * outward; the course rests on y=0. ~9 bags, ~640 tris (instances cheaply).
+ */
+export function sandbagCourseGeometry(): THREE.BufferGeometry {
+  const rand = localRand(0x51a7c3)
+  const parts: ColoredPart[] = []
+  const runLen = 2.3
+  const rows = [
+    { y: 0.0, n: 5, off: 0 },
+    { y: 0.24, n: 4, off: 0.5 },
+  ]
+  for (const row of rows) {
+    const step = runLen / row.n
+    for (let i = 0; i < row.n; i++) {
+      const x = -runLen / 2 + step * (i + 0.5) + row.off * step * 0.5 + (rand() - 0.5) * 0.05
+      const hex = rand() < 0.5 ? PALETTE.sandbag : 0x8a7a50
+      const bag = lowSandbag(rand, hex)
+      bag.translate(x, row.y + (rand() - 0.5) * 0.02, (rand() - 0.5) * 0.05)
+      parts.push({ geo: bag, hex })
+    }
+  }
+  const merged = bakeAndMerge(parts, 0.32)
+  const [mr, mg, mb] = rgbOf(PALETTE.mud)
+  recolor(merged, (x, y, z, r, g, b) => {
+    const mott = 0.8 + 0.34 * hash3(x * 6, y * 6, z * 6)
+    const mud = smoothstep(0.14, 0.0, y) * 0.45
+    return [lerp(r * mott, mr, mud), lerp(g * mott, mg, mud), lerp(b * mott, mb, mud)]
+  })
+  return merged
+}
+
+/**
+ * A ~2 m plank revetment panel that lines a trench wall: vertical boards held by
+ * two A-frame posts and two horizontal wales, with warp, tone variation and the
+ * odd sprung/missing board. Local +X runs along the wall, boards face +Z (into
+ * the trench), base on y=0 rising to `height`. Kept lightweight for instancing.
+ */
+export function revetmentPanelGeometry(height = 1.7): THREE.BufferGeometry {
+  const rand = localRand(0x2d6b91)
+  const parts: ColoredPart[] = []
+  const runLen = 2.0
+  const pw = 0.16
+  const n = Math.floor(runLen / (pw * 1.04))
+  const start = -runLen / 2 + pw / 2
+  const gone = 3 + (rand() * (n - 5) | 0)
+  for (let i = 0; i < n; i++) {
+    if (i === gone) continue // a board's sprung off — earth shows behind
+    const x = start + i * pw * 1.04
+    const h = height * (0.9 + rand() * 0.12)
+    const lean = (rand() - 0.5) * 0.04
+    const plank = new THREE.BoxGeometry(pw * 0.94, h, 0.05)
+    plank.rotateZ(lean); plank.rotateX((rand() - 0.5) * 0.03)
+    plank.translate(x, h / 2, (rand() - 0.5) * 0.015)
+    const hex = _c.setHex((i & 1) ? PALETTE.wood : PALETTE.woodDark)
+      .multiplyScalar(0.8 + rand() * 0.34).getHex()
+    parts.push({ geo: plank, hex })
+  }
+  // Two horizontal wales (walings) pinning the boards.
+  for (const wy of [height * 0.32, height * 0.74]) {
+    const wale = new THREE.BoxGeometry(runLen + 0.1, 0.09, 0.06)
+    wale.translate(0, wy, 0.05)
+    parts.push({ geo: wale, hex: PALETTE.woodDark })
+  }
+  // A-frame posts at each end, driven into the floor and raked back a touch.
+  for (const px of [-runLen / 2 + 0.08, runLen / 2 - 0.08]) {
+    const post = new THREE.BoxGeometry(0.1, height + 0.12, 0.1)
+    post.rotateX(-0.04)
+    post.translate(px, (height + 0.12) / 2, -0.02)
+    parts.push({ geo: post, hex: PALETTE.woodDark })
+  }
+  const merged = bakeAndMerge(parts, 0.34)
+  const [mr, mg, mb] = rgbOf(PALETTE.mud)
+  recolor(merged, (x, y, z, r, g, b) => {
+    const mud = smoothstep(height * 0.4, 0.0, y) * 0.55 // muddier toward the floor
+    const n2 = 0.84 + 0.28 * hash3(x * 8, y * 4, z * 8)
+    return [lerp(r, mr, mud) * n2, lerp(g, mg, mud) * n2, lerp(b, mb, mud) * n2]
+  })
+  return merged
+}
+
+// ---------------------------------------------------------------------------
 // Knife-rest tank trap
 // ---------------------------------------------------------------------------
 
@@ -398,64 +503,84 @@ export function tankTrapGeometry(): THREE.BufferGeometry {
 // Duckboard
 // ---------------------------------------------------------------------------
 
-/** 2m plank walkway: warped planks, one snapped, nail heads, mud staining from the ends. */
+/**
+ * A ~2 m section of trench duckboard — the real thing: two long stringers with
+ * transverse slats nailed across them like a ladder laid flat, with gaps
+ * between the slats where the mud shows through. Slats carry per-board jitter
+ * (yaw/roll/height, a little length variation), a couple are missing entirely
+ * and one is snapped, and the whole board is stained with mud toward the ends.
+ * The trench floor beneath shows through the gaps, so it reads wet and used.
+ *
+ * Local frame: +X runs along the trench (length), +Z across it (width), y up;
+ * the slats sit on top of the stringers so the board rests on the floor at y=0.
+ */
 export function duckboardGeometry(): THREE.BufferGeometry {
   const rand = localRand(0x2b9d4f11)
   const parts: ColoredPart[] = []
-  const length = 2, width = 0.7, plankCount = 7
-  const plankW = width / plankCount
-  const plankH = 0.04
-  const runnerH = 0.05
-  const runnerX = [-length / 2 + 0.18, length / 2 - 0.18]
-  const snapIdx = 2 + Math.floor(rand() * 3)
+  const length = 2, width = 0.74
+  const stringerH = 0.06, stringerW = 0.07
+  const slatH = 0.035, slatLen = width * 0.96
+  const stringerZ = [-width / 2 + stringerW / 2 + 0.02, width / 2 - stringerW / 2 - 0.02]
+  const top = stringerH // slats rest on the stringers
 
-  for (let i = 0; i < plankCount; i++) {
-    const z = -width / 2 + plankW * (i + 0.5)
-    const hex = i % 2 === 0 ? PALETTE.wood : PALETTE.woodDark
-    const tilt = (rand() - 0.5) * 0.06
-    const yaw = (rand() - 0.5) * 0.05
-    const yOff = (rand() - 0.5) * 0.006
+  // Two stringers running the length of the board (slightly sunk into the mud).
+  for (const sz of stringerZ) {
+    const st = new THREE.BoxGeometry(length, stringerH, stringerW, 3, 1, 1)
+    st.translate(0, stringerH / 2 - 0.01, sz)
+    parts.push({ geo: st, hex: PALETTE.woodDark })
+  }
 
-    if (i === snapIdx) {
-      // Snapped plank — only the left run remains, with a jagged broken end.
-      const keep = 0.9 + rand() * 0.3
-      const plank = new THREE.BoxGeometry(keep, plankH, plankW * 0.86, 4, 1, 1)
-      plank.rotateY(yaw); plank.rotateZ(tilt)
-      plank.translate(-length / 2 + keep / 2, runnerH + plankH / 2 + yOff, z)
-      parts.push({ geo: plank, hex })
-      const bx = -length / 2 + keep
-      for (let sh = 0; sh < 3; sh++) {
-        const from = new THREE.Vector3(bx, runnerH + plankH / 2, z + (rand() - 0.5) * plankW * 0.6)
-        const to = new THREE.Vector3(bx + 0.04 + rand() * 0.08, runnerH + plankH / 2 + (rand() - 0.5) * 0.02, z + (rand() - 0.5) * plankW * 0.5)
-        parts.push({ geo: limb(from, to, 0.012, 0.003, 3), hex })
+  // Transverse slats with gaps. A ~0.16 m pitch gives ~12 slats over 2 m.
+  const pitch = 0.165
+  const nSlats = Math.floor(length / pitch)
+  const start = -length / 2 + (length - (nSlats - 1) * pitch) / 2
+  const missing = new Set<number>([2 + (rand() * 2 | 0), nSlats - 3 - (rand() * 2 | 0)])
+  const snapped = 4 + (rand() * (nSlats - 8) | 0)
+
+  for (let i = 0; i < nSlats; i++) {
+    if (missing.has(i)) continue // a board's gone — mud shows through
+    const x = start + i * pitch
+    const roll = (rand() - 0.5) * 0.12       // warped/rocking across the trench
+    const yaw = (rand() - 0.5) * 0.06
+    const yOff = (rand() - 0.5) * 0.012
+    const thk = slatH * (0.82 + rand() * 0.4)
+    // Alternating tone plus a per-slat brightness wobble so no two read alike.
+    const hex = _c.setHex((i & 1) ? PALETTE.wood : PALETTE.woodDark)
+      .multiplyScalar(0.82 + rand() * 0.32).getHex()
+
+    if (i === snapped) {
+      // Snapped slat: two stubs with a jagged gap in the middle.
+      const gap = 0.06 + rand() * 0.05
+      for (const side of [-1, 1] as const) {
+        const keep = slatLen / 2 - gap / 2 - rand() * 0.05
+        const s = new THREE.BoxGeometry(0.11, thk, keep, 1, 1, 2)
+        s.rotateY(yaw); s.rotateX(roll)
+        s.translate(x, top + thk / 2 + yOff, side * (slatLen / 2 - keep / 2))
+        parts.push({ geo: s, hex })
       }
       continue
     }
 
-    const plank = new THREE.BoxGeometry(length, plankH, plankW * 0.86, 4, 1, 1)
-    plank.rotateY(yaw); plank.rotateZ(tilt)
-    plank.translate(0, runnerH + plankH / 2 + yOff, z)
-    parts.push({ geo: plank, hex })
-    // Nail heads where the plank crosses each runner.
-    for (const rx of runnerX) {
-      const nail = new THREE.CylinderGeometry(0.014, 0.016, 0.01, 5)
-      nail.translate(rx, runnerH + plankH + 0.006 + yOff, z)
+    const s = new THREE.BoxGeometry(0.11 + rand() * 0.015, thk, slatLen, 1, 1, 2)
+    s.rotateY(yaw); s.rotateX(roll)
+    s.translate(x, top + thk / 2 + yOff, 0)
+    parts.push({ geo: s, hex })
+    // Nail heads where the slat crosses each stringer.
+    for (const sz of stringerZ) {
+      const nail = new THREE.CylinderGeometry(0.012, 0.014, 0.008, 4)
+      nail.translate(x, top + thk + 0.004 + yOff, sz)
       parts.push({ geo: nail, hex: PALETTE.steelDark })
     }
   }
 
-  for (const rx of runnerX) {
-    const runner = new THREE.BoxGeometry(0.08, runnerH, width, 1, 1, 4)
-    runner.translate(rx, runnerH / 2, 0)
-    parts.push({ geo: runner, hex: PALETTE.woodDark })
-  }
-
   const merged = bakeAndMerge(parts, 0.3)
-  // Mud staining creeping in from the boot-trodden ends.
+  // Mud creeping in from the boot-trodden ends and welling up between slats.
   const [mr, mg, mb] = rgbOf(PALETTE.mud)
   recolor(merged, (x, y, z, r, g, b) => {
-    const mud = smoothstep(0.55, 1.0, Math.abs(x) / (length / 2)) * 0.55
-    const n = 0.86 + 0.24 * hash3(x * 9, y * 5, z * 9)
+    const ends = smoothstep(0.5, 1.0, Math.abs(x) / (length / 2)) * 0.5
+    const low = smoothstep(top + 0.02, top - 0.02, y) * 0.4 // undersides/stringers muddier
+    const mud = Math.min(0.75, ends + low)
+    const n = 0.84 + 0.28 * hash3(x * 9, y * 5, z * 9)
     return [lerp(r, mr, mud) * n, lerp(g, mg, mud) * n, lerp(b, mb, mud) * n]
   })
   return merged
