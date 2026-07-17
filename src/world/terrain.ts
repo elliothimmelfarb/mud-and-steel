@@ -467,11 +467,19 @@ export class Terrain implements TerrainLike {
     // arrays themselves (ejecta rays go to churnVis only).
     this.churnVis.set(this.churn)
 
-    // 3) Trench lines.
+    // 3) Trench lines. Every line is carved against ONE shared snapshot of the
+    //    pre-trench surface. Per-line snapshots fixed a single zigzag's self-
+    //    overlap but NOT junctions: the communication trenches are carved after
+    //    the front/support lines, so their old per-line snapshot already held
+    //    the lowered front floor and each junction cut a SECOND full depth below
+    //    it — the crater-like pit Elliot saw. Sharing the pristine snapshot
+    //    makes every line target the same absolute floor (grade - depth), so a
+    //    junction is a clean min/union at one depth instead of additive digging.
     this.buildTrenchPolylines(rand)
-    this.carveTrench(this.frontLine, true)
-    this.carveTrench(this.supportLine, true)
-    for (const line of this.commLines) this.carveTrench(line, false)
+    const preTrench = this.heights.slice()
+    this.carveTrench(this.frontLine, true, preTrench)
+    this.carveTrench(this.supportLine, true, preTrench)
+    for (const line of this.commLines) this.carveTrench(line, false, preTrench)
 
     // 3b) Spoil heaps flanking each communication trench — dug-out earth thrown
     //     to the sides. Small mounds + churn, kept low so they never wall the
@@ -575,17 +583,28 @@ export class Terrain implements TerrainLike {
     }
   }
 
-  private carveTrench(line: Vec2[], parapet: boolean): void {
+  private carveTrench(line: Vec2[], parapet: boolean, pre: Float32Array): void {
     const halfW = TRENCH.width / 2
     const dn = this.detailNoise
     // Full-depth floor reaches this far out before the wall ramps up.
     const inner = halfW - 0.35
-    // Carve against a SNAPSHOT of the pre-carve surface: adjacent zigzag
-    // segments overlap near every joint, and cutting from the live heights
-    // made those cuts cumulative — measured 5-6 m pits at traverses where the
-    // sim (standSurface, slots, duckboards) assumes a uniform TRENCH.depth
-    // floor. With the snapshot, overlapping segments agree instead of adding.
-    const pre = this.heights.slice()
+    // `pre` is a SHARED snapshot of the pre-trench surface (see generate()):
+    // adjacent zigzag segments overlap near every joint, and cutting from the
+    // live heights made those cuts cumulative — measured 5-6 m pits at traverses
+    // AND at every junction where a communication trench met the front/support
+    // floor. Carving all lines from one pristine snapshot makes overlaps agree
+    // (target the same absolute floor) instead of adding.
+
+    // Fire step: a raised bench carved into the ENEMY wall of the parapet
+    // trenches. Its top sits `fireStepLift` above the floor (= grade - stepDrop),
+    // exactly the height a manning soldier reads at. We clear the trench mask on
+    // the bench so standSurface returns the real benchTop (no synthetic lift) and
+    // the man's feet plant on ground. The deep floor + duckboards stay on the
+    // parados side for the trench silhouette and for men moving under cover.
+    const stepDrop = TRENCH.depth - TRENCH.fireStepLift  // benchTop = grade - stepDrop
+    const stepInset = TRENCH.fireStepInset               // deep floor reaches this far past centre toward the parados
+    // Slats of the deep floor: everything from the parados wall to `stepInset`
+    // on the enemy side. Beyond that (toward the enemy wall) rises the bench.
 
     // Raise one earth bank (parapet lip / parados) at cell `i`. The parapet and
     // parados branches were copy-paste bar a dozen constants; drive both from a
@@ -614,6 +633,11 @@ export class Terrain implements TerrainLike {
       const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(Math.max(a.z, b.z) + 5)))
       const abx = b.x - a.x, abz = b.z - a.z
       const abLen2 = abx * abx + abz * abz
+      // Unit perpendicular pointing toward the enemy (global -z), so we can
+      // tell which side of the centreline a cell is on for the fire step.
+      const segLen = Math.sqrt(abLen2) || 1
+      let nx = -abz / segLen, nz = abx / segLen
+      if (nz > 0) { nx = -nx; nz = -nz }
       for (let r = minRow; r <= maxRow; r++) {
         const wz = this.worldZ(r)
         for (let c = minCol; c <= maxCol; c++) {
@@ -634,13 +658,28 @@ export class Terrain implements TerrainLike {
             // glass (kept on the fire-step too).
             const rut = (dn.at(wx * 0.7 + 3.1, wz * 0.7 + 8.7) - 0.5) * 0.12 * kk
             const cut = TRENCH.depth * kk - rut
-            // NOTE: no physical fire-step. The sim already models one
-            // synthetically (ballistics.standSurface adds trenchAt*1.55 and
-            // the whole cover model is tuned against a full-depth floor);
-            // carving a real ledge double-counted and exposed crouching men.
             const target = pre[i] - cut
             if (target < this.heights[i]) this.heights[i] = target
             this.trench[i] = Math.max(this.trench[i], kk)
+            // Physical fire step on the enemy wall of the parapet trenches.
+            // `signed` > 0 means the cell is on the enemy side of the centreline;
+            // past `stepInset` the deep floor gives way to a bench rising to
+            // `benchTop` (= grade - stepDrop = floor + fireStepLift). We lerp the
+            // rise and FADE the trench mask to 0 over a 0.6 m riser so
+            // standSurface reads real geometry there (feet planted, no float)
+            // while transitioning smoothly to the synthetic-lift deep floor.
+            if (parapet) {
+              const signed = (wx - px) * nx + (wz - pz) * nz
+              let bench = (signed - stepInset) / 0.6 + 0.5
+              bench = bench <= 0 ? 0 : bench >= 1 ? 1 : bench * bench * (3 - 2 * bench)
+              if (bench > 0) {
+                const benchTop = pre[i] - stepDrop + rut * 0.5
+                if (benchTop > this.heights[i]) {
+                  this.heights[i] += (benchTop - this.heights[i]) * bench
+                }
+                this.trench[i] *= 1 - bench
+              }
+            }
           } else if (parapet && wz < pz && d < halfW + 2.4) {
             // Sandbag parapet lip on the enemy side (the ACTUAL small-arms
             // cover): two octaves of bag lumpiness, a wandering setback, and

@@ -24,12 +24,22 @@ export function buildSections(terrain: Terrain, parapetMult: number): { sections
         captured: false, captureT: 0,
       }
       sections.push(sec)
+      // Enemy-facing normal (toward global -z), so slots can be pushed onto the
+      // fire step carved into the enemy wall — the man plants his feet on that
+      // real bench instead of floating over the deep floor.
+      const abx = b.x - a.x, abz = b.z - a.z
+      const segLen = Math.hypot(abx, abz) || 1
+      let nx = -abz / segLen, nz = abx / segLen
+      if (nz > 0) { nx = -nx; nz = -nz }
       // Two fighting slots per front section, one per support section.
       const fracs = kind === 'front' ? [0.32, 0.68] : [0.5]
       for (const f of fracs) {
         slots.push({
           id: slotId++, sectionId: sec.id, kind: 'trench',
-          pos: { x: a.x + (b.x - a.x) * f, z: a.z + (b.z - a.z) * f },
+          pos: {
+            x: a.x + abx * f + nx * TRENCH.fireStepSlot,
+            z: a.z + abz * f + nz * TRENCH.fireStepSlot,
+          },
           unitId: null,
         })
       }

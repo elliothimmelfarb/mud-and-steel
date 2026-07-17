@@ -29,7 +29,7 @@ export { PALETTE, makeSoftCircleTexture, makeNoiseTexture } from './props/shared
 export {
   deadTreeGeometry, wirePostGeometry, wireCoilGeometry, sandbagGeometry,
   tankTrapGeometry, duckboardGeometry, crossGraveGeometry, rubbleGeometry,
-  stakeGeometry,
+  stakeGeometry, sandbagCourseGeometry, revetmentPanelGeometry,
 } from './props/groundcover'
 export { buildRuin, buildChurchRuin, buildDugout, buildAmmoBoxes } from './props/structures'
 export {

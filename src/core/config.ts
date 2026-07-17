@@ -35,6 +35,20 @@ export const TRENCH = {
   parapetH: 0.7,        // raised lip on the enemy side
   parapetHp: 220,
   commTrenchXs: [-56, 0, 56] as readonly number[], // communication trenches
+  // Fire step: a real raised bench carved into the enemy wall of the fire and
+  // support trenches. Its top sits `fireStepLift` above the trench floor, so a
+  // man standing ON it reads at `grade - (depth - fireStepLift)` — exactly the
+  // height ballistics.standSurface used to synthesise. Soldiers plant their
+  // feet on it instead of floating. The SAME constant drives standSurface, so
+  // geometry and the cover model can never drift apart.
+  fireStepLift: 1.55,
+  // Signed offset (toward the enemy, m) where the bench begins to rise out of
+  // the deep floor. The riser spans ±0.3 m around it; the deep, duckboarded
+  // floor keeps the parados side, the bench takes the enemy side.
+  fireStepInset: 0.1,
+  // Fighting slots are pushed this far toward the enemy wall so a manning
+  // soldier's feet land squarely on the bench (well past the riser).
+  fireStepSlot: 0.7,
 } as const
 
 // ---------------------------------------------------------------------------

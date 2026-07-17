@@ -12,7 +12,8 @@ import {
   buildAmmoBoxes, buildChurchRuin, buildDugout, buildFieldGun, buildGasProjector,
   buildRuin, buildSearchlight, buildFlarePost, buildStokesMortar, buildTankA7V, buildTankMkIV,
   buildArmoredCar, buildVickers, crossGraveGeometry, deadTreeGeometry, duckboardGeometry,
-  sandbagGeometry, stakeGeometry, tankTrapGeometry, wireCoilGeometry, wirePostGeometry,
+  sandbagGeometry, sandbagCourseGeometry, revetmentPanelGeometry,
+  stakeGeometry, tankTrapGeometry, wireCoilGeometry, wirePostGeometry,
   PALETTE,
 } from './props'
 import { dressClutter } from './clutter'
@@ -113,21 +114,38 @@ export class Scenery {
     graves.count = g
     graves.instanceMatrix.needsUpdate = true
 
-    // Duckboards along the trench floors.
-    const boards = makeInstanced(duckboardGeometry(), 400, this.scene)
+    // Duckboards run the deep, muddy floor of each trench. On the fire/support
+    // lines that deep floor sits on the PARADOS side of the fire step, so the
+    // boards are nudged off the centreline toward the parados (opposite the
+    // enemy-facing bench the men stand on); the communication trenches have a
+    // symmetric floor, so their boards stay centred.
+    const boards = makeInstanced(duckboardGeometry(), 460, this.scene)
     let b = 0
-    const lines = [t.frontLine, t.supportLine, ...t.commLines]
+    const parapetLines = [t.frontLine, t.supportLine]
+    const lines = [...parapetLines, ...t.commLines]
     for (const line of lines) {
-      for (let s = 0; s < line.length - 1 && b < 396; s++) {
+      // Push the boards onto the deep floor, which on a fire step sits on the
+      // parados side of the centreline.
+      const parados = parapetLines.includes(line) ? 0.95 : 0
+      for (let s = 0; s < line.length - 1 && b < 456; s++) {
         const a = line[s], c = line[s + 1]
         const len = Math.hypot(c.x - a.x, c.z - a.z)
         const ang = Math.atan2(c.x - a.x, c.z - a.z)
-        for (let d = 1; d < len - 0.5 && b < 396; d += 2.05) {
-          const x = a.x + (c.x - a.x) * (d / len)
-          const z = a.z + (c.z - a.z) * (d / len)
-          _e.set(0, ang, 0)
+        // Parados normal (toward +z, away from the enemy).
+        let nx = (c.z - a.z) / len, nz = -(c.x - a.x) / len
+        if (nz < 0) { nx = -nx; nz = -nz }
+        for (let d = 1; d < len - 0.5 && b < 456; d += 1.9) {
+          const x = a.x + (c.x - a.x) * (d / len) + nx * parados
+          const z = a.z + (c.z - a.z) * (d / len) + nz * parados
+          // Loosely conform to the floor slope so a board rests on the mud
+          // rather than punching through the wall or hanging in the air.
+          const e2 = 0.7
+          let gx = (t.heightAt(x + e2, z) - t.heightAt(x - e2, z)) / (2 * e2)
+          let gz = (t.heightAt(x, z + e2) - t.heightAt(x, z - e2)) / (2 * e2)
+          gx = Math.max(-0.4, Math.min(0.4, gx)); gz = Math.max(-0.4, Math.min(0.4, gz))
+          _e.set(gz * 0.55, ang, -gx * 0.55, 'XYZ')
           _q.setFromEuler(_e)
-          _v.set(x, t.heightAt(x, z) + 0.04, z)
+          _v.set(x, t.heightAt(x, z) + 0.03, z)
           _m.compose(_v, _q, _s)
           boards.setMatrixAt(b++, _m)
         }
@@ -135,6 +153,51 @@ export class Scenery {
     }
     boards.count = b
     boards.instanceMatrix.needsUpdate = true
+
+    // Revetment: what turns a dirt ditch into a built fortification. A sandbag
+    // course caps the enemy parapet lip; timber plank panels line the inner
+    // (parados) wall. Both are instanced and laid segment by segment along the
+    // fire and support lines.
+    const bags = makeInstanced(sandbagCourseGeometry(), 260, this.scene)
+    const revet = makeInstanced(revetmentPanelGeometry(1.7), 260, this.scene)
+    let bg = 0, rv = 0
+    for (const line of parapetLines) {
+      for (let s = 0; s < line.length - 1; s++) {
+        const a = line[s], c = line[s + 1]
+        const len = Math.hypot(c.x - a.x, c.z - a.z)
+        if (len < 1) continue
+        const ang = Math.atan2(c.x - a.x, c.z - a.z)
+        // Enemy-facing unit normal (toward -z), matching the fire-step carve.
+        let nx = -(c.z - a.z) / len, nz = (c.x - a.x) / len
+        if (nz > 0) { nx = -nx; nz = -nz }
+        for (let d = 1.15; d < len - 0.5; d += 2.3) {
+          const cx = a.x + (c.x - a.x) * (d / len)
+          const cz = a.z + (c.z - a.z) * (d / len)
+          // Sandbag course sits on the enemy parapet crest.
+          if (bg < 256) {
+            const sx = cx + nx * (TRENCH.width / 2 + 0.85)
+            const sz = cz + nz * (TRENCH.width / 2 + 0.85)
+            _e.set(0, ang, 0); _q.setFromEuler(_e)
+            _v.set(sx, t.heightAt(sx, sz) + 0.02, sz)
+            _m.compose(_v, _q, _s)
+            bags.setMatrixAt(bg++, _m)
+          }
+          // Plank revetment stands on the deep floor against the parados wall,
+          // boards facing back into the trench. Seated on the floor (grade-depth)
+          // it lines the lower wall instead of poking out of the crest.
+          if (rv < 256) {
+            const wallX = cx - nx * 1.0
+            const wallZ = cz - nz * 1.0
+            _e.set(0, ang + Math.PI, 0); _q.setFromEuler(_e) // boards face the trench
+            _v.set(wallX, t.heightAt(wallX, wallZ) - 0.02, wallZ)
+            _m.compose(_v, _q, _s)
+            revet.setMatrixAt(rv++, _m)
+          }
+        }
+      }
+    }
+    bags.count = bg; bags.instanceMatrix.needsUpdate = true
+    revet.count = rv; revet.instanceMatrix.needsUpdate = true
 
     // Dugout entrances + stores on the support line.
     for (const cx of TRENCH.commTrenchXs) {
