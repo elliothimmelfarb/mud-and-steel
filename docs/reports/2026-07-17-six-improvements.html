@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — Six Improvements to the Line, 17 July 2026</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:920px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.3rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:64ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{
+    background:var(--card);border:1px solid var(--rule);border-radius:4px;
+    padding:.55rem 1rem;text-align:center;min-width:7.5rem;
+  }
+  .tally b{display:block;font-size:1.5rem;color:var(--brass)}
+  .tally span{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.priority{border-left-color:var(--blood)}
+  .item-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:.6rem;margin-bottom:.6rem}
+  .num{
+    font-size:.75rem;font-weight:bold;color:var(--paper);background:var(--khaki);
+    border-radius:50%;width:1.6rem;height:1.6rem;display:inline-flex;align-items:center;justify-content:center;flex:none;align-self:center;
+  }
+  .priority .num{background:var(--blood)}
+  h2{font-size:1.25rem;font-variant:small-caps;letter-spacing:.04em}
+  .links{margin-left:auto;font-size:.82rem;white-space:nowrap}
+  a{color:var(--brass);text-decoration-color:var(--rule)}
+  .priority a{color:var(--blood)}
+  .tag{font-size:.66rem;letter-spacing:.22em;text-transform:uppercase;color:var(--blood);margin-bottom:.35rem}
+  .cause{
+    border-left:3px solid var(--steel);padding:.5rem .9rem;margin:.7rem 0;
+    background:color-mix(in srgb, var(--steel) 8%, transparent);
+    font-size:.93rem;
+  }
+  .cause b{font-variant:small-caps;letter-spacing:.08em;color:var(--steel)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.32rem}
+  li::marker{color:var(--brass)}
+  .verify{font-size:.86rem;color:var(--ink-soft);font-style:italic;margin-top:.7rem;border-top:1px dashed var(--rule);padding-top:.55rem}
+  .quote{font-style:italic;color:var(--ink-soft)}
+  .followups{border:1px dashed var(--rule);border-radius:4px;padding:1.2rem 1.5rem;margin-top:2.4rem;background:transparent}
+  .followups h3{font-variant:small-caps;letter-spacing:.06em;margin-bottom:.5rem;color:var(--khaki)}
+  footer{text-align:center;margin-top:2.6rem;color:var(--khaki);font-size:.8rem;letter-spacing:.15em;text-transform:uppercase}
+  footer .sig{font-family:'Snell Roundhand','Segoe Script',cursive;font-size:1.5rem;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-top:.4rem}
+  @media (max-width:640px){ .links{margin-left:0;white-space:normal} h1{font-size:1.7rem} .stamp{position:static;display:inline-block;margin-top:.6rem} }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="crest">Field Despatch · Battalion Workshops</div>
+  <h1>Six Improvements to the Line</h1>
+  <div class="sub">MUD &amp; STEEL — Hold the Line, 1916 &nbsp;·&nbsp; 17 July 2026</div>
+  <div class="stamp">All Merged</div>
+</header>
+
+<p class="lede">Six Opus agents were despatched in parallel, each in an isolated worktree running full GitHub Flow — <strong>issue → live diagnosis → fix → verified PR → self-merge</strong> — rebasing over one another as they landed. Every complaint was reproduced and measured in the running game before a line of code changed.</p>
+
+<div class="tally">
+  <div><b>6</b><span>PRs merged</span></div>
+  <div><b>6</b><span>Issues closed</span></div>
+  <div><b>3</b><span>Follow-ups filed</span></div>
+  <div><b>0</b><span>Build failures</span></div>
+</div>
+
+<section class="item priority">
+  <div class="item-head"><span class="num">1</span><h2>Tracers now leave the barrel</h2>
+    <span class="links"><a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/14">#14</a> · <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/20">PR #20</a></span></div>
+  <div class="tag">Gunfeel — the flagged priority</div>
+  <div class="cause"><b>Root cause, measured live:</b> the muzzle flash was innocent — it was already welded to the barrel. First-person rounds spawn on the <em>boresight</em> 0.7&nbsp;m from the eye, and at 550&nbsp;m/s on a 30&nbsp;Hz sim a round's first rendered frame is already <em>18–55&nbsp;m downrange</em> — past the streak cap. Every tracer popped in mid-field with a dark gap back to the flash.</div>
+  <ul>
+    <li>Player rounds carry the true barrel-tip (<code>Bullet.muzzle</code>, render-only — ballistics stay on the boresight, so the crosshair remains exactly true).</li>
+    <li>A <em>launch bridge</em> stretches the streak back to the muzzle for the first 30&nbsp;m, so the tracer visibly grows out of the flash before detaching into a normal trail.</li>
+    <li>AI and third-person tracers untouched; flash-light-pool and night-lighting invariants preserved.</li>
+  </ul>
+  <div class="verify">Verified day &amp; night in the FPS Lab on rifle, Lewis (right-offset barrel welds correctly) and Vickers — no gap, no pop-in.</div>
+</section>
+
+<section class="item priority">
+  <div class="item-head"><span class="num">2</span><h2>The trench overhaul</h2>
+    <span class="links"><a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/17">#17</a> · <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/21">PR #21</a></span></div>
+  <div class="tag">Junction pits · duckboards · floating men · revetment</div>
+  <div class="cause"><b>Root cause, measured live:</b> communication trenches carved <em>after</em> the front line snapshotted the already-lowered floor, so every junction cut a second full depth — a measured <em>−1.93&nbsp;m pit</em> against a −0.47&nbsp;m floor. And men were synthetically hoisted 1.55&nbsp;m so muzzles cleared the parapet — feet hovering on nothing.</div>
+  <ul>
+    <li><strong>Junctions:</strong> all trench lines now carve against one shared pristine snapshot — a clean union at one depth. Junction floor now −0.14&nbsp;m; the pit is gone.</li>
+    <li><strong>Fire step:</strong> a real bench carved into the enemy wall; fighting positions stand on it, feet planted (float gap 1.55&nbsp;m → 0.12&nbsp;m avg) while still sighting over the parapet. One shared constant drives both the carve and the sim formula, so cover/LOS tuning is numerically identical.</li>
+    <li><strong>Duckboards:</strong> proper slatted boards — stringers, transverse treads, gaps, warp, snapped slats, mud — conforming to the floor.</li>
+    <li><strong>Revetment:</strong> sandbag parapet course + timber plank walls; ~112k instanced triangles for only 2 extra draw calls.</li>
+  </ul>
+  <div class="verify">Numeric heightfield probes + gallery captures before/after; craters still deform trench ground; rebased over all five sibling merges with no conflicts.</div>
+</section>
+
+<section class="item">
+  <div class="item-head"><span class="num">3</span><h2>Coordinated infantry tactics</h2>
+    <span class="links"><a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/12">#12</a> · <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/16">PR #16</a></span></div>
+  <div class="tag">Enemy AI &amp; the adaptive director</div>
+  <ul>
+    <li><strong>Bounding overwatch:</strong> each squad splits into two leapfrog elements — one suppresses from cover while the other sprints crater-to-crater at +40% speed, swapping every ~3.4&nbsp;s. One cheap squad-level tick; no per-soldier pathfinding.</li>
+    <li><strong>NCOs:</strong> every squad gets a leader men rally toward; his death deals a section-wide morale blow and hesitation spike before a replacement steps up. Leader-sniping is real counterplay.</li>
+    <li><strong>Legible director:</strong> purchased counters now head the intel report in plain words — <span class="quote">“They have brought up snipers and storm parties to silence your machine guns.”</span></li>
+  </ul>
+  <div class="verify">Deterministic headless probes: 3 leapfrog swaps with perfect element complementarity across 360 ticks, byte-identical across runs (all randomness seeded).</div>
+</section>
+
+<section class="item">
+  <div class="item-head"><span class="num">4</span><h2>Veterancy — the named men grow</h2>
+    <span class="links"><a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/13">#13</a> · <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/19">PR #19</a></span></div>
+  <div class="tag">Progression · deeds · despatches</div>
+  <ul>
+    <li>XP from kills, waves survived and six detected <em>deeds</em> (coolness under fire, stretcher rescues, mending the line, bayonet charges, marksmanship, holding a post alone) promotes Pte&nbsp;→&nbsp;L/Cpl&nbsp;→&nbsp;Cpl&nbsp;→&nbsp;Sjt.</li>
+    <li>Modest perks — accuracy, rate of fire, suppression resistance, faster rally; Corporals and up radiate a small calm aura. Attachment, not superheroes.</li>
+    <li>Veterancy lives on the <em>position</em>: a lone rifleman's death takes it to the grave; a gun team's No.&nbsp;2 inherits the gun.</li>
+    <li>Brass chevrons over veteran positions; deeds cited in letters home and honoured apart on the Roll of Honour — <span class="quote">“✠ Mentioned in despatches.”</span></li>
+  </ul>
+  <div class="verify">16/16 logic assertions; live promotion &amp; despatch toasts; exact save/load round-trip of three veterans' ranks, deeds and service; old saves still load.</div>
+</section>
+
+<section class="item">
+  <div class="item-head"><span class="num">5</span><h2>HUD &amp; command UX</h2>
+    <span class="links"><a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/10">#10</a> · <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/18">PR #18</a></span></div>
+  <div class="tag">Including the build-bar overflow bug</div>
+  <div class="cause"><b>The reported bug:</b> at 1280&nbsp;px the 18 placeable cards ran out to ~1705&nbsp;px — six cards unreachable, no scroll. Fixed by restacking the bottom HUD and splitting the bar into two labelled wrapping groups: <em>The Company</em> and <em>Field Works</em>. Every card reachable at every tested width.</div>
+  <ul>
+    <li>Period-styled tooltips for every unit, defence and order (role, reach, crew, cost, cooldown, hotkey).</li>
+    <li>“Can't afford” now reads differently from “wrong phase”; requisition purse chip; wave-start hotkey shown.</li>
+    <li>Unit panel gains crew count, Nerve and ammo bars, live state pills; the LINE meter shifts amber→red as it drains; the wind vane flags gas blow-back home.</li>
+  </ul>
+  <div class="verify">Verified at 1280×800 and 1024×720, no console errors, reduced-motion honoured.</div>
+</section>
+
+<section class="item">
+  <div class="item-head"><span class="num">6</span><h2>Procedural audio overhaul</h2>
+    <span class="links"><a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/11">#11</a> · <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/15">PR #15</a></span></div>
+  <div class="tag">Still zero samples — everything synthesized</div>
+  <ul>
+    <li>Every small arm layers transient + body + trench slapback with per-shot jitter; the SMLE gets an audible bolt cycle, the Webley a cylinder click, the 18-pounder a twin-sub slam with carriage rattle.</li>
+    <li>The Vickers finally sounds distinct from the Lewis — heavier, darker, with a water-jacket clank.</li>
+    <li>A true supersonic <em>crack</em> (ballistic N-wave) for near misses, placed at closest approach.</li>
+    <li>Shell whistles grow a sub-octave partial; bursts gain ground-shaking low end; ambience beds crossfade continuously through dusk and dawn, with sparse birdsong when the front is quiet.</li>
+    <li>Brick-wall master limiter — worst-case stacked volleys peak at 0.94, under clipping.</li>
+  </ul>
+  <div class="verify">Analyser tap on the master bus confirmed every layer triggers; zero errors through a 40-voice volley and a full day→night→day crossfade.</div>
+</section>
+
+<div class="followups">
+  <h3>Follow-ups filed (one-click task chips)</h3>
+  <ul>
+    <li><strong>Intel copy fix</strong> — “expect <em>A</em> probing attack…” mid-sentence capital from flavour-string concatenation.</li>
+    <li><strong>Vickers hot receiver</strong> — over-bright heat emissive + camera fill light fringes magenta/cyan under sustained fire (pre-existing).</li>
+    <li><strong>Deep-floor soldier height</strong> — men moving along the trench bottom still use the synthetic 1.55&nbsp;m lift; make it geometric like the fire step.</li>
+  </ul>
+</div>
+
+<footer>
+  Typecheck &amp; production build green on every merge · main at <code>197172b</code>
+  <div class="sig">— the Battalion Workshops</div>
+</footer>
+
+</div>
+</body>
+</html>
