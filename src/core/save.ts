@@ -36,7 +36,9 @@ export function saveSettings(s: GameSettings): void {
 
 export interface SavedUnit {
   kind: string
-  slotId: number
+  /** The unit's post (free placement — position, not a slot id). */
+  x: number
+  z: number
   xp: number
   vet: number
   /** Bitmask of deeds; optional for saves written before veterancy shipped. */
@@ -59,7 +61,8 @@ export interface SavedDefence {
 }
 
 export interface RunSave {
-  version: 1
+  /** v2: units save their post as x/z (free placement); pad digs join craterOps (p: 1). */
+  version: 2
   seed: string
   difficulty: Difficulty
   wave: number             // the NEXT wave to fight
@@ -68,7 +71,7 @@ export interface RunSave {
   upgrades: string[]
   units: SavedUnit[]
   defences: SavedDefence[]
-  craterOps: Array<{ x: number; z: number; r: number; d: number }>
+  craterOps: Array<{ x: number; z: number; r: number; d: number; p?: 1 }>
   sectionState: Array<{ parapetHp: number; parapetMax: number; captured: boolean }>
   weather: { tod: number; wetness: number }
   stats: RunStats
@@ -81,7 +84,8 @@ export function loadRun(): RunSave | null {
     const raw = localStorage.getItem(SAVE_KEY)
     if (!raw) return null
     const save = JSON.parse(raw) as RunSave
-    if (save.version !== 1) return null
+    // v1 saves carried slot ids; the slot table no longer exists to map them.
+    if (save.version !== 2) return null
     return save
   } catch {
     return null

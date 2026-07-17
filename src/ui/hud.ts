@@ -692,7 +692,7 @@ export class Hud implements HudBridge {
       return true
     }
     if (phase === 'build' && wave === 1) {
-      tip('t1', 'Pick a card (or press 1–9), then click a glowing slot in the front trench. Riflemen first — they are cheap and they hold.')
+      tip('t1', 'Pick a card (or press 1–9), then click anywhere along the glowing front trench. Riflemen first — they are cheap and they hold.')
     } else if (phase === 'assault' && wave === 1) {
       tip('t2', 'Hold the line. Every kill earns requisition. WASD/arrows pan, Q/E rotate, wheel or Z/X zooms.')
     } else if (phase === 'build' && wave === 2) {
@@ -716,9 +716,9 @@ function tierWave(tier: 1 | 2 | 3): number {
   return { 1: 2, 2: 6, 3: 10 }[tier]
 }
 
-/** Human label for where a card is planted. */
+/** Human label for the zone a card is planted in. */
 function placementLabel(p: 'trench' | 'pad' | 'field'): string {
-  return p === 'trench' ? 'front trench' : p === 'pad' ? 'weapon pad' : 'no-man\'s-land'
+  return p === 'trench' ? 'in the trench' : p === 'pad' ? 'behind the line' : 'no-man\'s-land'
 }
 
 /** Qualitative reach so the raw sim range reads at a glance. */
@@ -844,7 +844,7 @@ export function helpSections(): Array<{ title: string; html: string }> {
     },
     {
       title: 'Placement',
-      html: `<p>Select a card (mouse or number keys), then click a <b>slot</b> — infantry in trenches, crewed weapons on pads behind the line. Wire, mines and traps go in <b>no-man's land</b>, but only between waves.</p>
+      html: `<p>Select a card (mouse or number keys), then click anywhere in its <b>zone</b> — infantry anywhere along a trench line, crewed weapons dug in on open ground behind the front. Wire, mines and traps go in <b>no-man's land</b>, but only between waves.</p>
       <p><span class="ms-kbd">R</span> rotates wire. Right-click cancels. <span class="ms-kbd">Tab</span> cycles your units; <span class="ms-kbd">Del</span> disbands for a 70% refund. Arrow keys move the placement cursor for keyboard-only play.</p>`,
     },
     {

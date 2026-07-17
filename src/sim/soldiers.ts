@@ -50,8 +50,6 @@ export function updateUnits(ctx: Ctx, dt: number): void {
     // Unit dies with its crew.
     if (u.crew.every((c) => c.hp <= 0)) {
       u.disbanded = true
-      const slot = s.slots.find((sl) => sl.id === u.slotId)
-      if (slot) slot.unitId = null
       ctx.events.emit('unitLost', { unitId: u.id, kind: u.kind })
     }
   }
@@ -101,9 +99,9 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   }
   if (u.fallenBack && avgMorale > 0.62) u.fallenBack = false
 
-  const slot = s.slots.find((sl) => sl.id === u.slotId)
-  const homeX = slot?.pos.x ?? u.pos.x
-  const homeZ = slot?.pos.z ?? u.pos.z
+  // The unit's post is its home — the crew forms up on it and returns to it.
+  const homeX = u.pos.x
+  const homeZ = u.pos.z
 
   // -- movement: charge / fallback / hold ------------------------------------
   if (charging && !u.fallenBack) {
@@ -122,7 +120,6 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
         c.facing = Math.atan2(dx, -dz) + Math.PI
       }
     }
-    u.pos.x = homeX; u.pos.z = homeZ
     return // no fighting while broken
   } else {
     // Drift crew back to formation around the slot.

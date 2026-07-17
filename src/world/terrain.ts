@@ -101,7 +101,8 @@ export class Terrain implements TerrainLike {
   private wetness = 0
   /** Wetness value at the last water-map refresh (dead-band anchor). */
   private wetnessApplied = -1
-  private craterOps: Array<{ x: number; z: number; r: number; d: number }> = []
+  /** Deformation history: shell craters, plus pads dug for emplacements (p: 1). */
+  private craterOps: Array<{ x: number; z: number; r: number; d: number; p?: 1 }> = []
   /**
    * Fire-step bench cells (vi -> carved bench height). Recorded by the parapet
    * lines so the communication trenches — carved after them — can't dig the
@@ -286,9 +287,42 @@ export class Terrain implements TerrainLike {
   }
 
   /** Serialized deformation history (for save games). */
-  getCraterOps(): ReadonlyArray<{ x: number; z: number; r: number; d: number }> { return this.craterOps }
-  replayCraterOps(ops: ReadonlyArray<{ x: number; z: number; r: number; d: number }>): void {
-    for (const o of ops) this.crater(o.x, o.z, o.r, o.d)
+  getCraterOps(): ReadonlyArray<{ x: number; z: number; r: number; d: number; p?: 1 }> { return this.craterOps }
+  replayCraterOps(ops: ReadonlyArray<{ x: number; z: number; r: number; d: number; p?: 1 }>): void {
+    // Order matters: a pad dug after a shell hit levels that hole, and vice
+    // versa — both kinds replay through the same list in sequence.
+    for (const o of ops) {
+      if (o.p) this.digPad(o.x, o.z, o.r)
+      else this.crater(o.x, o.z, o.r, o.d)
+    }
+  }
+
+  /**
+   * A crew digging in: level a small pad under an emplacement placed on open
+   * ground. Flattens HEIGHTS and BASE together — a dug pad is the new ground
+   * truth, not a crater, so it must not read as flooded dead ground. Skips any
+   * carved trench cell (never fills a corridor or shaves its banks) and joins
+   * the ops history so saves replay it in sequence with the shellfire.
+   */
+  digPad(x: number, z: number, radius: number): void {
+    const h0 = this.heightAt(x, z)
+    const reach = radius + 1
+    this.forEachCellInDisc(x, z, reach, (_c, _r, wx, wz, i) => {
+      const d = Math.hypot(wx - x, wz - z)
+      if (d > reach) return
+      if (this.trench[i] > 0.02) return
+      const k = d < radius ? 1 : 1 - (d - radius)
+      this.heights[i] = this.heights[i] * (1 - k) + h0 * k
+      this.base[i] = this.base[i] * (1 - k) + h0 * k
+    })
+    this.craterOps.push({ x, z, r: radius, d: 0, p: 1 })
+    const minCol = Math.max(0, Math.floor(this.colAt(x - reach)) - AO_REACH)
+    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + reach)) + AO_REACH)
+    const minRow = Math.max(0, Math.floor(this.rowAt(z - reach)) - AO_REACH)
+    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + reach)) + AO_REACH)
+    this.computeAO(minCol, minRow, maxCol, maxRow)
+    this.refreshWater(minCol, minRow, maxCol, maxRow)
+    this.onDirty?.({ minCol, minRow, maxCol, maxRow })
   }
 
   // -- water ------------------------------------------------------------------
