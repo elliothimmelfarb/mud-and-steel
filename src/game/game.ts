@@ -9,7 +9,7 @@ import type {
   TargetPriority, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
-  BUILD_ORDER, COMBAT, DEEDS, DEFENCE_DEFS, ECONOMY, DIRECTOR, ORDER_DEFS, RANKS, SCORE,
+  BUILD_ORDER, COMBAT, DEEDS, DEFENCE_DEFS, ECONOMY, DIRECTOR, ORDER_DEFS, PLACEMENT, RANKS, SCORE,
   SIM_DT, TRENCH, UNIT_DEFS, UPGRADE_DEFS, UPGRADE_TIER_WAVE, VET_XP, WIRE_SEGMENT_LEN, WORLD, XP_PER_WAVE,
 } from '../core/config'
 import { EventBus } from '../core/events'
@@ -34,7 +34,7 @@ import { Mods } from '../sim/mods'
 import {
   makeDirector, makeOrders, makeStats, type Ctx, type SimState,
 } from '../sim/sim'
-import { buildSections, sectionAt } from '../sim/trench'
+import { buildSections, projectToFireStep, sectionAt } from '../sim/trench'
 import { awardXp, leadCrew } from '../sim/veterancy'
 import { updateUnits } from '../sim/soldiers'
 import { updateEnemies, spawnEnemy } from '../sim/enemies'
@@ -170,7 +170,6 @@ export class Game {
   buildSelection: BuildableId | null = null
   ghostPos = new THREE.Vector3()
   ghostValid = false
-  ghostSnapSlot = -1
   wireAngle = 0
   private kbCursor = { active: false, x: 0, z: 60 }
   selectedUnitId = -1
@@ -188,7 +187,12 @@ export class Game {
   private ghost: THREE.Group
   private ghostRing: THREE.Mesh
   private rangeRing: THREE.LineLoop
-  private slotMarkers!: THREE.InstancedMesh
+  // Placement-zone visuals: brass ribbons along the fire steps for trench
+  // cards, a translucent ground-hugging band for the rear / no-man's-land
+  // zones. Terrain-specific, so rebuilt per run (torn down with the scene).
+  private zoneRibbon: THREE.Mesh | null = null
+  private zoneBand: THREE.Mesh | null = null
+  private zoneBandKey = ''
   private chevrons!: THREE.InstancedMesh
   private rankMarkers!: THREE.InstancedMesh
   private flareSprites: THREE.Sprite[] = []
@@ -252,15 +256,6 @@ export class Game {
       this.renderer.scene.add(sp)
     }
 
-    // "Glowing slots": brass rings on every free slot while placing.
-    const slotGeo = new THREE.TorusGeometry(1.15, 0.09, 6, 20)
-    slotGeo.rotateX(Math.PI / 2)
-    this.slotMarkers = new THREE.InstancedMesh(slotGeo,
-      new THREE.MeshBasicMaterial({ color: 0xc9b070, transparent: true, opacity: 0.6 }), 80)
-    this.slotMarkers.count = 0
-    this.slotMarkers.frustumCulled = false
-    this.renderer.scene.add(this.slotMarkers)
-
     // Colour-assist chevrons: high-contrast markers above enemy troops.
     const chevGeo = new THREE.ConeGeometry(0.45, 0.9, 4)
     chevGeo.rotateX(Math.PI) // point down
@@ -280,22 +275,121 @@ export class Game {
     this.renderer.scene.add(this.rankMarkers)
   }
 
-  private refreshSlotMarkers(): void {
+  /** Show the zone the selected card may be planted in; hide when idle. */
+  private refreshPlacementZones(): void {
     const id = this.buildSelection
-    let n = 0
-    if (id && this.isUnitKind(id)) {
-      const placement = UNIT_DEFS[id].placement
-      const m = new THREE.Matrix4()
-      for (const slot of this.ctx.s.slots) {
-        if (slot.kind !== placement || slot.unitId !== null || n >= 80) continue
-        const sec = this.ctx.s.sections.find((se) => se.id === slot.sectionId)
-        if (sec?.captured) continue
-        m.setPosition(slot.pos.x, this.terrain.heightAt(slot.pos.x, slot.pos.z) + 0.25, slot.pos.z)
-        this.slotMarkers.setMatrixAt(n++, m)
+    const placement = id
+      ? (this.isUnitKind(id) ? UNIT_DEFS[id].placement : DEFENCE_DEFS[id as DefenceKindId].placement)
+      : null
+    this.showTrenchRibbon(placement === 'trench')
+    const showBand = placement === 'pad' || (placement === 'field' && this.fieldBuildAllowed())
+    this.showZoneBand(id && showBand ? this.zoneBoundsFor(id, placement as 'pad' | 'field') : null)
+  }
+
+  private zoneBoundsFor(id: BuildableId, placement: 'pad' | 'field'): { x0: number; x1: number; z0: number; z1: number } {
+    const xLim = WORLD.width / 2 - 6
+    if (placement === 'pad') {
+      return { x0: -xLim, x1: xLim, z0: WORLD.frontTrenchZ + PLACEMENT.padMarginZ, z1: WORLD.depth / 2 - 10 }
+    }
+    return { x0: -xLim, x1: xLim, z0: id === 'flarepost' ? 20 : -60, z1: WORLD.frontTrenchZ - 5 }
+  }
+
+  /** Brass ribbons along every uncaptured section's fire step. */
+  private showTrenchRibbon(show: boolean): void {
+    if (!show) {
+      if (this.zoneRibbon) this.zoneRibbon.visible = false
+      return
+    }
+    // Rebuilt each time it is summoned — capture state may have changed.
+    if (this.zoneRibbon) {
+      this.renderer.scene.remove(this.zoneRibbon)
+      this.zoneRibbon.geometry.dispose()
+      ;(this.zoneRibbon.material as THREE.Material).dispose()
+    }
+    const pos: number[] = []
+    const idx: number[] = []
+    const HALF = 0.55
+    for (const sec of this.ctx.s.sections) {
+      if (sec.captured) continue
+      const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
+      const segLen = Math.hypot(abx, abz) || 1
+      let nx = -abz / segLen, nz = abx / segLen
+      if (nz > 0) { nx = -nx; nz = -nz }
+      const steps = Math.max(2, Math.round(segLen / 2))
+      const base = pos.length / 3
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps
+        const cx = sec.a.x + abx * t + nx * TRENCH.fireStepSlot
+        const cz = sec.a.z + abz * t + nz * TRENCH.fireStepSlot
+        for (const side of [-HALF, HALF]) {
+          const px = cx + nx * side, pz = cz + nz * side
+          pos.push(px, this.terrain.heightAt(px, pz) + 0.12, pz)
+        }
+      }
+      for (let k = 0; k < steps; k++) {
+        const i0 = base + k * 2
+        idx.push(i0, i0 + 1, i0 + 2, i0 + 1, i0 + 3, i0 + 2)
       }
     }
-    this.slotMarkers.count = n
-    this.slotMarkers.instanceMatrix.needsUpdate = true
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    geo.setIndex(idx)
+    this.zoneRibbon = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0xc9b070, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide,
+    }))
+    this.zoneRibbon.frustumCulled = false
+    this.renderer.scene.add(this.zoneRibbon)
+  }
+
+  /**
+   * Translucent ground-hugging band over an open-ground zone. Vertex alpha
+   * fades to nothing over carved trench so the corridors read as out of
+   * bounds. Cached per bounds — pad and field selections swap cheaply.
+   */
+  private showZoneBand(bounds: { x0: number; x1: number; z0: number; z1: number } | null): void {
+    if (!bounds) {
+      if (this.zoneBand) this.zoneBand.visible = false
+      return
+    }
+    const key = `${bounds.x0},${bounds.x1},${bounds.z0},${bounds.z1}`
+    if (this.zoneBand && this.zoneBandKey === key) {
+      this.zoneBand.visible = true
+      return
+    }
+    if (this.zoneBand) {
+      this.renderer.scene.remove(this.zoneBand)
+      this.zoneBand.geometry.dispose()
+      ;(this.zoneBand.material as THREE.Material).dispose()
+    }
+    const STEP = 3
+    const cols = Math.max(1, Math.ceil((bounds.x1 - bounds.x0) / STEP))
+    const rows = Math.max(1, Math.ceil((bounds.z1 - bounds.z0) / STEP))
+    const pos: number[] = [], rgba: number[] = [], idx: number[] = []
+    for (let r = 0; r <= rows; r++) {
+      const z = bounds.z0 + (r / rows) * (bounds.z1 - bounds.z0)
+      for (let c = 0; c <= cols; c++) {
+        const x = bounds.x0 + (c / cols) * (bounds.x1 - bounds.x0)
+        pos.push(x, this.terrain.heightAt(x, z) + 0.15, z)
+        const open = this.terrain.trenchAt(x, z) < PLACEMENT.padMaxTrench ? 1 : 0
+        rgba.push(0.5, 0.68, 0.35, open * 0.16)
+      }
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const i0 = r * (cols + 1) + c
+        idx.push(i0, i0 + cols + 1, i0 + 1, i0 + 1, i0 + cols + 1, i0 + cols + 2)
+      }
+    }
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(rgba, 4))
+    geo.setIndex(idx)
+    this.zoneBand = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    }))
+    this.zoneBand.frustumCulled = false
+    this.zoneBandKey = key
+    this.renderer.scene.add(this.zoneBand)
   }
 
   // -------------------------------------------------------------------------
@@ -318,7 +412,6 @@ export class Game {
     this.effects?.dispose()
     // The camera carries the FPS viewmodel — it must survive the teardown.
     const persistent = new Set<THREE.Object3D>([this.ghost, this.renderer.camera])
-    if (this.slotMarkers) persistent.add(this.slotMarkers)
     if (this.chevrons) persistent.add(this.chevrons)
     if (this.rankMarkers) persistent.add(this.rankMarkers)
     for (const sp of this.flareSprites) persistent.add(sp)
@@ -341,6 +434,10 @@ export class Game {
       }
     })
     oldScene.clear()
+    // Zone visuals are terrain-specific; the traverse above disposed them.
+    this.zoneRibbon = null
+    this.zoneBand = null
+    this.zoneBandKey = ''
     this.events.clear()
     this.terrain = new Terrain(seed)
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
@@ -357,7 +454,6 @@ export class Game {
     this.scenery = new Scenery(oldScene, this.terrain, seed)
     oldScene.add(this.ghost)
     oldScene.add(this.renderer.camera)
-    if (this.slotMarkers) oldScene.add(this.slotMarkers)
     if (this.chevrons) oldScene.add(this.chevrons)
     if (this.rankMarkers) oldScene.add(this.rankMarkers)
     for (const sp of this.flareSprites) oldScene.add(sp)
@@ -366,7 +462,7 @@ export class Game {
     const upgrades = new Set<string>(resume?.upgrades ?? [])
     this.mods.recompute(upgrades)
 
-    const { sections, slots } = buildSections(this.terrain, this.mods.parapetMult)
+    const sections = buildSections(this.terrain, this.mods.parapetMult)
     const s: SimState = {
       seed,
       time: 0,
@@ -378,7 +474,7 @@ export class Game {
       masksOn: resume?.masksOn ?? false,
       units: [], enemies: [], squads: [], vehicles: [], projectiles: [], bullets: [],
       clouds: [], defences: [], corpses: [],
-      sections, slots,
+      sections,
       fx: [], sounds: [],
       orders: makeOrders(),
       upgrades,
@@ -444,7 +540,6 @@ export class Game {
     this.buildSelection = null
     this.ghost.visible = false
     // No ghosts of the last battlefield: stale instance counts would render.
-    this.slotMarkers.count = 0
     this.chevrons.count = 0
     this.rankMarkers.count = 0
     this.embodyHintShown = false
@@ -460,10 +555,8 @@ export class Game {
   private restoreUnit(su: RunSave['units'][number]): void {
     const kind = su.kind as UnitKindId
     if (!UNIT_DEFS[kind]) return
-    const slot = this.ctx.s.slots.find((sl) => sl.id === su.slotId && sl.unitId === null)
-    if (!slot) return
-    const u = this.createUnit(kind, slot.id, false)
-    if (!u) return
+    // Pads dug for emplacements were already re-carved by the craterOps replay.
+    const u = this.createUnit(kind, su.x, su.z, false)
     u.xp = su.xp
     u.vet = su.vet as Unit['vet']
     u.deeds = su.deeds ?? 0
@@ -513,8 +606,15 @@ export class Game {
       this.sawGas = true
       this.hud?.toast('GAS! GAS! Masks on!', 'danger')
     })
-    ev.on('sectionLost', () => this.hud?.toast('Trench section overrun!', 'danger'))
-    ev.on('sectionRetaken', () => this.hud?.toast('Section retaken. Good work.', 'good'))
+    // Capture flips change where trench cards may go — keep the ribbon honest.
+    ev.on('sectionLost', () => {
+      this.hud?.toast('Trench section overrun!', 'danger')
+      this.refreshPlacementZones()
+    })
+    ev.on('sectionRetaken', () => {
+      this.hud?.toast('Section retaken. Good work.', 'good')
+      this.refreshPlacementZones()
+    })
     ev.on('barrageWarning', (p) => {
       this.hud?.toast('Incoming barrage — take cover!', 'warn')
       this.addWarnRing(p.x, p.z, p.seconds)
@@ -739,7 +839,7 @@ export class Game {
   private autosave(): void {
     const s = this.ctx.s
     const save: RunSave = {
-      version: 1,
+      version: 2,
       seed: this.seedStr,
       difficulty: this.difficulty,
       wave: s.wave,
@@ -747,7 +847,7 @@ export class Game {
       breach: s.breach,
       upgrades: [...s.upgrades],
       units: s.units.filter((u) => !u.disbanded).map((u) => ({
-        kind: u.kind, slotId: u.slotId, xp: u.xp, vet: u.vet,
+        kind: u.kind, x: u.pos.x, z: u.pos.z, xp: u.xp, vet: u.vet,
         deeds: u.deeds, wavesServed: u.wavesServed, targeting: u.targeting,
         heat: u.heat, ammo: u.ammo,
         crew: u.crew.map((c) => ({ first: c.name.first, last: c.name.last, hp: c.hp, kills: c.kills })),
@@ -782,8 +882,35 @@ export class Game {
     this.buildSelection = id
     this.selectedUnitId = -1
     this.ghost.visible = id !== null
-    this.refreshSlotMarkers()
+    this.refreshPlacementZones()
     if (id) this.audio.play('ui_click', { gain: 0.5 })
+  }
+
+  /** Distance from (x,z) to the nearest live unit's post (Infinity when none). */
+  private unitClearance(x: number, z: number): number {
+    let best = Infinity
+    for (const u of this.ctx.s.units) {
+      if (u.disbanded) continue
+      const d = (u.pos.x - x) ** 2 + (u.pos.z - z) ** 2
+      if (d < best) best = d
+    }
+    return Math.sqrt(best)
+  }
+
+  /** Open ground behind the front line, off the trenches, clear of other units. */
+  private padSpotValid(x: number, z: number): boolean {
+    if (Math.abs(x) > WORLD.width / 2 - 6) return false
+    if (z < WORLD.frontTrenchZ + PLACEMENT.padMarginZ || z > WORLD.depth / 2 - 10) return false
+    if (this.unitClearance(x, z) < PLACEMENT.padSpacing) return false
+    // The whole pad must be open ground — the dig skips trench cells, so a
+    // gun straddling a corridor would hang over the void.
+    if (this.terrain.trenchAt(x, z) > PLACEMENT.padMaxTrench) return false
+    const r = PLACEMENT.padRadius * 0.8
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2
+      if (this.terrain.trenchAt(x + Math.cos(a) * r, z + Math.sin(a) * r) > PLACEMENT.padMaxTrench) return false
+    }
+    return true
   }
 
   /** Recompute ghost snap/validity for a world position. */
@@ -794,33 +921,24 @@ export class Game {
     const placement = this.isUnitKind(id) ? UNIT_DEFS[id].placement : DEFENCE_DEFS[id as DefenceKindId].placement
     let valid = false
     let gx = x, gz = z
-    this.ghostSnapSlot = -1
 
-    if (placement === 'trench' || placement === 'pad') {
-      if (id === 'sandbags') {
-        const sec = sectionAt(s.sections, x, z)
-        if (sec && !sec.captured) {
-          gx = sec.mid.x; gz = sec.mid.z
-          valid = !s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)
-        }
-      } else {
-        let best = -1, bestD = 7 * 7
-        for (const slot of s.slots) {
-          if (slot.kind !== placement || slot.unitId !== null) continue
-          const sec = s.sections.find((se) => se.id === slot.sectionId)
-          if (sec?.captured) continue
-          const d = (slot.pos.x - x) ** 2 + (slot.pos.z - z) ** 2
-          if (d < bestD) { bestD = d; best = slot.id }
-        }
-        if (best >= 0) {
-          const slot = s.slots.find((sl) => sl.id === best)
-          if (slot) {
-            gx = slot.pos.x; gz = slot.pos.z
-            this.ghostSnapSlot = best
-            valid = true
-          }
-        }
+    if (id === 'sandbags') {
+      const sec = sectionAt(s.sections, x, z)
+      if (sec && !sec.captured) {
+        gx = sec.mid.x; gz = sec.mid.z
+        valid = !s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)
       }
+    } else if (placement === 'trench') {
+      // Anywhere along an uncaptured fighting line: the cursor projects onto
+      // the nearest fire step; a taken stretch shows the ghost there in red.
+      const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist)
+      if (post) {
+        gx = post.x; gz = post.z
+        valid = this.unitClearance(gx, gz) >= PLACEMENT.trenchSpacing
+      }
+    } else if (placement === 'pad') {
+      // Anywhere on open ground behind the front line.
+      valid = this.padSpotValid(x, z)
     } else {
       // Field placement: forward of the front line, not in a trench, build phase only.
       const zMin = id === 'flarepost' ? 20 : -60
@@ -854,9 +972,12 @@ export class Game {
     if (s.req < cost) return false
 
     if (this.isUnitKind(id)) {
-      if (this.ghostSnapSlot < 0 && id !== 'sandbags' as never) return false
-      const u = this.createUnit(id, this.ghostSnapSlot, true)
-      if (!u) return false
+      // An emplacement crew digs in: level a pad under the gun first so it
+      // sits true (recorded in the ops history — saves replay the dig).
+      if (UNIT_DEFS[id].placement === 'pad') {
+        this.terrain.digPad(this.ghostPos.x, this.ghostPos.z, PLACEMENT.padRadius)
+      }
+      this.createUnit(id, this.ghostPos.x, this.ghostPos.z, true)
     } else {
       this.createDefence(id as DefenceKindId, this.ghostPos.x, this.ghostPos.z, this.wireAngle, true)
     }
@@ -864,20 +985,17 @@ export class Game {
     this.events.emit('reqChanged', { req: s.req })
     this.audio.play('build', { x: this.ghostPos.x, y: this.ghostPos.y, z: this.ghostPos.z })
     this.ctx.flowDirty = true
-    this.refreshSlotMarkers()
     // Keep selection for rapid wire-laying; drop it for expensive one-offs.
     if (id !== 'wire' && id !== 'mine') this.setBuildSelection(null)
     else this.updateGhost(this.ghostPos.x, this.ghostPos.z)
     return true
   }
 
-  private createUnit(kind: UnitKindId, slotId: number, announce: boolean): Unit | null {
+  private createUnit(kind: UnitKindId, x: number, z: number, announce: boolean): Unit {
     const s = this.ctx.s
-    const slot = s.slots.find((sl) => sl.id === slotId)
-    if (!slot || slot.unitId !== null) return null
     const def = UNIT_DEFS[kind]
     const u: Unit = {
-      id: s.nextId++, kind, slotId, pos: { x: slot.pos.x, z: slot.pos.z },
+      id: s.nextId++, kind, pos: { x, z },
       crew: [], heat: 0, venting: false, ammo: kind === 'lewis' ? 6 : -1,
       xp: 0, vet: 0, deeds: 0, wavesServed: 0,
       targeting: def.targeting, fallenBack: false, disbanded: false,
@@ -886,14 +1004,13 @@ export class Game {
     for (let i = 0; i < def.crew; i++) {
       u.crew.push({
         id: s.nextId++, team: 'brit',
-        pos: { x: slot.pos.x + (i % 2) * 1.1 - 0.5, z: slot.pos.z + Math.floor(i / 2) },
+        pos: { x: x + (i % 2) * 1.1 - 0.5, z: z + Math.floor(i / 2) },
         facing: 0, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
         stance: 'stand', suppression: 0, morale: 1, masked: s.masksOn, gasExposure: 0,
         animPhase: this.runRand() * 10, cooldown: this.runRand(),
         name: makeSoldierName(this.runRand), kills: 0,
       })
     }
-    slot.unitId = u.id
     s.units.push(u)
     if (announce) this.events.emit('unitPlaced', { unitId: u.id })
     return u
@@ -973,8 +1090,6 @@ export class Game {
     const u = s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
     if (!u) return
     u.disbanded = true
-    const slot = s.slots.find((sl) => sl.id === u.slotId)
-    if (slot) slot.unitId = null
     s.req += Math.round(this.costOf(u.kind) * ECONOMY.sellRefund)
     this.events.emit('reqChanged', { req: s.req })
     this.audio.play('sell', { gain: 0.6 })
@@ -1161,30 +1276,28 @@ export class Game {
   // without pointer lock or the build → place → possess flow.
   // -------------------------------------------------------------------------
 
-  /** Drop a fresh crew of `kind` on a free slot and step straight into it. */
+  /** Drop a fresh crew of `kind` at a representative post and step straight into it. */
   debugPossessKind(kind: UnitKindId): boolean {
     const s = this.ctx.s
     if (this.fpsMode.active) this.fpsMode.exit()
     // Sweep the field so nothing from a previous pick (or an HMR reload) stacks
     // in view — the lab only ever inhabits one unit at a time.
-    for (const u of s.units) {
-      if (u.disbanded) continue
-      u.disbanded = true
-      const sl = s.slots.find((x) => x.id === u.slotId)
-      if (sl) sl.unitId = null
+    for (const u of s.units) u.disbanded = true
+    // A representative spot near the centre of the line: infantry on the front
+    // fire step, emplacements on open ground just behind it (scanning outward
+    // in x past the centre communication trench).
+    let spot: { x: number; z: number } | null = null
+    if (UNIT_DEFS[kind].placement === 'trench') {
+      spot = projectToFireStep(s.sections, 0, WORLD.frontTrenchZ, 40)
+    } else {
+      for (let k = 0; k < 24 && !spot; k++) {
+        const x = (k % 2 === 0 ? 1 : -1) * Math.ceil(k / 2) * 4
+        const z = WORLD.frontTrenchZ + PLACEMENT.padMarginZ + 8
+        if (this.padSpotValid(x, z)) spot = { x, z }
+      }
     }
-    // Pick a free slot of the right placement, nearest the centre of the front
-    // line, so every weapon is inspected from the same representative spot.
-    const placement = UNIT_DEFS[kind].placement
-    const cand = s.slots.filter((sl) => sl.kind === placement && sl.unitId === null)
-    const pool = cand.length ? cand : s.slots.filter((sl) => sl.unitId === null)
-    pool.sort((a, b) =>
-      Math.hypot(a.pos.x, a.pos.z - WORLD.frontTrenchZ) -
-      Math.hypot(b.pos.x, b.pos.z - WORLD.frontTrenchZ))
-    const slot = pool[0]
-    if (!slot) return false
-    const u = this.createUnit(kind, slot.id, false)
-    if (!u) return false
+    if (!spot) return false
+    const u = this.createUnit(kind, spot.x, spot.z, false)
     const c = u.crew.find((cr) => cr.hp > 0)
     if (!c) return false
     this.fpsMode.debugUnlocked = true

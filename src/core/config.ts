@@ -46,11 +46,27 @@ export const TRENCH = {
   // the deep floor. The riser spans ±0.3 m around it; the deep, duckboarded
   // floor keeps the parados side, the bench takes the enemy side.
   fireStepInset: 0.1,
-  // Fighting slots are pushed this far toward the enemy wall so a manning
+  // Fighting posts are pushed this far toward the enemy wall so a manning
   // soldier's feet land squarely on the bench: centred on the plateau (which
   // spans ~0.4–1.6 m past the centreline), clear of the riser's mask seam so
   // the interpolated trench mask under his feet reads ~0.
   fireStepSlot: 1.0,
+} as const
+
+/** Free placement: anywhere in the zone a card belongs to, within these rules. */
+export const PLACEMENT = {
+  /** Cursor must be within this of a fighting line to snap onto the fire step. */
+  trenchSnapDist: 9,
+  /** Minimum spacing between infantry posts along the trench. */
+  trenchSpacing: 2.1,
+  /** The rear zone starts this far behind the front-line trench centreline. */
+  padMarginZ: 6,
+  /** Minimum spacing between an emplacement post and any other unit. */
+  padSpacing: 4.5,
+  /** Radius of the pad the crew levels when an emplacement digs in. */
+  padRadius: 3.0,
+  /** An emplacement must sit on open ground: trench mask below this all over the pad. */
+  padMaxTrench: 0.2,
 } as const
 
 // ---------------------------------------------------------------------------
