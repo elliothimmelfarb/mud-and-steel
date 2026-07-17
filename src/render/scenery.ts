@@ -20,6 +20,7 @@ import { dressClutter } from './clutter'
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
+const _q2 = new THREE.Quaternion()
 const _e = new THREE.Euler()
 const _v = new THREE.Vector3()
 const _s = new THREE.Vector3(1, 1, 1)
@@ -130,10 +131,12 @@ export class Scenery {
       for (let s = 0; s < line.length - 1 && b < 456; s++) {
         const a = line[s], c = line[s + 1]
         const len = Math.hypot(c.x - a.x, c.z - a.z)
-        const ang = Math.atan2(c.x - a.x, c.z - a.z)
         // Parados normal (toward +z, away from the enemy).
         let nx = (c.z - a.z) / len, nz = -(c.x - a.x) / len
         if (nz < 0) { nx = -nx; nz = -nz }
+        // Duckboards are X-long: yawing local +Z onto the parados normal lays
+        // the stringers along the trench, treads across it.
+        const yaw = Math.atan2(nx, nz)
         for (let d = 1; d < len - 0.5 && b < 456; d += 1.9) {
           const x = a.x + (c.x - a.x) * (d / len) + nx * parados
           const z = a.z + (c.z - a.z) * (d / len) + nz * parados
@@ -143,7 +146,7 @@ export class Scenery {
           let gx = (t.heightAt(x + e2, z) - t.heightAt(x - e2, z)) / (2 * e2)
           let gz = (t.heightAt(x, z + e2) - t.heightAt(x, z - e2)) / (2 * e2)
           gx = Math.max(-0.4, Math.min(0.4, gx)); gz = Math.max(-0.4, Math.min(0.4, gz))
-          _e.set(gz * 0.55, ang, -gx * 0.55, 'XYZ')
+          _e.set(gz * 0.55, yaw, -gx * 0.55, 'XYZ')
           _q.setFromEuler(_e)
           _v.set(x, t.heightAt(x, z) + 0.03, z)
           _m.compose(_v, _q, _s)
@@ -160,16 +163,26 @@ export class Scenery {
     // fire and support lines.
     const bags = makeInstanced(sandbagCourseGeometry(), 260, this.scene)
     const revet = makeInstanced(revetmentPanelGeometry(1.7), 260, this.scene)
-    let bg = 0, rv = 0
+    // Timber facing on the fire step's riser. The carved bench is real geometry,
+    // but at the terrain's 1 m cell it renders as a smooth ramp — this plank
+    // face is what makes it read as a BUILT step from the trench floor.
+    const stepFace = makeInstanced(revetmentPanelGeometry(1.5), 260, this.scene)
+    let bg = 0, rv = 0, sf = 0
     for (const line of parapetLines) {
       for (let s = 0; s < line.length - 1; s++) {
         const a = line[s], c = line[s + 1]
         const len = Math.hypot(c.x - a.x, c.z - a.z)
         if (len < 1) continue
-        const ang = Math.atan2(c.x - a.x, c.z - a.z)
         // Enemy-facing unit normal (toward -z), matching the fire-step carve.
         let nx = -(c.z - a.z) / len, nz = (c.x - a.x) / len
         if (nz > 0) { nx = -nx; nz = -nz }
+        // All three geometries are X-long with +Z as the face. Yawing local +Z
+        // onto the enemy normal runs them along the trench: bags face out over
+        // the parapet, revetment boards face back into the trench. The fire-step
+        // face looks the other way — out of the riser, across the deep floor.
+        const yaw = Math.atan2(nx, nz)
+        _e.set(0, yaw, 0); _q.setFromEuler(_e)
+        _e.set(0, Math.atan2(-nx, -nz), 0); _q2.setFromEuler(_e)
         for (let d = 1.15; d < len - 0.5; d += 2.3) {
           const cx = a.x + (c.x - a.x) * (d / len)
           const cz = a.z + (c.z - a.z) * (d / len)
@@ -177,27 +190,36 @@ export class Scenery {
           if (bg < 256) {
             const sx = cx + nx * (TRENCH.width / 2 + 0.85)
             const sz = cz + nz * (TRENCH.width / 2 + 0.85)
-            _e.set(0, ang, 0); _q.setFromEuler(_e)
             _v.set(sx, t.heightAt(sx, sz) + 0.02, sz)
             _m.compose(_v, _q, _s)
             bags.setMatrixAt(bg++, _m)
           }
           // Plank revetment stands on the deep floor against the parados wall,
-          // boards facing back into the trench. Seated on the floor (grade-depth)
-          // it lines the lower wall instead of poking out of the crest.
+          // boards facing back into the trench. Seat it at the DEEP floor height
+          // (sampled just parados of the centreline — the wall point itself
+          // reads halfway up the slope on the coarse grid) so it lines the
+          // lower wall instead of poking out of the crest.
           if (rv < 256) {
             const wallX = cx - nx * 1.0
             const wallZ = cz - nz * 1.0
-            _e.set(0, ang + Math.PI, 0); _q.setFromEuler(_e) // boards face the trench
-            _v.set(wallX, t.heightAt(wallX, wallZ) - 0.02, wallZ)
+            const floorY = t.heightAt(cx - nx * 0.5, cz - nz * 0.5)
+            _v.set(wallX, floorY - 0.02, wallZ)
             _m.compose(_v, _q, _s)
             revet.setMatrixAt(rv++, _m)
+            // Fire-step riser face: seated on the deep floor at the bench's
+            // foot, top flush with the bench, boards toward the parados.
+            if (sf < 256) {
+              _v.set(cx - nx * 0.15, floorY - 0.02, cz - nz * 0.15)
+              _m.compose(_v, _q2, _s)
+              stepFace.setMatrixAt(sf++, _m)
+            }
           }
         }
       }
     }
     bags.count = bg; bags.instanceMatrix.needsUpdate = true
     revet.count = rv; revet.instanceMatrix.needsUpdate = true
+    stepFace.count = sf; stepFace.instanceMatrix.needsUpdate = true
 
     // Dugout entrances + stores on the support line.
     for (const cx of TRENCH.commTrenchXs) {

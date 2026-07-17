@@ -47,8 +47,10 @@ export const TRENCH = {
   // floor keeps the parados side, the bench takes the enemy side.
   fireStepInset: 0.1,
   // Fighting slots are pushed this far toward the enemy wall so a manning
-  // soldier's feet land squarely on the bench (well past the riser).
-  fireStepSlot: 0.7,
+  // soldier's feet land squarely on the bench: centred on the plateau (which
+  // spans ~0.4–1.6 m past the centreline), clear of the riser's mask seam so
+  // the interpolated trench mask under his feet reads ~0.
+  fireStepSlot: 1.0,
 } as const
 
 // ---------------------------------------------------------------------------

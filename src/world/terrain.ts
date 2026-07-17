@@ -102,6 +102,12 @@ export class Terrain implements TerrainLike {
   /** Wetness value at the last water-map refresh (dead-band anchor). */
   private wetnessApplied = -1
   private craterOps: Array<{ x: number; z: number; r: number; d: number }> = []
+  /**
+   * Fire-step bench cells (vi -> carved bench height). Recorded by the parapet
+   * lines so the communication trenches — carved after them — can't dig the
+   * bench back out at a junction and leave manning soldiers floating there.
+   */
+  private benchGuard = new Map<number, number>()
   /** Fine-detail noise lattice, kept for carve-time surface variation. */
   private detailNoise!: ValueNoise2D
 
@@ -658,9 +664,14 @@ export class Terrain implements TerrainLike {
             // glass (kept on the fire-step too).
             const rut = (dn.at(wx * 0.7 + 3.1, wz * 0.7 + 8.7) - 0.5) * 0.12 * kk
             const cut = TRENCH.depth * kk - rut
-            const target = pre[i] - cut
+            let target = pre[i] - cut
+            // A communication trench meeting a parapet line stops at the fire
+            // step: it must not dig the bench back out, nor re-mask it (the
+            // cleared mask is what plants a manning soldier's feet on it).
+            const guard = parapet ? undefined : this.benchGuard.get(i)
+            if (guard !== undefined && target < guard) target = guard
             if (target < this.heights[i]) this.heights[i] = target
-            this.trench[i] = Math.max(this.trench[i], kk)
+            if (guard === undefined) this.trench[i] = Math.max(this.trench[i], kk)
             // Physical fire step on the enemy wall of the parapet trenches.
             // `signed` > 0 means the cell is on the enemy side of the centreline;
             // past `stepInset` the deep floor gives way to a bench rising to
@@ -678,6 +689,7 @@ export class Terrain implements TerrainLike {
                   this.heights[i] += (benchTop - this.heights[i]) * bench
                 }
                 this.trench[i] *= 1 - bench
+                if (bench > 0.5) this.benchGuard.set(i, this.heights[i])
               }
             }
           } else if (parapet && wz < pz && d < halfW + 2.4) {
