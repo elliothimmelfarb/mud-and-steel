@@ -177,16 +177,18 @@ function pickLanes(rand: Rand, wave: number): number[] {
   return all.slice(0, n)
 }
 
+// Lower-case, mid-sentence fragments — intelFlavor embeds them inside a
+// sentence ("Corps expects <intent>…"), same convention as DIRECTOR counters.
 function defaultIntent(id: TemplateId): string {
   switch (id) {
-    case 'probe': return 'A probing attack to test your line'
-    case 'mass': return 'Attack in mass formation'
-    case 'storm': return 'Infiltration by assault detachments'
-    case 'barrage_assault': return 'Assault behind a heavy preparatory barrage'
-    case 'cavalry_raid': return 'Cavalry raid against your flanks'
-    case 'armour_push': return 'Armoured thrust at your centre'
-    case 'gas_attack': return 'Gas discharge ahead of the infantry'
-    case 'combined': return 'Combined-arms assault in depth'
+    case 'probe': return 'a probing attack to test your line'
+    case 'mass': return 'an attack in mass formation'
+    case 'storm': return 'infiltration by assault detachments'
+    case 'barrage_assault': return 'an assault behind a heavy preparatory barrage'
+    case 'cavalry_raid': return 'a cavalry raid against your flanks'
+    case 'armour_push': return 'an armoured thrust at your centre'
+    case 'gas_attack': return 'a gas discharge ahead of the infantry'
+    case 'combined': return 'a combined-arms assault in depth'
   }
 }
 

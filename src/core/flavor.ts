@@ -866,8 +866,15 @@ const INTEL_LINES: readonly IntelLine[] = [
   (i) => `All indications point to ${i}. Units will stand to from one hour before first light, as if they needed telling.`,
 ];
 
+/** Lower-case a fragment's leading letter so it reads naturally mid-sentence.
+ *  Leaves acronyms alone ("G.H.Q. reserves" stays as written). */
+function midSentence(fragment: string): string {
+  if (/^[A-Z][A-Z.]/.test(fragment)) return fragment;
+  return fragment.charAt(0).toLowerCase() + fragment.slice(1);
+}
+
 export function intelFlavor(intent: string, rand: () => number): string {
-  return pick(rand, INTEL_LINES)(intent);
+  return pick(rand, INTEL_LINES)(midSentence(intent));
 }
 
 // ---------------------------------------------------------------------------
