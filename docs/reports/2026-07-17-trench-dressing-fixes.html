@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — Trench Dressing Set Right · 17 Jul 1916 (2026)</title>
+<style>
+  :root {
+    --paper: #efe6d0; --ink: #2b2620; --khaki: #6b6248; --mud: #4a3f2e;
+    --brass: #a8862f; --red: #8c2f22; --green: #5a6b3f; --card: #f7f1e1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--khaki);
+    font-family: "Courier New", ui-monospace, monospace; color: var(--ink);
+    line-height: 1.55;
+  }
+  .sheet {
+    max-width: 880px; margin: 2.5rem auto; background: var(--paper);
+    padding: 3rem 3.2rem; box-shadow: 0 14px 40px rgba(0,0,0,.45);
+    border: 1px solid #d8ccae;
+  }
+  h1 { font-size: 1.7rem; letter-spacing: .14em; margin: 0 0 .2rem; }
+  h2 { font-size: 1.05rem; letter-spacing: .22em; color: var(--red);
+       border-bottom: 2px solid var(--ink); padding-bottom: .3rem; margin-top: 2.4rem; }
+  .stamp {
+    float: right; border: 3px double var(--red); color: var(--red);
+    padding: .15rem .7rem; letter-spacing: .3em; transform: rotate(6deg); font-weight: bold;
+  }
+  .meta { color: var(--mud); font-size: .85rem; letter-spacing: .1em; }
+  .card {
+    background: var(--card); border: 1px solid #d5c9a8; border-left: 6px solid var(--brass);
+    padding: 1rem 1.2rem; margin: 1rem 0;
+  }
+  .card.bad { border-left-color: var(--red); }
+  .card.good { border-left-color: var(--green); }
+  .k { color: var(--red); font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid #b9ad8d; padding: .45rem .7rem; text-align: left; }
+  th { background: #e3d8bd; letter-spacing: .08em; }
+  td.num { text-align: right; font-weight: bold; }
+  .good-num { color: var(--green); } .bad-num { color: var(--red); }
+  code { background: #e6dcc1; padding: .05rem .35rem; font-size: .9em; }
+  figure { margin: 1.4rem 0; }
+  figcaption { font-size: .8rem; color: var(--mud); margin-top: .4rem; letter-spacing: .05em; }
+  .sig { margin-top: 3rem; text-align: right; font-style: italic; color: var(--mud); }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="stamp">PASSED&nbsp;BY&nbsp;CENSOR</div>
+  <h1>DESPATCH — THE TRENCHES SET RIGHT</h1>
+  <div class="meta">SECOND ARMY · FLANDERS · 17 JULY 1916 (2026) · re: field report &ldquo;something's not quite right with the new trenches&rdquo; · issue #28 · follows PR #21</div>
+
+  <h2>THE COMPLAINT</h2>
+  <div class="card bad">
+    From the line, verbatim: <em>&ldquo;Almost everything is rotated incorrectly by 90 degrees&rdquo;</em> and
+    <em>&ldquo;there is no real step for soldiers to stand on.&rdquo;</em> Sandbag courses scattered like garden
+    walls across No Man's Land, revetment towering over the parados like fencing, duckboards lying
+    across the trench like ladders — and men still hovering at the junctions.
+  </div>
+
+  <h2>WHAT WAS ACTUALLY WRONG</h2>
+  <div class="card bad">
+    <p><span class="k">1 · The quarter-turn.</span> All three props rebuilt in PR #21 —
+    <code>duckboardGeometry</code>, <code>sandbagCourseGeometry</code>, <code>revetmentPanelGeometry</code> —
+    are modelled <b>X-long</b> (their own comments say &ldquo;local +X runs along the wall&rdquo;), but
+    <code>Scenery.dress</code> yawed them with <code>atan2(dx,&nbsp;dz)</code>, which aligns local
+    <b>+Z</b> with the trench segment. Every one of them lay at right angles to the line it was
+    dressing.</p>
+    <p><span class="k">2 · Panels seated mid-slope.</span> The plank revetment took its base height from
+    <code>heightAt</code> at the wall point — which, on a 1&nbsp;m terrain grid, reads half-way up the cut
+    wall. Tops poked ~1.5&nbsp;m above the parados crest.</p>
+    <p><span class="k">3 · A step that didn't read.</span> The carved fire-step bench is real geometry
+    (top&nbsp;≈&nbsp;grade&nbsp;−&nbsp;0.45&nbsp;m, verified in the heightfield) — but a 1.55&nbsp;m riser
+    across a single 1&nbsp;m cell renders as a smooth ramp. Nothing said <em>step</em>.</p>
+    <p><span class="k">4 · Junctions un-dug the bench.</span> The communication trenches carve after the
+    parapet lines and cut <code>pre&nbsp;−&nbsp;depth</code> wherever they pass — including straight through
+    the bench at every junction, re-raising the trench mask as they went. Fighting slots there floated up
+    to <b>0.89&nbsp;m</b>.</p>
+    <p><span class="k">5 · Slots on the seam.</span> <code>fireStepSlot:&nbsp;0.7</code> parked men on the
+    bilinear seam between cleared-mask bench cells and full-mask floor cells — a residual ~0.3&nbsp;m
+    synthetic lift at 11 of 43 slots.</p>
+  </div>
+
+  <h2>THE WORKS CARRIED OUT</h2>
+  <div class="card good">
+    <p><b>Yaw from the wall normal.</b> Every prop is now yawed with <code>atan2(nx,&nbsp;nz)</code> of its
+    wall normal: local +X runs the line, +Z faces where it should — bags out over the parapet, revetment
+    boards into the trench, duckboard stringers down the floor, treads across it.</p>
+    <p><b>Seat on the floor.</b> Revetment panels seat at the deep-floor sample; tops now sit
+    0.2–0.5&nbsp;m <em>below</em> the ground behind them (measured mid-segment).</p>
+    <p><b>Face the riser.</b> A third instanced system — <code>revetmentPanelGeometry(1.5)</code>, seated on
+    the floor, boards toward the parados — planks the bench's riser. From the play camera the trench now
+    reads floor&nbsp;→&nbsp;plank face&nbsp;→&nbsp;bench&nbsp;→&nbsp;sandbagged parapet: a <em>built</em> step.</p>
+    <p><b>Guard the bench.</b> Parapet carves record their bench cells (<code>benchGuard</code>); the comm
+    carve clamps its cut at the recorded bench top and leaves the mask cleared there. The junction keeps
+    its step.</p>
+    <p><b>Centre the slots.</b> <code>fireStepSlot</code> 0.7&nbsp;→&nbsp;1.0 puts fighting slots on the
+    middle of the bench plateau (spans ~0.4–1.6&nbsp;m past centreline), clear of the mask seam.
+    <code>standSurface</code> itself is untouched — the cover model is numerically as tuned.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trench cross-section after the fix">
+      <rect width="800" height="300" fill="#e8dfc6"/>
+      <!-- ground line & profile -->
+      <path d="M0,120 L120,118 L170,100 L215,96 L245,118
+               L258,258 L365,262 L372,150 L455,148 L462,92
+               L520,74 L580,70 L640,96 L800,104"
+            fill="#8a7a55" stroke="#5c4f38" stroke-width="3"/>
+      <rect y="270" width="800" height="30" fill="#6b5d41"/>
+      <!-- water table shading below profile -->
+      <path d="M0,120 L120,118 L170,100 L215,96 L245,118 L258,258 L365,262 L372,150 L455,148 L462,92 L520,74 L580,70 L640,96 L800,104 L800,300 L0,300 Z" fill="#7d6e4c"/>
+      <!-- parados revet -->
+      <g stroke="#4a3323" stroke-width="7">
+        <line x1="262" y1="258" x2="262" y2="150"/><line x1="272" y1="259" x2="272" y2="152"/>
+        <line x1="282" y1="260" x2="282" y2="154"/><line x1="292" y1="260" x2="292" y2="156"/>
+      </g>
+      <!-- duckboard -->
+      <g stroke="#6e5236" stroke-width="5"><line x1="300" y1="258" x2="358" y2="260"/></g>
+      <g stroke="#4a3323" stroke-width="2">
+        <line x1="306" y1="252" x2="306" y2="264"/><line x1="318" y1="252" x2="318" y2="264"/>
+        <line x1="330" y1="253" x2="330" y2="265"/><line x1="342" y1="253" x2="342" y2="265"/>
+        <line x1="354" y1="254" x2="354" y2="266"/>
+      </g>
+      <!-- step face planks -->
+      <g stroke="#4a3323" stroke-width="7">
+        <line x1="368" y1="261" x2="368" y2="152"/><line x1="378" y1="260" x2="378" y2="151"/>
+      </g>
+      <!-- soldier on the bench -->
+      <g>
+        <circle cx="415" cy="94" r="9" fill="#44502f"/>
+        <rect x="408" y="103" width="14" height="34" rx="4" fill="#5a6b3f"/>
+        <line x1="415" y1="137" x2="409" y2="148" stroke="#44502f" stroke-width="5"/>
+        <line x1="415" y1="137" x2="421" y2="148" stroke="#44502f" stroke-width="5"/>
+        <line x1="412" y1="108" x2="452" y2="86" stroke="#3a3126" stroke-width="4"/>
+      </g>
+      <!-- sandbags on parapet -->
+      <g fill="#9a8757" stroke="#6e5f3c" stroke-width="1.5">
+        <ellipse cx="500" cy="82" rx="16" ry="8"/><ellipse cx="532" cy="72" rx="16" ry="8"/>
+        <ellipse cx="564" cy="66" rx="16" ry="8"/><ellipse cx="516" cy="64" rx="16" ry="8"/>
+        <ellipse cx="548" cy="58" rx="16" ry="8"/>
+      </g>
+      <!-- labels -->
+      <g font-family="Courier New, monospace" font-size="13" fill="#2b2620">
+        <text x="120" y="90">parados</text>
+        <text x="248" y="285">revet (seated on floor)</text>
+        <text x="300" y="246">duckboards ∥ line</text>
+        <text x="388" y="185">step face</text>
+        <text x="392" y="170">planks</text>
+        <text x="398" y="60">man ON the bench</text>
+        <text x="600" y="50">sandbag course ∥ line</text>
+        <text x="660" y="130" fill="#8c2f22">← enemy</text>
+      </g>
+    </svg>
+    <figcaption>FIG. 1 — Cross-section after the works: floor → step face → bench → sandbagged parapet. Every timber and bag runs along the line, not across it.</figcaption>
+  </figure>
+
+  <h2>MEASUREMENTS (LIVE, HEADLESS HARNESS)</h2>
+  <table>
+    <tr><th>Metric — float gap at 43 fighting slots</th><th>Before</th><th>After</th></tr>
+    <tr><td>Average (seed 12345)</td><td class="num bad-num">0.21 m</td><td class="num good-num">0.03 m</td></tr>
+    <tr><td>Worst (seed 12345 — at a comm junction)</td><td class="num bad-num">0.89 m</td><td class="num good-num">0.05 m</td></tr>
+    <tr><td>Slots over 0.3 m</td><td class="num bad-num">11 / 43</td><td class="num good-num">0 / 43</td></tr>
+    <tr><td>Worst (seed THE-SOMME, regression check)</td><td class="num">—</td><td class="num good-num">0.03 m</td></tr>
+  </table>
+  <div class="card">
+    Revetment silhouette check, mid-segment: panel tops measured <b>0.2–0.5&nbsp;m below</b> the ground
+    behind them (previously ~1.5&nbsp;m above). Verified visually from the play camera, down-the-trench at
+    eye level, and the original report's high three-quarter vantage. <code>npm run typecheck</code> clean.
+  </div>
+
+  <h2>STILL ON THE BOOKS</h2>
+  <div class="card">
+    Issue #27 remains open by design: men <em>in transit</em> along the deep floor still ride the synthetic
+    <code>standSurface</code> lift rather than the duckboards. That is a sim-wide change (ballistics, FPS
+    eye height, render placement) and is tracked separately.
+  </div>
+
+  <div class="sig">— despatched from the forward sap, in a lull between salvoes</div>
+</div>
+</body>
+</html>
