@@ -70,6 +70,14 @@ export interface SelectedInfo {
   crewMax: number
   hpFrac: number
   heat: number
+  /** Average nerve of the living crew, 0 (broken) .. 1 (steady). */
+  morale: number
+  /** Average suppression on the living crew, 0 (calm) .. 1 (heads down). */
+  suppression: number
+  /** Rounds left in the ready supply; -1 when the weapon is not ammo-limited. */
+  ammo: number
+  /** Size of a full load for ammo-limited weapons; 0 when not applicable. */
+  ammoMax: number
   targeting: TargetPriority
   sellValue: number
   fallenBack: boolean
@@ -865,6 +873,8 @@ export class Game {
     const alive = u.crew.filter((c) => c.hp > 0)
     const hp = alive.reduce((a, c) => a + c.hp, 0)
     const hpMax = u.crew.reduce((a, c) => a + c.maxHp, 0)
+    const morale = alive.length ? alive.reduce((a, c) => a + c.morale, 0) / alive.length : 0
+    const suppression = alive.length ? alive.reduce((a, c) => a + c.suppression, 0) / alive.length : 0
     return {
       unitId: u.id, kind: u.kind,
       name: lead ? `${lead.name.first} ${lead.name.last}` : '—',
@@ -872,6 +882,8 @@ export class Game {
       crewAlive: alive.length, crewMax: u.crew.length,
       hpFrac: hpMax > 0 ? hp / hpMax : 0,
       heat: u.heat,
+      morale, suppression,
+      ammo: u.ammo, ammoMax: u.kind === 'lewis' ? 6 : 0,
       targeting: u.targeting,
       sellValue: Math.round(this.costOf(u.kind) * ECONOMY.sellRefund),
       fallenBack: u.fallenBack,
