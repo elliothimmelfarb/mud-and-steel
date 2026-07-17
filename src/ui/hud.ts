@@ -8,6 +8,7 @@ import type { BuildableId, DefenceKindId, UnitKindId } from '../core/types'
 import {
   BUILD_ORDER, DEFENCE_DEFS, ECONOMY, ORDER_DEFS, UNIT_DEFS, UPGRADE_DEFS,
 } from '../core/config'
+import type { OrderDef } from '../core/config'
 import { keyLabel, type Action } from '../render/controls'
 import type { Game, HudBridge, IntelData, OrderId } from '../game/game'
 import {
@@ -37,13 +38,16 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 
 export class Hud implements HudBridge {
   private root: HTMLDivElement
-  private topInfo!: { req: HTMLElement; wave: HTMLElement; date: HTMLElement; enemies: HTMLElement; timerBtn: HTMLButtonElement; breach: HTMLElement; weather: HTMLElement; needle: HTMLElement; fps: HTMLElement; speedBtns: HTMLButtonElement[]; pauseBtn: HTMLButtonElement }
+  private topInfo!: { req: HTMLElement; wave: HTMLElement; date: HTMLElement; enemies: HTMLElement; timerBtn: HTMLButtonElement; breach: HTMLElement; breachBar: HTMLElement; weather: HTMLElement; vane: HTMLElement; needle: HTMLElement; windCap: HTMLElement; fps: HTMLElement; speedBtns: HTMLButtonElement[]; pauseBtn: HTMLButtonElement }
   private cards = new Map<BuildableId, { root: HTMLButtonElement; cost: HTMLElement }>()
   private orderBtns = new Map<OrderId, { root: HTMLButtonElement; fill: HTMLElement }>()
   private unitPanel!: HTMLElement
   private toastBox!: HTMLElement
   private bannerEl!: HTMLElement
   private tipEl!: HTMLElement
+  private tooltip!: HTMLElement
+  private tooltipFor: HTMLElement | null = null
+  private tooltipBuild: (() => HTMLElement) | null = null
   private shopEl: HTMLElement | null = null
   private overlay: { el: HTMLElement; dispose: () => void } | null = null
   private shownTips = new Set<string>(JSON.parse(localStorage.getItem('mudsteel.tips') ?? '[]') as string[])
@@ -67,7 +71,53 @@ export class Hud implements HudBridge {
     this.tipEl = el('div', 'hud-tip')
     this.tipEl.style.display = 'none'
     this.root.appendChild(this.tipEl)
+    this.tooltip = el('div', 'ms-tooltip hud-tooltip')
+    this.tooltip.style.display = 'none'
+    this.tooltip.setAttribute('role', 'tooltip')
+    this.root.appendChild(this.tooltip)
     game.hud = this
+  }
+
+  // -------------------------------------------------------------------------
+  // Rich hover/focus tooltips (period-styled field cards)
+  // -------------------------------------------------------------------------
+
+  /** Wire a target so hovering or focusing it raises a briefing tooltip. */
+  private attachTip(target: HTMLElement, build: () => HTMLElement): void {
+    const show = (): void => {
+      this.tooltipFor = target
+      this.tooltipBuild = build
+      this.renderTooltip()
+    }
+    const hide = (): void => {
+      if (this.tooltipFor !== target) return
+      this.tooltipFor = null
+      this.tooltipBuild = null
+      this.tooltip.style.display = 'none'
+    }
+    target.addEventListener('mouseenter', show)
+    target.addEventListener('mouseleave', hide)
+    target.addEventListener('focus', show)
+    target.addEventListener('blur', hide)
+  }
+
+  /** (Re)build and position the live tooltip against its current target. */
+  private renderTooltip(): void {
+    if (!this.tooltipFor || !this.tooltipBuild) return
+    const t = this.tooltip
+    t.textContent = ''
+    t.appendChild(this.tooltipBuild())
+    t.style.display = ''
+    // Measure, then clamp to the viewport and aim the arrow at the target.
+    const r = this.tooltipFor.getBoundingClientRect()
+    const tw = t.offsetWidth
+    const half = tw / 2
+    const margin = 8
+    const center = r.left + r.width / 2
+    const left = Math.max(half + margin, Math.min(window.innerWidth - half - margin, center))
+    t.style.left = `${left}px`
+    t.style.top = `${r.top - 12}px`
+    t.style.setProperty('--tip-arrow', `${Math.max(12, Math.min(tw - 12, center - (left - half)))}px`)
   }
 
   // -------------------------------------------------------------------------
@@ -80,7 +130,7 @@ export class Hud implements HudBridge {
 
     const left = el('div')
     left.style.cssText = 'display:flex;gap:10px;align-items:center;'
-    const req = el('span', 'ms-chip', '£0')
+    const req = el('span', 'ms-chip ms-chip--req', '£0')
     req.title = 'Requisition — earn it holding the line, spend it on men and stores'
     const wave = el('span', 'ms-chip', 'WAVE 1')
     const date = el('span', 'ms-chip', '')
@@ -89,17 +139,16 @@ export class Hud implements HudBridge {
 
     const mid = el('div')
     mid.style.cssText = 'display:flex;gap:10px;align-items:center;flex:1;justify-content:center;'
-    const breachWrap = el('div')
-    breachWrap.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:190px;'
+    const breachWrap = el('div', 'hud-line')
     breachWrap.title = 'The line — enemies breaking through past your support trench drain it'
     breachWrap.append(el('span', 'ms-chip', 'THE LINE'))
-    const breachBar = el('div', 'ms-bar ms-bar--hp')
-    breachBar.style.cssText = 'flex:1;'
+    const breachBar = el('div', 'ms-bar ms-bar--hp hud-line__bar')
     const breachFill = el('div', 'ms-bar__fill')
     breachBar.appendChild(breachFill)
     breachWrap.appendChild(breachBar)
-    const timerBtn = el('button', 'ms-btn ms-btn--primary ms-btn--small', 'SOUND THE ADVANCE')
+    const timerBtn = el('button', 'ms-btn ms-btn--primary ms-btn--small hud-advance', 'SOUND THE ADVANCE')
     timerBtn.title = 'Skip the remaining build time for bonus requisition'
+    timerBtn.append(el('span', 'ms-kbd', keyLabel(this.game.input.bindFor('callWave'))))
     timerBtn.addEventListener('click', () => { this.game.callWaveEarly(); timerBtn.blur() })
     mid.append(breachWrap, timerBtn)
 
@@ -110,6 +159,9 @@ export class Hud implements HudBridge {
     vane.title = 'Wind — gas drifts with it. Red means it blows toward YOUR line.'
     const needle = el('div', 'wind-vane__needle')
     vane.appendChild(needle)
+    const windCap = el('div', 'wind-cap')
+    windCap.style.display = 'none'
+    vane.appendChild(windCap)
     const speedBtns: HTMLButtonElement[] = []
     for (const s of [1, 2, 4] as const) {
       const b = el('button', 'ms-btn ms-btn--ghost ms-btn--small', `${s}×`)
@@ -127,7 +179,7 @@ export class Hud implements HudBridge {
 
     top.append(left, mid, right)
     this.root.appendChild(top)
-    this.topInfo = { req, wave, date, enemies, timerBtn, breach: breachFill, weather, needle, fps, speedBtns, pauseBtn }
+    this.topInfo = { req, wave, date, enemies, timerBtn, breach: breachFill, breachBar, weather, vane, needle, windCap, fps, speedBtns, pauseBtn }
   }
 
   private buildBottom(): void {
@@ -140,44 +192,92 @@ export class Hud implements HudBridge {
       const def = ORDER_DEFS[id]
       const b = el('button', 'ms-btn ms-btn--small')
       b.style.position = 'relative'
-      b.title = `${def.blurb}${def.cost ? ` — £${def.cost}` : ''}`
+      b.setAttribute('aria-label', `${def.name} order`)
       const label = el('span', undefined, def.name)
       const kbd = el('span', 'ms-kbd', keyLabel(this.game.input.bindFor(ORDER_ACTION[id])))
       const fill = el('div')
       fill.style.cssText = 'position:absolute;left:0;bottom:0;height:3px;background:var(--brass,#a08a4f);width:0%;'
       b.append(label, kbd, fill)
       b.addEventListener('click', () => { this.game.issueOrder(id); b.blur() })
+      this.attachTip(b, () => orderTip(def, this.game.input.bindFor(ORDER_ACTION[id])))
       orders.appendChild(b)
       this.orderBtns.set(id, { root: b, fill })
     }
     const storesBtn = el('button', 'ms-btn ms-btn--primary ms-btn--small', 'STORES')
-    storesBtn.title = 'Upgrades — new kit and doctrine between waves'
     storesBtn.addEventListener('click', () => { this.toggleShop(); storesBtn.blur() })
+    this.attachTip(storesBtn, () => tipCard('STORES', null,
+      'Divisional stores — spend requisition between waves on new kit and doctrine.', []))
     orders.appendChild(storesBtn)
     bottom.appendChild(orders)
 
-    // Build bar.
+    // Build bar — grouped into the company (men) and field works (defences),
+    // each row wrapping so every card stays reachable at any window width.
     const bar = el('div', 'hud-buildbar')
-    for (let i = 0; i < BUILD_ORDER.length; i++) {
-      const id = BUILD_ORDER[i]
-      const def = this.game.isUnitKind(id) ? UNIT_DEFS[id as UnitKindId] : DEFENCE_DEFS[id as DefenceKindId]
-      const card = el('button', 'hud-card')
-      const action: Action = i < 12 ? (`build${i + 1}` as Action) : (`buildD${i - 11}` as Action)
-      card.title = `${def.name} — £${def.cost}\n${def.blurb}`
-      const icon = el('span', 'hud-card__icon', BUILD_ICONS[id])
-      const name = el('span', 'hud-card__name', def.name)
-      const cost = el('span', 'hud-card__cost', `£${this.game.costOf(id)}`)
-      const kbd = el('span', 'ms-kbd', keyLabel(this.game.input.bindFor(action)))
-      card.append(icon, name, cost, kbd)
-      card.addEventListener('click', () => {
-        this.game.setBuildSelection(this.game.buildSelection === id ? null : id)
-        card.blur()
-      })
-      bar.appendChild(card)
-      this.cards.set(id, { root: card, cost })
+    const groups: Array<{ label: string; from: number; to: number }> = [
+      { label: 'THE COMPANY', from: 0, to: 12 },
+      { label: 'FIELD WORKS', from: 12, to: BUILD_ORDER.length },
+    ]
+    for (const grp of groups) {
+      const group = el('div', 'hud-buildgroup')
+      group.appendChild(el('span', 'hud-buildgroup__label', grp.label))
+      const row = el('div', 'hud-buildgroup__row')
+      for (let i = grp.from; i < grp.to; i++) {
+        const id = BUILD_ORDER[i]
+        const def = this.game.isUnitKind(id) ? UNIT_DEFS[id as UnitKindId] : DEFENCE_DEFS[id as DefenceKindId]
+        const card = el('button', 'hud-card')
+        const action: Action = i < 12 ? (`build${i + 1}` as Action) : (`buildD${i - 11}` as Action)
+        card.setAttribute('aria-label', `${def.name}, £${def.cost}`)
+        const icon = el('span', 'hud-card__icon', BUILD_ICONS[id])
+        const name = el('span', 'hud-card__name', def.name)
+        const cost = el('span', 'hud-card__cost', `£${this.game.costOf(id)}`)
+        const kbd = el('span', 'ms-kbd', keyLabel(this.game.input.bindFor(action)))
+        card.append(icon, name, cost, kbd)
+        card.addEventListener('click', () => {
+          this.game.setBuildSelection(this.game.buildSelection === id ? null : id)
+          card.blur()
+        })
+        this.attachTip(card, () => this.buildTip(id))
+        row.appendChild(card)
+        this.cards.set(id, { root: card, cost })
+      }
+      group.appendChild(row)
+      bar.appendChild(group)
     }
     bottom.appendChild(bar)
     this.root.appendChild(bottom)
+  }
+
+  /** Briefing tooltip for a placeable unit or defence: role, reach, crew, cost. */
+  private buildTip(id: BuildableId): HTMLElement {
+    const g = this.game
+    const s = g.ctx.s
+    const isUnit = g.isUnitKind(id)
+    const cost = g.costOf(id)
+    const stats: Array<[string, string]> = []
+    if (isUnit) {
+      const def = UNIT_DEFS[id as UnitKindId]
+      stats.push(['Post', placementLabel(def.placement)])
+      if (def.range >= 20 && def.damage > 0) stats.push(['Reach', reachLabel(def.range)])
+      if (def.crew > 1) stats.push(['Crew', `${def.crew} men`])
+      if (def.aoe > 0) stats.push(['Effect', 'area blast'])
+      const node = tipCard(def.name, cost, def.blurb, stats)
+      this.appendAffordNote(node, id, cost, s.req, false)
+      return node
+    }
+    const def = DEFENCE_DEFS[id as DefenceKindId]
+    stats.push(['Lay in', placementLabel(def.placement)])
+    const fieldLocked = def.placement === 'field' && !g.fieldBuildAllowed()
+    const node = tipCard(def.name, cost, def.blurb, stats)
+    this.appendAffordNote(node, id, cost, s.req, fieldLocked)
+    return node
+  }
+
+  private appendAffordNote(node: HTMLElement, _id: BuildableId, cost: number, req: number, fieldLocked: boolean): void {
+    if (fieldLocked) {
+      node.appendChild(el('div', 'tip__note', 'Laid in no-man\'s-land — between waves only.'))
+    } else if (req < cost) {
+      node.appendChild(el('div', 'tip__note tip__note--warn', `Short by £${cost - req}.`))
+    }
   }
 
   private buildUnitPanel(): void {
@@ -204,7 +304,10 @@ export class Hud implements HudBridge {
       ? `${s.enemies.length + s.vehicles.filter((v) => v.team === 'german' && !v.dead).length} in the open`
       : s.phase === 'build' ? `stand-to in ${Math.ceil(s.buildTimer)}s` : ''
     t.timerBtn.style.display = s.phase === 'build' ? '' : 'none'
-    t.breach.style.width = `${(s.breach / 100) * 100}%`
+    const lineFrac = Math.max(0, Math.min(1, s.breach / 100))
+    t.breach.style.width = `${lineFrac * 100}%`
+    t.breachBar.classList.toggle('hud-line__bar--warn', lineFrac <= 0.5 && lineFrac > 0.25)
+    t.breachBar.classList.toggle('hud-line__bar--danger', lineFrac <= 0.25)
 
     const w = g.weather.state
     const wi = g.weather.windInfo()
@@ -216,6 +319,11 @@ export class Hud implements HudBridge {
     t.weather.textContent = parts.join(' · ')
     t.needle.style.transform = `rotate(${wi.angle + Math.PI}rad)`
     t.needle.style.background = wi.blowsTowardPlayer ? 'var(--blood,#7a2e22)' : ''
+    // Gas serves whichever side the wind favours — flag a blow-back home.
+    t.vane.classList.toggle('wind-vane--danger', wi.blowsTowardPlayer)
+    const gasHome = wi.blowsTowardPlayer && s.masksOn
+    t.windCap.style.display = gasHome ? '' : 'none'
+    if (gasHome) t.windCap.textContent = 'GAS HOME'
     t.fps.textContent = g.settings.showFps ? `${Math.round(g.fps)} fps` : ''
     for (let i = 0; i < t.speedBtns.length; i++) {
       const sp = [1, 2, 4][i]
@@ -223,14 +331,17 @@ export class Hud implements HudBridge {
     }
     t.pauseBtn.classList.toggle('ms-btn--primary', g.paused)
 
-    // Build cards.
+    // Build cards — distinguish "can't afford yet" from "wrong phase to lay".
     for (const [id, card] of this.cards) {
       const cost = g.costOf(id)
       card.cost.textContent = `£${cost}`
       const fieldLocked = !g.isUnitKind(id) &&
         DEFENCE_DEFS[id as DefenceKindId].placement === 'field' && !g.fieldBuildAllowed()
+      const poor = !fieldLocked && s.req < cost
       card.root.classList.toggle('hud-card--selected', g.buildSelection === id)
-      card.root.classList.toggle('hud-card--disabled', s.req < cost || fieldLocked)
+      card.root.classList.toggle('hud-card--locked', fieldLocked)
+      card.root.classList.toggle('hud-card--poor', poor)
+      card.root.classList.toggle('hud-card--disabled', fieldLocked || poor)
     }
 
     // Orders.
@@ -267,6 +378,9 @@ export class Hud implements HudBridge {
       if (this.bannerT <= 0) this.bannerEl.style.display = 'none'
     }
 
+    // Keep a hovered card's affordability note honest as requisition changes.
+    if (this.tooltipFor && this.tooltip.style.display !== 'none') this.renderTooltip()
+
     this.maybeTip(s.phase, s.wave)
   }
 
@@ -277,39 +391,68 @@ export class Hud implements HudBridge {
       this.lastSelId = sel.unitId
       this.unitPanel.textContent = ''
       const def = UNIT_DEFS[sel.kind]
-      const head = el('div', undefined, `${sel.rank} ${sel.name}`)
-      head.style.cssText = 'font-weight:bold;letter-spacing:0.08em;'
-      const sub = el('div', undefined, `${def.name} · ${'★'.repeat(sel.vet)}${sel.vet ? ' ' : ''}${sel.kills} kills`)
-      sub.style.cssText = 'opacity:0.8;font-size:0.85em;margin:2px 0 6px;'
-      const hpBar = el('div', 'ms-bar ms-bar--hp')
-      const hpFill = el('div', 'ms-bar__fill')
-      hpFill.dataset.role = 'hp'
-      hpBar.appendChild(hpFill)
-      const heatBar = el('div', 'ms-bar ms-bar--heat')
-      heatBar.style.marginTop = '4px'
-      const heatFill = el('div', 'ms-bar__fill')
-      heatFill.dataset.role = 'heat'
-      heatBar.appendChild(heatFill)
-      if (sel.kind !== 'vickers') heatBar.style.display = 'none'
+      const head = el('div', 'unit-name', `${sel.rank} ${sel.name}`)
+      const subBits = [def.name]
+      if (sel.vet > 0) subBits.push('★'.repeat(sel.vet))
+      subBits.push(`${sel.kills} ${sel.kills === 1 ? 'kill' : 'kills'}`)
+      const sub = el('div', 'unit-sub', subBits.join(' · '))
 
-      const targRow = el('div')
-      targRow.style.cssText = 'display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;'
+      const status = el('div', 'unit-status')
+      status.dataset.role = 'status'
+
+      const bars = el('div', 'unit-bars')
+      const addBar = (label: string, role: string, cls: string): void => {
+        const row = el('div', 'unit-bar')
+        row.appendChild(el('span', 'unit-bar__label', label))
+        const bar = el('div', `ms-bar ${cls}`)
+        const fill = el('div', 'ms-bar__fill')
+        fill.dataset.role = role
+        bar.appendChild(fill)
+        row.appendChild(bar)
+        bars.appendChild(row)
+      }
+      addBar('Condition', 'hp', 'ms-bar--hp')
+      addBar('Nerve', 'morale', 'ms-bar--morale')
+      if (sel.kind === 'vickers') addBar('Heat', 'heat', 'ms-bar--heat')
+      if (sel.ammoMax > 0) addBar('Pan', 'ammo', 'ms-bar--ammo')
+
+      const targLabel = el('div', 'unit-targ-label', 'FIRE ON')
+      const targRow = el('div', 'unit-targ')
       for (const p of ['nearest', 'strongest', 'officers', 'armour'] as const) {
         const b = el('button', 'ms-btn ms-btn--ghost ms-btn--small', p)
         b.dataset.targ = p
         b.addEventListener('click', () => { this.game.setTargeting(p); b.blur() })
         targRow.appendChild(b)
       }
-      const sellBtn = el('button', 'ms-btn ms-btn--danger ms-btn--small', `Disband (£${sel.sellValue})`)
-      sellBtn.style.marginTop = '6px'
+      const sellBtn = el('button', 'ms-btn ms-btn--danger ms-btn--small unit-sell', `Disband (£${sel.sellValue})`)
       sellBtn.title = `Refund ${Math.round(ECONOMY.sellRefund * 100)}% (${keyLabel(this.game.input.bindFor('sell'))})`
       sellBtn.addEventListener('click', () => { this.game.sellSelected(); sellBtn.blur() })
-      this.unitPanel.append(head, sub, hpBar, heatBar, targRow, sellBtn)
+      this.unitPanel.append(head, sub, status, bars, targLabel, targRow, sellBtn)
     }
-    const hp = this.unitPanel.querySelector('[data-role="hp"]') as HTMLElement | null
-    if (hp) hp.style.width = `${sel.hpFrac * 100}%`
-    const heat = this.unitPanel.querySelector('[data-role="heat"]') as HTMLElement | null
-    if (heat) heat.style.width = `${sel.heat * 100}%`
+    const setW = (role: string, frac: number): void => {
+      const e = this.unitPanel.querySelector(`[data-role="${role}"]`) as HTMLElement | null
+      if (e) e.style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`
+    }
+    setW('hp', sel.hpFrac)
+    setW('morale', sel.morale)
+    if (sel.kind === 'vickers') setW('heat', sel.heat)
+    if (sel.ammoMax > 0) setW('ammo', sel.ammo < 0 ? 1 : sel.ammo / sel.ammoMax)
+
+    // State pills — rebuilt each frame (crew count, nerve, ammo change live).
+    const status = this.unitPanel.querySelector('[data-role="status"]') as HTMLElement | null
+    if (status) {
+      status.textContent = ''
+      const pill = (text: string, cls = ''): void => {
+        status.appendChild(el('span', `unit-pill ${cls}`.trim(), text))
+      }
+      pill(`${sel.crewAlive}/${sel.crewMax} crew`, sel.crewAlive < sel.crewMax ? 'unit-pill--warn' : '')
+      if (sel.fallenBack) pill('Fallen back', 'unit-pill--danger')
+      else if (sel.suppression > 0.55) pill('Suppressed', 'unit-pill--danger')
+      else if (sel.morale < 0.4) pill('Wavering', 'unit-pill--warn')
+      else pill('Steady', 'unit-pill--good')
+      if (sel.ammoMax > 0 && sel.ammo >= 0 && sel.ammo <= 1) pill('Reloading', 'unit-pill--warn')
+    }
+
     for (const b of this.unitPanel.querySelectorAll('[data-targ]')) {
       b.classList.toggle('ms-btn--primary', (b as HTMLElement).dataset.targ === sel.targeting)
     }
@@ -560,6 +703,51 @@ export class Hud implements HudBridge {
 
 function tierWave(tier: 1 | 2 | 3): number {
   return { 1: 2, 2: 6, 3: 10 }[tier]
+}
+
+/** Human label for where a card is planted. */
+function placementLabel(p: 'trench' | 'pad' | 'field'): string {
+  return p === 'trench' ? 'front trench' : p === 'pad' ? 'weapon pad' : 'no-man\'s-land'
+}
+
+/** Qualitative reach so the raw sim range reads at a glance. */
+function reachLabel(range: number): string {
+  if (range < 40) return 'point-blank'
+  if (range < 100) return 'short'
+  if (range < 160) return 'medium'
+  if (range < 210) return 'long'
+  return 'very long'
+}
+
+/** Build the shared tooltip body: title + cost, role blurb, stat chips. */
+function tipCard(
+  name: string, cost: number | null, blurb: string, stats: Array<[string, string]>,
+): HTMLElement {
+  const wrap = el('div', 'tip')
+  const head = el('div', 'tip__head')
+  head.appendChild(el('span', 'tip__name', name))
+  if (cost !== null) head.appendChild(el('span', 'tip__cost', `£${cost}`))
+  wrap.appendChild(head)
+  if (blurb) wrap.appendChild(el('div', 'tip__blurb', blurb))
+  if (stats.length) {
+    const row = el('div', 'tip__stats')
+    for (const [k, v] of stats) {
+      const chip = el('span', 'tip__stat')
+      chip.appendChild(el('span', 'tip__stat-k', k))
+      chip.appendChild(el('span', 'tip__stat-v', v))
+      row.appendChild(chip)
+    }
+    wrap.appendChild(row)
+  }
+  return wrap
+}
+
+/** Tooltip for a battle order: what it does, cost, cooldown, hotkey. */
+function orderTip(def: OrderDef, code: string): HTMLElement {
+  const stats: Array<[string, string]> = [['Key', keyLabel(code)]]
+  if (def.cooldown) stats.push(['Cooldown', `${def.cooldown}s`])
+  if (def.duration) stats.push(['Lasts', `${def.duration}s`])
+  return tipCard(def.name, def.cost || null, def.blurb, stats)
 }
 
 function timeLabel(tod: number): string {
