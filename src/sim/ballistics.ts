@@ -6,7 +6,7 @@
  * says so. Misses strike real dirt and suppress whoever heard the crack.
  */
 import type { Bullet, ImpactSurface, Soldier, Team, Vec3 } from '../core/types'
-import { ARMOUR_MULT, COMBAT, WORLD } from '../core/config'
+import { ARMOUR_MULT, COMBAT, TRENCH, WORLD } from '../core/config'
 import { dist2, fx, pushFpsFeedback, snd, type Ctx } from './sim'
 import { damageSoldier, damageVehicle, stanceHeight, suppressArea } from './combat'
 import type { Terrain } from '../world/terrain'
@@ -24,9 +24,18 @@ export const G = 9.81
  * (that is what fire-steps were for) while a CROUCHING man ducks fully
  * behind it — with physical bullets, that difference IS the cover model.
  * Render-side standY must use this same function.
+ *
+ * The fire step is now REAL geometry: the enemy wall of each parapet trench
+ * carries a carved bench whose top sits at `grade - (depth - fireStepLift)`,
+ * with its trench mask cleared. A man on the bench therefore has trenchAt≈0
+ * and heightAt≈benchTop, so this returns benchTop — his feet are planted on
+ * ground, no synthetic lift, yet the number is IDENTICAL to the old
+ * `floor + fireStepLift`. On the deep floor the mask is 1 and the term still
+ * lifts a transient (moving) man to the same firing height. One constant,
+ * `TRENCH.fireStepLift`, drives both the carve and this formula.
  */
 export function standSurface(ctx: Ctx, x: number, z: number): number {
-  return ctx.terrain.heightAt(x, z) + ctx.terrain.trenchAt(x, z) * 1.55
+  return ctx.terrain.heightAt(x, z) + ctx.terrain.trenchAt(x, z) * TRENCH.fireStepLift
 }
 
 /** Muzzle origin for a firing soldier (cheek height on the fire step). */
