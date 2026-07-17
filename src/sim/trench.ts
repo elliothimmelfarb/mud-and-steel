@@ -16,6 +16,11 @@ export function buildSections(terrain: Terrain, parapetMult: number): { sections
   const addLine = (line: Vec2[], kind: 'front' | 'support') => {
     for (let i = 0; i < line.length - 1; i++) {
       const a = line[i], b = line[i + 1]
+      // Fighting sections live on the fire BAYS only — the long x-running
+      // forward segments of the crenellated trace. Traverse jogs and the short
+      // links behind the islands are corridors, not firing positions (and only
+      // the bays carry a carved bench for the slots to stand on).
+      if (Math.abs(b.x - a.x) < 8 || Math.abs(b.x - a.x) <= 2 * Math.abs(b.z - a.z)) continue
       const mid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }
       const sec: TrenchSection = {
         id: sectionId++, line: kind, a, b, mid,

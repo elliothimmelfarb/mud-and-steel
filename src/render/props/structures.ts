@@ -660,7 +660,8 @@ export function buildDugout(): THREE.Group {
   const bagGeos: THREE.BufferGeometry[] = []
   for (const s of [-1, 1]) {
     const bx = s * (frameW / 2 + 0.55)
-    const courses = [{ y: 0, n: 3, off: 0 }, { y: 0.3, n: 2, off: 0.26 }, { y: 0.6, n: 1, off: 0 }]
+    // Bags are low, settled sacks (~0.16 crown) — courses nest, not hover.
+    const courses = [{ y: 0, n: 3, off: 0 }, { y: 0.15, n: 2, off: 0.26 }, { y: 0.3, n: 1, off: 0 }]
     for (const c of courses) {
       for (let k = 0; k < c.n; k++) {
         const bag = sandbagGeometry()

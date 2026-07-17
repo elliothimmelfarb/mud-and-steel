@@ -276,16 +276,25 @@ export function wireCoilGeometry(): THREE.BufferGeometry {
 // Sandbag
 // ---------------------------------------------------------------------------
 
-/** A single plump sandbag ~0.5m across: cloth folds, tied neck, seam, dirt mottle. */
+/** A single sandbag ~0.6m across: a filled sack that has SETTLED — wide, low,
+ *  flat-crowned, bulging at the sides under its own weight. Cloth folds, tied
+ *  neck, seam, dirt mottle. */
 export function sandbagGeometry(): THREE.BufferGeometry {
   const bag = new THREE.SphereGeometry(0.28, 14, 11)
-  bag.scale(1.15, 0.62, 0.85)
+  bag.scale(1.35, 0.46, 0.95)
   const pos = bag.getAttribute('position')
   for (let i = 0; i < pos.count; i++) {
     let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i)
     // Low + high frequency cloth folds (radial displacement).
     const fold = 0.06 * Math.sin(x * 5 + z * 3) + 0.03 * Math.sin(x * 11 + y * 9 + z * 7)
     x *= 1 + fold; y *= 1 + fold * 0.6; z *= 1 + fold
+    // Settled sack: flatten the crown, sag its middle, bulge the skirt.
+    if (y > 0) {
+      y *= 0.74
+      y -= 0.022 * (1 - clamp01(Math.abs(x) / 0.34)) * (1 - clamp01(Math.abs(z) / 0.24))
+    } else {
+      x *= 1.06; z *= 1.06
+    }
     // Pinched tied neck toward the +x tip.
     const t = clamp01((x - 0.14) / 0.2)
     const pinch = 1 - 0.72 * t
@@ -297,12 +306,12 @@ export function sandbagGeometry(): THREE.BufferGeometry {
   pos.needsUpdate = true
   bag.computeVertexNormals()
 
-  const knot = new THREE.SphereGeometry(0.055, 6, 5)
-  knot.scale(1.1, 0.85, 0.85)
-  knot.translate(0.34, 0, 0)
+  const knot = new THREE.SphereGeometry(0.05, 6, 5)
+  knot.scale(1.1, 0.7, 0.85)
+  knot.translate(0.4, 0, 0)
 
-  bag.translate(0, 0.17, 0)
-  knot.translate(0, 0.17, 0)
+  bag.translate(0, 0.125, 0)
+  knot.translate(0, 0.09, 0)
   const merged = bakeAndMerge([{ geo: bag, hex: PALETTE.sandbag }, { geo: knot, hex: PALETTE.sandbag }], 0.3)
   // Per-vertex dirt mottle + mud toward the underside, so a wall never reads cloned.
   const [mr, mg, mb] = rgbOf(PALETTE.mud)
@@ -318,37 +327,50 @@ export function sandbagGeometry(): THREE.BufferGeometry {
 // Trench revetment — sandbag courses and plank walls that line the trench
 // ---------------------------------------------------------------------------
 
-/** One low-poly sandbag (~70 tris) for stacked courses; centred, resting on y=0. */
+/** One low-poly sandbag (~70 tris) for stacked courses: wide, LOW, flat-topped
+ *  and side-bulged — a sack that has taken the weight of the course above.
+ *  Centred, resting on y=0, crown at ~0.17. */
 function lowSandbag(rand: () => number, _hex: number): THREE.BufferGeometry {
   const bag = new THREE.SphereGeometry(0.27, 7, 5)
-  bag.scale(1.2 + rand() * 0.15, 0.6, 0.82)
+  bag.scale(1.45 + rand() * 0.18, 0.42, 0.98)
   const pos = bag.getAttribute('position')
   for (let i = 0; i < pos.count; i++) {
     let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i)
     const fold = 0.05 * Math.sin(x * 5 + z * 3 + rand() * 0.01)
     x *= 1 + fold; z *= 1 + fold
+    if (y > 0) {
+      // Flat, faintly saddled crown — the bag above pressed it down.
+      y *= 0.72
+      y -= 0.02 * (1 - clamp01(Math.abs(x) / 0.36))
+    } else {
+      // Skirt squeezed outward by the same weight.
+      x *= 1.07; z *= 1.07
+    }
     pos.setXYZ(i, x, y, z)
   }
   pos.needsUpdate = true
   bag.computeVertexNormals()
-  bag.rotateY((rand() - 0.5) * 0.5)
-  bag.translate(0, 0.16, 0)
+  bag.rotateY((rand() - 0.5) * 0.4)
+  bag.translate(0, 0.108, 0)
   return bag
 }
 
 /**
- * A ~2.3 m run of sandbag revetment — two staggered courses of bags, laid as a
- * parapet cap. Bags carry per-bag scale/rotation/tone jitter so a long wall of
- * these instances never reads cloned. Local +X runs along the wall, bags face
- * outward; the course rests on y=0. ~9 bags, ~640 tris (instances cheaply).
+ * A ~2.3 m run of sandbag revetment — three nesting courses laid as a parapet
+ * cap. Courses SINK into the one below (each row's base sits under the crown
+ * of the last) and bags roll a touch as they settle into the valleys, so the
+ * wall reads slumped under its own weight, not beaded. Local +X runs along the
+ * wall, bags face outward; the course rests on y=0.
  */
 export function sandbagCourseGeometry(): THREE.BufferGeometry {
   const rand = localRand(0x51a7c3)
   const parts: ColoredPart[] = []
   const runLen = 2.3
+  // Bag crown ≈ 0.17; each course starts ~0.115 up — real nesting overlap.
   const rows = [
     { y: 0.0, n: 5, off: 0 },
-    { y: 0.24, n: 4, off: 0.5 },
+    { y: 0.115, n: 4, off: 0.5 },
+    { y: 0.23, n: 4, off: 0.1 },
   ]
   for (const row of rows) {
     const step = runLen / row.n
@@ -356,6 +378,9 @@ export function sandbagCourseGeometry(): THREE.BufferGeometry {
       const x = -runLen / 2 + step * (i + 0.5) + row.off * step * 0.5 + (rand() - 0.5) * 0.05
       const hex = rand() < 0.5 ? PALETTE.sandbag : 0x8a7a50
       const bag = lowSandbag(rand, hex)
+      // Settle: upper bags tip into the valleys of the course below.
+      if (row.y > 0) bag.rotateZ((i % 2 ? 1 : -1) * (0.03 + rand() * 0.05))
+      bag.rotateX((rand() - 0.5) * 0.06)
       bag.translate(x, row.y + (rand() - 0.5) * 0.02, (rand() - 0.5) * 0.05)
       parts.push({ geo: bag, hex })
     }
@@ -415,6 +440,78 @@ export function revetmentPanelGeometry(height = 1.7): THREE.BufferGeometry {
     const mud = smoothstep(height * 0.4, 0.0, y) * 0.55 // muddier toward the floor
     const n2 = 0.84 + 0.28 * hash3(x * 8, y * 4, z * 8)
     return [lerp(r, mr, mud) * n2, lerp(g, mg, mud) * n2, lerp(b, mb, mud) * n2]
+  })
+  return merged
+}
+
+/**
+ * A trench scaling ladder — two rough rails, rungs nailed across, mud-stained
+ * feet. Local: rails rise along +Y from y=0, rungs across X, flat in Z so the
+ * placer can lean it against the enemy wall with its head over the parapet.
+ */
+export function scalingLadderGeometry(): THREE.BufferGeometry {
+  const rand = localRand(0x1adde5)
+  const parts: ColoredPart[] = []
+  const H = 2.3, railW = 0.055
+  for (const sx of [-0.19, 0.19]) {
+    const rail = new THREE.BoxGeometry(railW, H, 0.07)
+    rail.rotateZ((rand() - 0.5) * 0.02)
+    rail.translate(sx, H / 2, 0)
+    parts.push({ geo: rail, hex: PALETTE.woodDark })
+  }
+  const nRung = 7
+  for (let i = 0; i < nRung; i++) {
+    const y = 0.22 + (i * (H - 0.45)) / (nRung - 1)
+    const rung = new THREE.BoxGeometry(0.5, 0.045, 0.055)
+    rung.rotateY((rand() - 0.5) * 0.05)
+    rung.rotateX((rand() - 0.5) * 0.08)
+    rung.translate((rand() - 0.5) * 0.015, y, 0.005)
+    const hex = _c.setHex((i & 1) ? PALETTE.wood : PALETTE.woodDark)
+      .multiplyScalar(0.85 + rand() * 0.3).getHex()
+    parts.push({ geo: rung, hex })
+  }
+  const merged = bakeAndMerge(parts, 0.3)
+  const [mr, mg, mb] = rgbOf(PALETTE.mud)
+  recolor(merged, (x, y, z, r, g, b) => {
+    const mud = smoothstep(0.5, 0.0, y) * 0.5
+    const n2 = 0.86 + 0.26 * hash3(x * 9, y * 5, z * 9)
+    return [lerp(r, mr, mud) * n2, lerp(g, mg, mud) * n2, lerp(b, mb, mud) * n2]
+  })
+  return merged
+}
+
+/**
+ * A salvaged corrugated-iron sheet ~1.1 × 0.85 m — sine-rippled, rust-mottled,
+ * a dented corner. Leans against trench walls as scrounged revetment. Local:
+ * base on y=0, face +Z, ripples running vertically.
+ */
+export function corrugatedSheetGeometry(): THREE.BufferGeometry {
+  const rand = localRand(0xc0447e)
+  const W = 1.1, H = 0.85
+  const sheet = new THREE.BoxGeometry(W, H, 0.02, 16, 2, 1)
+  const pos = sheet.getAttribute('position')
+  const bentX = W / 2 - 0.18, bentY = H / 2 - 0.2
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i)
+    let z = pos.getZ(i) + Math.sin(x * 18.5) * 0.021
+    // One dog-eared corner, folded back.
+    if (x > bentX && y > bentY) z -= (x - bentX) * (y - bentY) * 1.6
+    pos.setXYZ(i, x, y, z)
+  }
+  pos.needsUpdate = true
+  sheet.computeVertexNormals()
+  sheet.translate(0, H / 2, 0)
+  const merged = bakeAndMerge([{ geo: sheet, hex: PALETTE.steelDark }], 0.3)
+  const [rr, rg, rb] = rgbOf(PALETTE.rust)
+  const [mr, mg, mb] = rgbOf(PALETTE.mud)
+  recolor(merged, (x, y, z, r, g, b) => {
+    // Rust blooms in patches, heavier along the ripple crests and the top edge.
+    const bloom = hash3(x * 6.5, y * 5.1, z * 3.3)
+    const rust = clamp01(bloom * 1.4 - 0.45 + smoothstep(H * 0.55, H, y) * 0.25)
+    const mud = smoothstep(0.22, 0.0, y) * 0.55
+    let cr = lerp(r, rr, rust * 0.8), cg = lerp(g, rg, rust * 0.8), cb = lerp(b, rb, rust * 0.8)
+    const n2 = 0.85 + 0.3 * hash3(x * 14, y * 11, z * 9)
+    return [lerp(cr, mr, mud) * n2, lerp(cg, mg, mud) * n2, lerp(cb, mb, mud) * n2]
   })
   return merged
 }

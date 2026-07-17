@@ -187,8 +187,9 @@ function scatterGrass(scene: THREE.Scene, terrain: Terrain, rand: Rand): Clutter
     const cx = (rand() - 0.5) * 2 * halfW
     const cz = zMin + rand() * (zMax - zMin)
     // Grass only where the soil hasn't been shredded, cut open, or hollowed
-    // into a pit that will puddle in the rain.
-    if (terrain.churnAt(cx, cz) > 0.25) continue
+    // into a pit that will puddle in the rain. Gate on the RENDER churn so
+    // tufts also stay off the bare trodden band around the trenchworks.
+    if (terrain.churnVisAt(cx, cz) > 0.25) continue
     if (terrain.trenchAt(cx, cz) > 0.2) continue
     if (aoAt(terrain, cx, cz) > 0.45) continue
     const clump = 2 + ((rand() * 4) | 0) // 2–5 tufts per patch
