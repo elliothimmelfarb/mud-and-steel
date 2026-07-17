@@ -39,13 +39,14 @@ import {
 // ---------------------------------------------------------------------------
 
 export type SfxName =
-  | 'rifle' | 'rifle_far' | 'mg' | 'pistol' | 'sniper' | 'mortar_launch'
-  | 'fieldgun' | 'explosion_small' | 'explosion_big' | 'explosion_far'
-  | 'dirt_shower' | 'gas_pop' | 'gas_gong' | 'melee' | 'death_cry' | 'horse'
-  | 'wire_snip' | 'build' | 'dig' | 'sell' | 'ui_click' | 'ui_open'
-  | 'ui_error' | 'upgrade' | 'whistle_attack' | 'flare_pop' | 'reload'
-  | 'steam_vent' | 'thunder' | 'bugle_victory' | 'drone_defeat' | 'splash'
-  | 'tank_hit' | 'ricochet' | 'cough'
+  | 'rifle' | 'rifle_far' | 'mg' | 'mg_vickers' | 'pistol' | 'sniper'
+  | 'mortar_launch' | 'fieldgun' | 'explosion_small' | 'explosion_big'
+  | 'explosion_far' | 'dirt_shower' | 'gas_pop' | 'gas_gong' | 'melee'
+  | 'death_cry' | 'horse' | 'wire_snip' | 'build' | 'dig' | 'sell'
+  | 'ui_click' | 'ui_open' | 'ui_error' | 'upgrade' | 'whistle_attack'
+  | 'flare_pop' | 'reload' | 'steam_vent' | 'thunder' | 'bugle_victory'
+  | 'drone_defeat' | 'splash' | 'tank_hit' | 'ricochet' | 'cough'
+  | 'supersonic_crack' | 'birdsong'
 
 export type LoopName =
   | 'tank_engine' | 'plane' | 'flamethrower' | 'rain' | 'wind'
@@ -71,7 +72,10 @@ interface AmbienceState {
   battle: number
   rain: number
   wind: number
-  night: boolean
+  /** Continuous darkness dial (0 day … 1 full dark) — crossfades the beds. */
+  nightFactor: number
+  /** Time of day (0 midnight, 0.5 noon) — drives sparse dawn birdsong. */
+  tod: number
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +150,10 @@ const VERB_MUL: Partial<Record<SfxName, number>> = {
   bugle_victory: 1.2,
   drone_defeat: 1.1,
   cough: 0.4,
+  // A near-miss crack is a dry, immediate air event — very little room tail.
+  supersonic_crack: 0.35,
+  // Birdsong sits in the open air of dawn, a touch of space but not drenched.
+  birdsong: 0.6,
   ui_click: 0,
   ui_open: 0,
   ui_error: 0,
@@ -194,8 +202,10 @@ export class AudioEngine {
   private ambBattle = 0
   private ambRainV = 0
   private ambWindV = 0
-  private ambNight = false
+  private ambNightFactor = 0
+  private ambTod = 0.5
   private nextBoom = 0
+  private nextBird = 0
   private rainInst: LoopInst | null = null
   private windInst: LoopInst | null = null
   private nightInst: LoopInst | null = null
@@ -234,9 +244,20 @@ export class AudioEngine {
     comp.ratio.value = 6
     comp.attack.value = 0.004
     comp.release.value = 0.18
+    // Brick-wall safety limiter after the glue compressor: hard knee, high
+    // ratio, fast attack, ceiling just below 0 dBFS. The richer layered weapon
+    // reports and twin-sub artillery can momentarily stack loud; this catches
+    // the peaks so the master never clips, without colouring normal levels.
+    const limiter = ctx.createDynamicsCompressor()
+    limiter.threshold.value = -1.5
+    limiter.knee.value = 0
+    limiter.ratio.value = 20
+    limiter.attack.value = 0.002
+    limiter.release.value = 0.12
     master.connect(masterLP)
     masterLP.connect(comp)
-    comp.connect(ctx.destination)
+    comp.connect(limiter)
+    limiter.connect(ctx.destination)
 
     const mkBus = (): GainNode => {
       const b = ctx.createGain()
@@ -278,6 +299,7 @@ export class AudioEngine {
     this.applyMuffle()
 
     this.nextBoom = ctx.currentTime + 4 + Math.random() * 8
+    this.nextBird = ctx.currentTime + 2 + Math.random() * 4
     this.ambTimer = setInterval(() => this.ambTick(), 400)
 
     if (this.ambStarted) {
@@ -285,7 +307,8 @@ export class AudioEngine {
         battle: this.ambBattle,
         rain: this.ambRainV,
         wind: this.ambWindV,
-        night: this.ambNight,
+        nightFactor: this.ambNightFactor,
+        tod: this.ambTod,
       })
     }
   }
@@ -671,7 +694,8 @@ export class AudioEngine {
     this.ambBattle = clamp01(s.battle)
     this.ambRainV = clamp01(s.rain)
     this.ambWindV = clamp01(s.wind)
-    this.ambNight = s.night
+    this.ambNightFactor = clamp01(s.nightFactor)
+    this.ambTod = s.tod
     this.ambStarted = true
     const g = this.g
     if (!g) return
@@ -692,11 +716,15 @@ export class AudioEngine {
       this.crossfadeLoop(this.windInst, 0.9)
     }
 
-    if (this.nightInst === null && this.ambNight) {
+    // Night bed crossfades CONTINUOUSLY on nightFactor (not a hard boolean),
+    // so the eerie drone swells in over the dying daytime wind through the
+    // whole dusk→dark glide and ebbs back out at dawn. Spun up lazily the first
+    // time any darkness appears, then left to breathe via its gain.
+    if (this.nightInst === null && this.ambNightFactor > 0.02) {
       this.nightInst = this.mkLoopInst(NIGHT_DRONE, g.buses.ambience, 0)
     }
     if (this.nightInst !== null) {
-      this.nightInst.userGain = this.ambNight ? 0.05 : 0
+      this.nightInst.userGain = this.ambNightFactor * 0.06
       this.crossfadeLoop(this.nightInst, 2.0)
     }
   }
@@ -718,7 +746,9 @@ export class AudioEngine {
     const now = g.ctx.currentTime
     this.pruneList(this.voices, now)
     this.pruneList(this.dying, now)
-    if (!this.ambStarted || now < this.nextBoom) return
+    if (!this.ambStarted) return
+    this.ambBird(now)
+    if (now < this.nextBoom) return
     const period = 22 - 19.8 * this.ambBattle // 22 s calm → 2.2 s at battle=1
     this.nextBoom = now + period * (0.5 + Math.random())
     const o = this.boomOpts
@@ -728,5 +758,35 @@ export class AudioEngine {
     o.gain = 0.5 + Math.random() * 0.4
     o.rate = 0.8 + Math.random() * 0.4
     this.play('explosion_far', o)
+  }
+
+  /**
+   * Sparse dawn birdsong. Only sings in the narrow window around sunrise (tod
+   * ~0.27), only while the light is still low but not pitch-dark, and only when
+   * the front is quiet — birds fall silent under a barrage. Each call is placed
+   * off to a random side, up in whatever thin trees survive, and kept faint.
+   */
+  private ambBird(now: number): void {
+    if (now < this.nextBird) return
+    // Triangular window peaking at sunrise, ~1.5 h wide either side.
+    const dawn = Math.max(0, 1 - Math.abs(this.ambTod - 0.27) / 0.07)
+    // Sing at half-light (dawn drone still up a little) but not full dark or
+    // broad day, and only when the guns are quiet.
+    const quiet = Math.max(0, 1 - this.ambBattle / 0.4)
+    const chance = dawn * quiet * clamp01(this.ambNightFactor / 0.5)
+    if (chance < 0.03) {
+      this.nextBird = now + 4 + Math.random() * 6 // idle poll, cheap
+      return
+    }
+    // Denser calling the nearer the peak of dawn: 2.5 s..10 s between warbles.
+    this.nextBird = now + (2.5 + Math.random() * 7.5) / Math.max(0.15, chance)
+    const side = Math.random() < 0.5 ? -1 : 1
+    this.play('birdsong', {
+      x: this.lx + side * (14 + Math.random() * 40),
+      y: 4 + Math.random() * 4,
+      z: this.lz + (Math.random() - 0.5) * 60,
+      gain: 0.22 + Math.random() * 0.16,
+      rate: 0.92 + Math.random() * 0.22,
+    })
   }
 }

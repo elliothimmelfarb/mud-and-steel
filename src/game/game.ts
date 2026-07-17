@@ -1512,7 +1512,8 @@ export class Game {
       battle: this.battleNoise,
       rain: w.rain,
       wind: Math.min(1, Math.hypot(w.windX, w.windZ) / 6.5),
-      night: w.night,
+      nightFactor: nf,
+      tod: w.tod,
     })
 
     this.effects.update(dt, this.renderer.camera, w.windX, w.windZ)

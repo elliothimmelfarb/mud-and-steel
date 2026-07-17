@@ -1099,13 +1099,14 @@ export class FpsMode {
       const d = Math.sqrt(this.whizD2[k])
       const prox = 1 - clamp(d / WHIZ_RADIUS, 0, 1) // 0 at the edge of the radius, 1 dead-on
       const g = this.game
-      // Reuse the existing ricochet whine as the crack: a raw noise burst
-      // pitched up and louder the closer the round actually passed, played
-      // at the closest-approach point so 3D panning places it convincingly
-      // left/right/behind rather than glued to the shooter's muzzle.
-      g.audio.play('ricochet', {
+      // A dedicated supersonic crack — the ballistic N-wave — louder and
+      // sharper the closer the round actually passed, played at the closest-
+      // approach point so 3D panning throws it past the ear convincingly
+      // rather than gluing it to the shooter's muzzle. Distinct from the
+      // descending whine of a ricochet and from the distant muzzle report.
+      g.audio.play('supersonic_crack', {
         x: this.whizCx[k], y: this.whizCy[k], z: this.whizCz[k],
-        gain: 0.28 + prox * 0.5, rate: 1.6 + prox * 0.6,
+        gain: 0.34 + prox * 0.5, rate: 0.9 + prox * 0.5,
       })
       // A tiny air-snap wisp at the crossing point — reuses the same faint
       // powder-smoke puff the tracer trail leaves (effects.ts's tracerTrail);

@@ -257,6 +257,66 @@ function metal(
   }
 }
 
+/** Small per-shot randomization: a multiplier centred on 1, spread ±amt. */
+function jitter(amt: number): number {
+  return 1 + (Math.random() * 2 - 1) * amt
+}
+
+interface ReportOpts {
+  /** Broadband muzzle transient (the initial "crack"). */
+  crackPeak: number
+  crackFreq: number
+  crackTau?: number
+  /** Filtered report body (its tone and weight). */
+  bodyPeak: number
+  bodyFreq: number
+  bodyTau: number
+  bodyDur: number
+  bodyBuf?: keyof Buffers
+  bodyQ?: number
+  /** Trench slapback: a quieter, delayed, darker reflection (0 = none). */
+  slap?: number
+  slapAt?: number
+}
+
+/**
+ * The shared spine of every small-arm report: a sharp broadband transient, a
+ * filtered body, and a single early reflection that reads as the trench walls
+ * throwing the muzzle blast back a few milliseconds later. Every layer is
+ * pitch/filter/timing jittered per call so a sustained burst never sounds like
+ * one stamped sample repeating. Mechanism sounds (bolt, rattle) are layered on
+ * top by each weapon's own recipe.
+ */
+function report(v: SynthVoice, o: ReportOpts): void {
+  const jf = jitter(0.05)
+  const cTau = o.crackTau ?? 0.006
+  // 1) muzzle transient — the whip of the crack
+  burst(v, {
+    peak: o.crackPeak, tau: cTau, dur: cTau * 6,
+    ftype: 'highpass', freq: o.crackFreq * jf, q: 0.7,
+  })
+  // 2) report body — brown/white through a bandpass gives tone + heft
+  burst(v, {
+    buf: o.bodyBuf ?? 'brown', peak: o.bodyPeak, tau: o.bodyTau, dur: o.bodyDur,
+    ftype: 'bandpass', freq: o.bodyFreq * jf, q: o.bodyQ ?? 0.8,
+  })
+  // 3) trench slapback — a darker, quieter echo a few ms behind the report
+  if (o.slap) {
+    const at = (o.slapAt ?? 0.022) * jitter(0.18)
+    burst(v, {
+      at, peak: o.crackPeak * o.slap, tau: cTau * 3, dur: 0.11,
+      ftype: 'bandpass', freq: o.crackFreq * 0.55 * jf, q: 0.9,
+    })
+  }
+}
+
+/** A single dry metallic action click (bolt lug, feed pawl) with timing jitter. */
+function mechClick(v: SynthVoice, at: number, freq: number, peak: number): void {
+  const jf = jitter(0.08)
+  burst(v, { at, peak, tau: 0.01, dur: 0.045, ftype: 'bandpass', freq: freq * jf, q: 2.6 })
+  burst(v, { at: at + 0.006, buf: 'brown', peak: peak * 0.5, tau: 0.02, dur: 0.06, ftype: 'lowpass', freq: 520, q: 0.7 })
+}
+
 /** Start every registered source at t0 (loops only — one-shots self-start). */
 function startAll(v: SynthVoice): void {
   for (const s of v.sources) {
@@ -270,12 +330,19 @@ function startAll(v: SynthVoice): void {
 // ---------------------------------------------------------------------------
 
 export const SFX_RECIPES: Record<SfxName, Recipe> = {
-  // Lee-Enfield: a sharp dry crack, low body, then the bolt working
+  // Lee-Enfield .303: a sharp dry crack over a low body, a whip of trench
+  // slapback, then the unmistakable SMLE bolt — lift, draw, thumb a round,
+  // ram home. Every shot is pitch/timing jittered so rapid fire stays alive.
   rifle(v) {
-    burst(v, { peak: 1.0, tau: 0.045, dur: 0.28, ftype: 'highpass', freq: 900, q: 0.7 })
-    burst(v, { buf: 'brown', peak: 0.8, tau: 0.07, dur: 0.3, ftype: 'bandpass', freq: 320, q: 0.8 })
-    burst(v, { at: 0.16, peak: 0.14, tau: 0.014, dur: 0.06, ftype: 'highpass', freq: 2800, q: 1 })
-    burst(v, { at: 0.21, peak: 0.1, tau: 0.012, dur: 0.05, ftype: 'highpass', freq: 3400, q: 1 })
+    report(v, {
+      crackPeak: 1.0, crackFreq: 900, crackTau: 0.007,
+      bodyPeak: 0.8, bodyFreq: 320, bodyTau: 0.07, bodyDur: 0.3,
+      slap: 0.28, slapAt: 0.021,
+    })
+    // Bolt cycle: two bright lug clicks (lift + draw) then a duller close.
+    mechClick(v, 0.15 * jitter(0.12), 2900, 0.15)
+    mechClick(v, 0.205 * jitter(0.1), 3400, 0.11)
+    burst(v, { at: 0.27 * jitter(0.08), buf: 'brown', peak: 0.12, tau: 0.016, dur: 0.06, ftype: 'lowpass', freq: 650, q: 0.8 })
     return 0.42 / v.rate
   },
 
@@ -286,25 +353,56 @@ export const SFX_RECIPES: Record<SfxName, Recipe> = {
     return 0.55 / v.rate
   },
 
-  // One Vickers/MG08 round: cheap and tight so 9/s layers cleanly
+  // One air-cooled Lewis round: a light, bright clatter with a snappy bolt
+  // tick riding on top. Deliberately cheap and tight so ~8-9/s layers cleanly
+  // into a rattle; the per-shot jitter is what keeps the burst from droning.
   mg(v) {
-    burst(v, { peak: 0.75, tau: 0.02, dur: 0.1, ftype: 'bandpass', freq: 1500, q: 0.6 })
-    tone(v, { f0: 190, f1: 110, peak: 0.4, tau: 0.03, dur: 0.09 })
+    report(v, {
+      crackPeak: 0.75, crackFreq: 1500, crackTau: 0.006,
+      bodyPeak: 0.4, bodyFreq: 300, bodyTau: 0.03, bodyDur: 0.09, bodyQ: 0.9,
+    })
+    tone(v, { f0: 190 * jitter(0.06), f1: 110, peak: 0.36, tau: 0.03, dur: 0.09 })
+    burst(v, { at: 0.014, peak: 0.11, tau: 0.008, dur: 0.03, ftype: 'bandpass', freq: 3100 * jitter(0.1), q: 3 })
     return 0.14 / v.rate
   },
 
-  // Webley: small dry pop
-  pistol(v) {
-    burst(v, { peak: 0.7, tau: 0.03, dur: 0.14, ftype: 'bandpass', freq: 950, q: 0.8 })
-    tone(v, { f0: 340, f1: 180, peak: 0.35, tau: 0.04, dur: 0.12 })
+  // One Vickers/MG08 round: the water-jacket makes it heavier, darker and a
+  // touch slower to die than the Lewis — a deeper thud with a wet mechanical
+  // clank of the fusee and feed block, still cheap enough to sustain all day.
+  mg_vickers(v) {
+    report(v, {
+      crackPeak: 0.82, crackFreq: 1150, crackTau: 0.008,
+      bodyPeak: 0.6, bodyFreq: 220, bodyTau: 0.05, bodyDur: 0.14, bodyBuf: 'brown', bodyQ: 0.8,
+    })
+    tone(v, { f0: 150 * jitter(0.06), f1: 78, peak: 0.42, tau: 0.045, dur: 0.13 })
+    burst(v, { at: 0.02, peak: 0.13, tau: 0.012, dur: 0.05, ftype: 'bandpass', freq: 1900 * jitter(0.1), q: 2.4 })
     return 0.2 / v.rate
   },
 
-  // Heavier crack, bigger body; the engine gives it a longer reverb send
+  // Webley .455: a stubby dry bark with more low-end thump than a rifle and a
+  // faint hammer/cylinder click, snappy per-shot for double-action fire.
+  pistol(v) {
+    report(v, {
+      crackPeak: 0.72, crackFreq: 950, crackTau: 0.008,
+      bodyPeak: 0.5, bodyFreq: 300, bodyTau: 0.045, bodyDur: 0.16, bodyBuf: 'brown', bodyQ: 0.9,
+      slap: 0.22, slapAt: 0.02,
+    })
+    tone(v, { f0: 340 * jitter(0.06), f1: 175, peak: 0.34, tau: 0.045, dur: 0.13 })
+    burst(v, { at: 0.05 * jitter(0.15), peak: 0.08, tau: 0.008, dur: 0.03, ftype: 'bandpass', freq: 2400, q: 2.2 })
+    return 0.24 / v.rate
+  },
+
+  // Sniper SMLE: the rifle's crack but heavier and slower — one authoritative
+  // report with a long body the engine drenches in reverb, then a slow bolt.
   sniper(v) {
-    burst(v, { peak: 1.25, tau: 0.06, dur: 0.4, ftype: 'highpass', freq: 650, q: 0.7 })
-    burst(v, { buf: 'brown', peak: 0.9, tau: 0.11, dur: 0.5, ftype: 'bandpass', freq: 240, q: 0.7 })
-    tone(v, { f0: 130, f1: 60, peak: 0.7, tau: 0.14, dur: 0.45 })
+    report(v, {
+      crackPeak: 1.25, crackFreq: 700, crackTau: 0.012,
+      bodyPeak: 0.9, bodyFreq: 240, bodyTau: 0.11, bodyDur: 0.5, bodyQ: 0.7,
+      slap: 0.3, slapAt: 0.028,
+    })
+    tone(v, { f0: 130 * jitter(0.05), f1: 60, peak: 0.7, tau: 0.14, dur: 0.45 })
+    mechClick(v, 0.24 * jitter(0.1), 2600, 0.12)
+    mechClick(v, 0.33 * jitter(0.1), 3000, 0.09)
     return 0.6 / v.rate
   },
 
@@ -315,23 +413,32 @@ export const SFX_RECIPES: Record<SfxName, Recipe> = {
     return 0.4 / v.rate
   },
 
-  // 18-pounder: enormous low crack, sub thump, carriage rattle
+  // 18-pounder: an enormous concussive slam. A hard broadband crack rides a
+  // deep sub thump that punches the chest, a long low blast-wash rolls out, and
+  // the recoiling carriage rattles and clangs as the barrel runs back on its
+  // buffer. The extra sub layer is the "low-end weight" a field gun needs.
   fieldgun(v) {
     burst(v, { peak: 1.0, tau: 0.04, dur: 0.25, ftype: 'lowpass', freq: 2600, q: 0.5 })
-    burst(v, { buf: 'brown', peak: 1.5, tau: 0.22, dur: 1.0, ftype: 'lowpass', freq: 480, q: 0.4 })
-    tone(v, { f0: 60, f1: 34, peak: 1.1, tau: 0.3, dur: 0.9 })
-    for (let i = 0; i < 4; i++) {
+    burst(v, { buf: 'brown', peak: 1.55, tau: 0.24, dur: 1.1, ftype: 'lowpass', freq: 480, q: 0.4 })
+    // Two detuned sub sines for a fatter, chest-punching fundamental.
+    tone(v, { f0: 60 * jitter(0.04), f1: 34, peak: 1.1, tau: 0.3, dur: 0.9 })
+    tone(v, { f0: 41 * jitter(0.04), f1: 26, peak: 0.85, tau: 0.42, dur: 1.2 })
+    // A distinct blast slapback off the gun pit / parados a beat later.
+    burst(v, { at: 0.05 * jitter(0.2), buf: 'brown', peak: 0.55, tau: 0.12, dur: 0.5, ftype: 'lowpass', freq: 900, q: 0.5 })
+    // Recoil carriage rattle — buffer clangs as the barrel runs out and back.
+    for (let i = 0; i < 5; i++) {
       burst(v, {
-        at: 0.12 + i * 0.055 + Math.random() * 0.02, peak: 0.09, tau: 0.012, dur: 0.05,
-        ftype: 'bandpass', freq: 2200 + Math.random() * 1800, q: 3,
+        at: 0.11 + i * 0.05 + Math.random() * 0.025, peak: 0.1 * jitter(0.3), tau: 0.012, dur: 0.05,
+        ftype: 'bandpass', freq: 2000 + Math.random() * 2000, q: 3,
       })
     }
-    return 1.1 / v.rate
+    return 1.3 / v.rate
   },
 
   // Grenade / small shell: thump, blast, short rumble
   explosion_small(v) {
     tone(v, { f0: 95, f1: 42, sweepT: 0.28, peak: 1.1, attack: 0.004, tau: 0.16, dur: 0.5 })
+    tone(v, { f0: 52 * jitter(0.05), f1: 30, sweepT: 0.35, peak: 0.7, attack: 0.006, tau: 0.26, dur: 0.7 })
     burst(v, { buf: 'brown', peak: 1.25, attack: 0.002, tau: 0.16, dur: 0.7, ftype: 'lowpass', freq: 950, q: 0.5 })
     burst(v, { buf: 'brown', at: 0.06, peak: 0.55, attack: 0.09, tau: 0.5, dur: 1.9, ftype: 'lowpass', freq: 230, q: 0.4 })
     return 2.0 / v.rate
@@ -340,6 +447,8 @@ export const SFX_RECIPES: Record<SfxName, Recipe> = {
   // 5.9-inch: deep sub sweep, big blast, long rumble, falling debris
   explosion_big(v) {
     tone(v, { f0: 74, f1: 30, sweepT: 0.5, peak: 1.5, attack: 0.005, tau: 0.3, dur: 0.9 })
+    // Ground-shaking sub: a slow, very low sine under the whole blast.
+    tone(v, { f0: 40 * jitter(0.05), f1: 22, sweepT: 0.7, peak: 1.0, attack: 0.008, tau: 0.5, dur: 1.4 })
     burst(v, { buf: 'brown', peak: 1.6, attack: 0.003, tau: 0.26, dur: 1.1, ftype: 'lowpass', freq: 760, q: 0.5 })
     burst(v, { buf: 'brown', at: 0.1, peak: 0.7, attack: 0.14, tau: 0.9, dur: 3.4, ftype: 'lowpass', freq: 175, q: 0.4 })
     for (let i = 0; i < 9; i++) {
@@ -660,6 +769,41 @@ export const SFX_RECIPES: Record<SfxName, Recipe> = {
     burst(v, { buf: 'pink', at: 0.14, peak: 0.22, attack: 0.012, tau: 0.06, dur: 0.18, ftype: 'bandpass', freq: 420, q: 3.5, freqEnd: 260 })
     return 0.35 / v.rate
   },
+
+  // A supersonic round splitting the air a hand's breadth away: the ballistic
+  // N-wave. NOT a muzzle report — it has no body or tail, just an ultra-short
+  // whip-CRACK with a tearing hiss of disturbed air. Placed at the round's
+  // closest approach so 3D panning throws it past the ear, distinct from both
+  // the distant muzzle bark and the descending whine of a ricochet.
+  supersonic_crack(v) {
+    const jf = jitter(0.1)
+    burst(v, { peak: 0.95, tau: 0.0035, dur: 0.018, ftype: 'highpass', freq: 3400 * jf, q: 0.7 })
+    burst(v, { at: 0.005, peak: 0.42, tau: 0.008, dur: 0.03, ftype: 'bandpass', freq: 1700 * jf, q: 1.3 })
+    // the ripping air behind the shock front
+    burst(v, { at: 0.004, buf: 'pink', peak: 0.2, attack: 0.001, tau: 0.028, dur: 0.09, ftype: 'highpass', freq: 2400, q: 0.5 })
+    return 0.12 / v.rate
+  },
+
+  // Sparse dawn birdsong over the parapet: a short warble of a few chirps,
+  // each a fast up-or-down glide with a flutter of vibrato. Kept quiet and
+  // fully randomized so no two calls repeat — used only by the dawn ambience.
+  birdsong(v) {
+    const notes = 2 + ((Math.random() * 3) | 0)
+    const base = 2500 + Math.random() * 1500
+    let at = 0
+    for (let i = 0; i < notes; i++) {
+      const f0 = base * (0.8 + Math.random() * 0.5)
+      const f1 = f0 * (0.65 + Math.random() * 0.7)
+      const len = 0.07 + Math.random() * 0.06
+      tone(v, {
+        at, f0, f1, sweepT: len * 0.7, peak: 0.05 + Math.random() * 0.03,
+        attack: 0.006, tau: 0.035, dur: len,
+        vibHz: 16 + Math.random() * 12, vibAmt: f0 * 0.012,
+      })
+      at += len * 0.55 + Math.random() * 0.07
+    }
+    return (at + 0.2) / v.rate
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -688,6 +832,16 @@ export function shellWhistleRecipe(v: SynthVoice, seconds: number): number {
   os.connect(e)
   e.connect(v.mix)
 
+  // A sub-octave partial an octave below the whine, growing as it nears — this
+  // is what turns a thin whistle into a heavy shell bearing down on you.
+  const sub = osc(v, 'sine', fStart / v.rate / 2)
+  sub.frequency.exponentialRampToValueAtTime(Math.max(30, fEnd / 2), v.t0 + s)
+  const sg = gain(v, 0)
+  sg.gain.setValueAtTime(0.0001, v.t0)
+  sg.gain.exponentialRampToValueAtTime(0.3, v.t0 + s * 0.97)
+  sg.gain.linearRampToValueAtTime(0, v.t0 + s)
+  sub.connect(sg); sg.connect(v.mix)
+
   // breathy air noise tracking the gliss
   const n = noiseSrc(v, 'white', 1)
   const bp = filt(v, 'bandpass', fStart / v.rate, 9)
@@ -695,12 +849,13 @@ export function shellWhistleRecipe(v: SynthVoice, seconds: number): number {
   bp.frequency.exponentialRampToValueAtTime(fEnd, v.t0 + s)
   const ng = gain(v, 0)
   ng.gain.setValueAtTime(0.0001, v.t0)
-  ng.gain.exponentialRampToValueAtTime(0.3, v.t0 + s * 0.97)
+  ng.gain.exponentialRampToValueAtTime(0.34, v.t0 + s * 0.97)
   ng.gain.linearRampToValueAtTime(0, v.t0 + s)
   n.connect(bp); bp.connect(ng); ng.connect(v.mix)
 
   os.start(v.t0); os.stop(v.t0 + s + 0.02)
   lfo.start(v.t0); lfo.stop(v.t0 + s + 0.02)
+  sub.start(v.t0); sub.stop(v.t0 + s + 0.02)
   n.start(v.t0, Math.random() * 1.4); n.stop(v.t0 + s + 0.02)
   return s
 }
@@ -843,7 +998,12 @@ export const LOOP_RECIPES: Record<LoopName, LoopRecipe> = {
   },
 }
 
-/** Sparse eerie night bed used internally by setAmbience (not a public loop). */
+/**
+ * Sparse eerie night bed used internally by setAmbience (not a public loop).
+ * A low minor drone slowly breathing, plus a very faint high airy shimmer that
+ * gives the night its own timbre against the daytime wind bed it crossfades in
+ * over — the two beds are the day/night crossfade the field asked for.
+ */
 export const NIGHT_DRONE: LoopRecipe = (v) => {
   const o1 = osc(v, 'sine', 54)
   const o2 = osc(v, 'sine', 81.5)
@@ -858,5 +1018,16 @@ export const NIGHT_DRONE: LoopRecipe = (v) => {
   o1.connect(g1); o2.connect(g2); o3.connect(g3)
   g1.connect(sum); g2.connect(sum); g3.connect(sum)
   sum.connect(v.mix)
+  // Thin, slowly-panning high air — cold night wind far above the trench.
+  const air = noiseSrc(v, 'pink', 1)
+  const abp = filt(v, 'bandpass', 2600, 1.2)
+  const alfo = osc(v, 'sine', 0.05)
+  const alg = gain(v, 900)
+  alfo.connect(alg); alg.connect(abp.frequency)
+  const ag = gain(v, 0.05)
+  const alfo2 = osc(v, 'sine', 0.13)
+  const alg2 = gain(v, 0.03)
+  alfo2.connect(alg2); alg2.connect(ag.gain)
+  air.connect(abp); abp.connect(ag); ag.connect(v.mix)
   startAll(v)
 }
