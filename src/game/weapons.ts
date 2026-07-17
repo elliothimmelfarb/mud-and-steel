@@ -1189,7 +1189,7 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     id: 'vickers', name: 'Vickers MG', control: 'auto', ammoKind: 'mag',
     magSize: 250, fireInterval: 0.09, reloadTime: 5.0, recoil: 0.4,
     hipFov: 52, adsFov: 40, emplaced: true, scope: false, heat: true,
-    spreadHip: 0.011, spreadAds: 0.006, category: 'mg', sound: 'mg', tracerChance: 0.5,
+    spreadHip: 0.011, spreadAds: 0.006, category: 'mg', sound: 'mg_vickers', tracerChance: 0.5,
     ammoName: '.303 belt', controlsHint: 'HOLD LMB fire · watch HEAT · R new belt',
     minRange: 0, maxRange: 0, eyeHeight: 1.16, startPitch: -0.06,
     // Tripod-mounted: it still climbs hard over a sustained burst (that's the
