@@ -328,6 +328,40 @@ export class RoundRenderer {
   }
 
   /**
+   * Orient the streak quad about a flight (or launch) axis and return its draw-
+   * width factor, writing the result into `this.q`. The quad's width tangent is
+   * whatever is left of the view direction once the axis is subtracted out (a
+   * cross product), so the textured face always presents itself squarely from
+   * the side; staring straight down the axis collapses that tangent — the case
+   * that used to produce a giant slab — so `widthK` shrinks the drawn width
+   * along with it rather than forcing a fixed rectangle into view. Reuses
+   * `this.dir` as the axis scratch; `this.toCam` must already hold the
+   * normalized round→camera direction.
+   */
+  private streakQuat(ax: number, ay: number, az: number): number {
+    this.dir.set(ax, ay, az)
+    this.right.crossVectors(this.dir, this.toCam)
+    let widthK = this.right.length()
+    if (widthK < 1e-4) {
+      // Perfectly end-on: any stable perpendicular works, since the quad is
+      // already a sliver — pick world-up, or world-right if the axis is
+      // near-vertical (where up would be parallel to it).
+      this.right.set(Math.abs(this.dir.y) > 0.98 ? 1 : 0, Math.abs(this.dir.y) > 0.98 ? 0 : 1, 0)
+      this.right.crossVectors(this.dir, this.right).normalize()
+      widthK = 0.12
+    } else {
+      this.right.multiplyScalar(1 / widthK)
+      // Never fully vanish — a tracer coming straight at you still reads as a
+      // small glowing point, not nothing.
+      widthK = Math.max(0.12, widthK)
+    }
+    this.up.crossVectors(this.dir, this.right)
+    this.basis.makeBasis(this.dir, this.right, this.up)
+    this.q.setFromRotationMatrix(this.basis)
+    return widthK
+  }
+
+  /**
    * Rebuild all three instance buffers from the live bullet list (once per
    * frame). `camX/camY/camZ` is the render camera's world position — used to
    * skip rounds sitting on top of it, to billboard each streak about its own
@@ -362,32 +396,6 @@ export class RoundRenderer {
       }
       this.toCam.multiplyScalar(1 / camDist)
 
-      // Billboard-about-the-flight-axis: the quad's width tangent is whatever
-      // is left of the view direction once the flight axis is subtracted out
-      // (a cross product), so the textured face always presents itself
-      // squarely from the side. Staring straight down the axis makes this
-      // tangent collapse toward zero — exactly the case that used to produce
-      // the giant slab — so `widthK` shrinks the drawn width right along with
-      // it instead of forcing a fixed rectangle into view.
-      this.right.crossVectors(this.dir, this.toCam)
-      let widthK = this.right.length()
-      if (widthK < 1e-4) {
-        // Perfectly end-on: any stable perpendicular works, since the quad is
-        // already a sliver — pick world-up, or world-right if the round is
-        // flying near-vertically (where up would be parallel to it).
-        this.right.set(Math.abs(this.dir.y) > 0.98 ? 1 : 0, Math.abs(this.dir.y) > 0.98 ? 0 : 1, 0)
-        this.right.crossVectors(this.dir, this.right).normalize()
-        widthK = 0.12
-      } else {
-        this.right.multiplyScalar(1 / widthK)
-        // Never fully vanish — a tracer coming straight at you still reads as
-        // a small glowing point, not nothing.
-        widthK = Math.max(0.12, widthK)
-      }
-      this.up.crossVectors(this.dir, this.right)
-      this.basis.makeBasis(this.dir, this.right, this.up)
-      this.q.setFromRotationMatrix(this.basis)
-
       const tracer = b.tracer
 
       // Nearest-K tracer selection for the moving light pool: keep the K rounds
@@ -415,12 +423,41 @@ export class RoundRenderer {
       // simulating drag on the streak itself.
       const speedK = Math.min(1.4, Math.max(0.5, speed / ref))
       const baseLen = (tracer ? COMBAT.tracerStreakLen : COMBAT.ballStreakLen) * speedK
-      // Never draw further back than the round has actually flown: on the
-      // spawn frame `traveled` ≈ 0 so the streak is invisible (the muzzle
-      // flash covers it), then it grows out of the barrel as the sim advances
-      // the round — rather than popping in full-length through the camera.
+      // Distance the round has actually flown from its ballistic birth. The
+      // streak is never drawn further back than this, or a round would trail
+      // back through (and past) the camera on the frame it leaves the barrel.
       const traveled = Math.hypot(b.pos.x - b.spawn.x, b.pos.y - b.spawn.y, b.pos.z - b.spawn.z)
-      const len = Math.min(baseLen, traveled)
+
+      // --- Launch bridge --------------------------------------------------
+      // At 550 m/s over a 30 Hz sim a round is already ~18 m downrange on its
+      // first visible frame — far past the 6.5 m trailing streak, so the tracer
+      // read as "popping in" mid-flight with a gap back to the muzzle. While the
+      // round's head is still within `tracerLaunchLen` of the true muzzle tip
+      // (`b.muzzle` — the very point the first-person flash is welded to), reach
+      // the streak all the way back to it and orient the quad along head→muzzle,
+      // so the tracer is seen LEAVING the barrel as one connected streak; past
+      // that it detaches to the normal trailing length. Gated on `b.muzzle`, so
+      // only the player's own first-person rounds are bridged — AI tracers,
+      // whose ballistic `spawn` already sits at their gun, are untouched. The
+      // `> baseLen` guard keeps a round that hasn't yet outrun its trail on the
+      // ordinary path (no sudden lengthening at very short range).
+      let widthK: number
+      let len: number
+      const mz = b.muzzle
+      if (mz !== undefined) {
+        const adx = b.pos.x - mz.x, ady = b.pos.y - mz.y, adz = b.pos.z - mz.z
+        const anchorDist = Math.hypot(adx, ady, adz)
+        if (anchorDist > baseLen && anchorDist <= COMBAT.tracerLaunchLen) {
+          widthK = this.streakQuat(adx / anchorDist, ady / anchorDist, adz / anchorDist)
+          len = anchorDist
+        } else {
+          widthK = this.streakQuat(this.dir.x, this.dir.y, this.dir.z)
+          len = Math.min(baseLen, traveled)
+        }
+      } else {
+        widthK = this.streakQuat(this.dir.x, this.dir.y, this.dir.z)
+        len = Math.min(baseLen, traveled)
+      }
       const thick = tracer ? 0.06 : 0.03
 
       this.scl.set(len, thick * widthK, 1)

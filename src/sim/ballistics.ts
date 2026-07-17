@@ -84,6 +84,13 @@ export interface BulletSpec {
   shooterUnitId: number
   shooterId: number
   tracer: boolean
+  /**
+   * True barrel-tip world position, when it differs from `from`. Supplied only
+   * by the first-person player (whose `from` sits on the boresight for aim
+   * truth); lets the tracer renderer weld the launch streak to the visible
+   * muzzle. See Bullet.muzzle.
+   */
+  muzzle?: Vec3
 }
 
 /**
@@ -138,6 +145,9 @@ export function fireBullet(ctx: Ctx, spec: BulletSpec): Bullet {
     tracer: true,
     life: COMBAT.bulletMaxLife,
   }
+  // Fresh literal (never a reference to the caller's Vec3) so a later mutation
+  // of it can't leak into the streak, same discipline as `spawn` above.
+  if (spec.muzzle) bullet.muzzle = { x: spec.muzzle.x, y: spec.muzzle.y, z: spec.muzzle.z }
   ctx.s.bullets.push(bullet)
   return bullet
 }

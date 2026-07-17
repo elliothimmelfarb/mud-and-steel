@@ -1401,6 +1401,10 @@ function fireBulletShot(profile: WeaponProfile, f: FireCtx): void {
     team: 'brit', from, dir: { x: f.dir.x, y: f.dir.y, z: f.dir.z }, speed: COMBAT.bulletSpeed,
     damage, spread, category: profile.category, shooterUnitId: unit.id, shooterId: soldier.id,
     tracer: ctx.rand() < profile.tracerChance,
+    // Ballistics ride the boresight `from` (aim-true); the visible barrel tip is
+    // ~0.5 m below the eye, so hand the renderer the real muzzle to weld the
+    // tracer's launch streak to the flash instead of the screen centre.
+    muzzle: f.muzzleWorld,
   })
   soldier.facing = f.yaw
 

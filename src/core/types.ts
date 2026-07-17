@@ -229,6 +229,17 @@ export interface Bullet {
    * before the 30 Hz sim has had a chance to move it downrange.
    */
   spawn: Vec3
+  /**
+   * True barrel-tip position at birth, when it differs from `spawn`. Set only
+   * for the first-person player's own rounds, whose ballistic `spawn` sits on
+   * the boresight (`camPos + dir*0.7`, aim-true) while the *visible* muzzle is
+   * ~0.5 m below and to the side of the eye. The tracer renderer reaches the
+   * launch-frame streak back to THIS point so the round is seen leaving the
+   * barrel (welded to the muzzle flash) instead of popping into existence
+   * mid-flight — the boresight `spawn` would float the streak ~0.5 m above the
+   * flash. Undefined for AI rounds, which already spawn at their own muzzle.
+   */
+  muzzle?: Vec3
   vel: Vec3
   damage: number
   /** Director bookkeeping ('rifle' | 'mg' | 'sniper' | 'enemy'...). */
