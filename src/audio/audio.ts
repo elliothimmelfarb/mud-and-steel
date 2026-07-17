@@ -249,11 +249,15 @@ export class AudioEngine {
     // reports and twin-sub artillery can momentarily stack loud; this catches
     // the peaks so the master never clips, without colouring normal levels.
     const limiter = ctx.createDynamicsCompressor()
-    limiter.threshold.value = -1.5
+    // Ceiling at −3 dBFS with a near-instant attack: a DynamicsCompressor can't
+    // brick-wall (its attack always lets a sliver of the first transient
+    // through), so the ceiling sits low enough that even a worst-case stacked
+    // transient overshoot lands under 0 dBFS rather than clipping.
+    limiter.threshold.value = -3
     limiter.knee.value = 0
     limiter.ratio.value = 20
-    limiter.attack.value = 0.002
-    limiter.release.value = 0.12
+    limiter.attack.value = 0.001
+    limiter.release.value = 0.1
     master.connect(masterLP)
     masterLP.connect(comp)
     comp.connect(limiter)

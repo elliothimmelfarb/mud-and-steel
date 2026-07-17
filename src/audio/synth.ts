@@ -339,6 +339,9 @@ export const SFX_RECIPES: Record<SfxName, Recipe> = {
       bodyPeak: 0.8, bodyFreq: 320, bodyTau: 0.07, bodyDur: 0.3,
       slap: 0.28, slapAt: 0.021,
     })
+    // A short low fundamental under the noise gives the crack its punch —
+    // the "thump" you feel in the shoulder behind the bright report.
+    tone(v, { f0: 155 * jitter(0.05), f1: 72, sweepT: 0.06, peak: 0.5, tau: 0.05, dur: 0.16 })
     // Bolt cycle: two bright lug clicks (lift + draw) then a duller close.
     mechClick(v, 0.15 * jitter(0.12), 2900, 0.15)
     mechClick(v, 0.205 * jitter(0.1), 3400, 0.11)
