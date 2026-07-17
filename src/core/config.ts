@@ -274,6 +274,14 @@ export const COMBAT = {
   tracerFraction: 0.24,       // share of rounds that burn a visible tracer
   tracerStreakLen: 6.5,       // metres of hot streak drawn behind a tracer round
   ballStreakLen: 1.4,         // metres of faint streak for ordinary ball ammunition
+  // First-person launch bridge: while a player round's head is still within this
+  // many metres of the true muzzle (roughly its first 30 Hz sim-step — a round
+  // is already ~18 m out on its first visible frame at 550 m/s), the tracer
+  // streak reaches all the way back to the muzzle so the round is seen LEAVING
+  // the barrel rather than popping in mid-flight. Past it the streak detaches to
+  // the normal trailing `tracerStreakLen`. Chosen to comfortably cover one
+  // sim-step (~18 m) and detach before the second (~36 m).
+  tracerLaunchLen: 30,
   ricochetChance: 0.3,        // odds a round sparks off armour / a shallow hard hit
   tracerTrailChance: 0.14,    // per-round-per-frame odds of a drifting smoke wisp
   suppressDecay: 0.09,        // per second
