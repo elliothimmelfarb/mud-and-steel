@@ -417,21 +417,23 @@ export const DIRECTOR = {
   gasFromWave: 5,
   barrageFromWave: 4,
   /**
-   * Categories the director tracks and its counter-intents. `intent` is the
-   * concrete, telegraphed sentence shown in the intelligence report — it names
-   * the adaptation and the weapon it answers, so the counter is legible before
-   * the men who embody it walk onto the field.
+   * Categories the director tracks and its counters. `intent` is a lower-case
+   * noun fragment that slots naturally into the dry staff-officer intel line
+   * ("Corps expects <intent>"); `telegraph` is the full, concrete sentence that
+   * heads the intelligence report — it names the adaptation and the weapon it
+   * answers, so the counter is legible before the men who embody it reach the
+   * field.
    */
   counters: {
-    mg:        { intent: 'They have brought up snipers and storm parties to silence your machine guns.', spawns: { esniper: 2, estorm: 1.5 } },
-    artillery: { intent: 'They are coming on in loose, dispersed order to blunt your artillery.', spawns: { estorm: 1.5, ecav: 1.3 } },
-    wire:      { intent: 'Pioneers are moving up ahead of the assault to cut your wire.', spawns: { epioneer: 2.5 } },
-    rifle:     { intent: 'They mean to swamp your rifle line by sheer weight of numbers.', spawns: { einf: 1.5, emg: 1.4 } },
-    gas:       { intent: 'Their assault troops have been issued new respirators against your gas.', spawns: { estorm: 1.4 } },
-    mine:      { intent: 'Pioneers are probing ahead of the advance for your minefield.', spawns: { epioneer: 2 } },
-    flame:     { intent: 'Snipers have been detailed to hunt your flame projectors.', spawns: { esniper: 1.8 } },
-    sniper:    { intent: 'Their officers are keeping well to the rear, out of your sights.', spawns: { emg: 1.3 } },
-  } as Record<string, { intent: string; spawns: Partial<Record<EnemyKindId, number>> }>,
+    mg:        { intent: 'snipers and storm parties sent forward to silence your machine guns', telegraph: 'They have brought up snipers and storm parties to silence your machine guns.', spawns: { esniper: 2, estorm: 1.5 } },
+    artillery: { intent: 'an advance in loose, dispersed order to blunt your artillery', telegraph: 'They are coming on in loose, dispersed order to blunt your artillery.', spawns: { estorm: 1.5, ecav: 1.3 } },
+    wire:      { intent: 'pioneers pushed ahead of the assault to cut your wire', telegraph: 'Pioneers are moving up ahead of the assault to cut your wire.', spawns: { epioneer: 2.5 } },
+    rifle:     { intent: 'a mass attack to swamp your rifle line by weight of numbers', telegraph: 'They mean to swamp your rifle line by sheer weight of numbers.', spawns: { einf: 1.5, emg: 1.4 } },
+    gas:       { intent: 'assault troops issued new respirators against your gas', telegraph: 'Their assault troops have been issued new respirators against your gas.', spawns: { estorm: 1.4 } },
+    mine:      { intent: 'pioneers probing ahead of the advance for your minefield', telegraph: 'Pioneers are probing ahead of the advance for your minefield.', spawns: { epioneer: 2 } },
+    flame:     { intent: 'snipers detailed to hunt your flame projectors', telegraph: 'Snipers have been detailed to hunt your flame projectors.', spawns: { esniper: 1.8 } },
+    sniper:    { intent: 'their officers keeping well to the rear, out of your sights', telegraph: 'Their officers are keeping well to the rear, out of your sights.', spawns: { emg: 1.3 } },
+  } as Record<string, { intent: string; telegraph: string; spawns: Partial<Record<EnemyKindId, number>> }>,
 } as const
 
 // ---------------------------------------------------------------------------
