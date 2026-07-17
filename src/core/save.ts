@@ -39,8 +39,12 @@ export interface SavedUnit {
   slotId: number
   xp: number
   vet: number
+  /** Bitmask of deeds; optional for saves written before veterancy shipped. */
+  deeds?: number
+  wavesServed?: number
   targeting: TargetPriority
-  crew: Array<{ first: string; last: string; hp: number }>
+  /** kills persisted per named man so a veteran's tally survives a reload. */
+  crew: Array<{ first: string; last: string; hp: number; kills?: number }>
   heat: number
   ammo: number
 }

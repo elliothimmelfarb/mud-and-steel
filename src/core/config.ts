@@ -500,12 +500,53 @@ export const WEATHER = {
 
 // ---------------------------------------------------------------------------
 // Veterancy
+//
+// Experience is one currency fed from three springs — kills, waves survived,
+// and deeds — so a man who never fires a shot but holds his nerve for a dozen
+// attacks still earns his stripes. Thresholds are tuned so that pure-kill
+// promotion is close to the old [4, 10, 20]-kill ladder (XP_PER_KILL=3), while
+// longevity and deeds bring a man on faster.
 // ---------------------------------------------------------------------------
 
-export const VET_KILLS = [4, 10, 20] as const
-export const VET_ACC_BONUS = 0.08
-export const VET_ROF_BONUS = 0.1
+export const XP_PER_KILL = 3
+export const XP_PER_WAVE = 7          // survived a whole assault
+export const XP_PER_DEED = 9          // mentioned in despatches
+/** XP needed for L/Cpl., Cpl., Sjt. (Pte. is rank 0). */
+export const VET_XP = [12, 30, 64] as const
 export const RANKS = ['Pte.', 'L/Cpl.', 'Cpl.', 'Sjt.'] as const
+
+// Perks per rank level (level 0..3). Small on purpose: attachment, not supermen.
+export const VET_ACC_BONUS = 0.08     // ×(1 + lvl·bonus) to marksmanship (tighter groups)
+export const VET_ROF_BONUS = 0.1      // ×(1 + lvl·bonus) to rate of fire
+export const VET_SUPPRESS_RESIST = 0.18 // steadier nerves: faster suppression shake-off / slower build
+export const VET_RALLY_BONUS = 0.2    // morale regenerates faster
+/** NCOs (Cpl.+, level ≥ 2) steady the men around them, like a lesser officer. */
+export const NCO_AURA_LEVEL = 2
+export const NCO_AURA_RANGE = 13
+
+// -- Deeds -------------------------------------------------------------------
+// Each deed is a bit in Unit.deeds. `cite` is the despatch phrasing (memorial
+// and letters); `name` is the terse UI label. Order fixes the bit positions —
+// never reorder, only append (persisted in saves & casualty records).
+export interface DeedDef {
+  id: string
+  bit: number
+  name: string
+  /** Despatch citation, slots after "mentioned in despatches …". */
+  cite: string
+}
+
+export const DEEDS: readonly DeedDef[] = [
+  { id: 'held',     bit: 1 << 0, name: 'Cool under fire',   cite: 'for coolness under heavy fire' },
+  { id: 'rescue',   bit: 1 << 1, name: 'Brought in wounded', cite: 'for bringing in the wounded under fire' },
+  { id: 'repair',   bit: 1 << 2, name: 'Mended the line',   cite: 'for mending the parapet under fire' },
+  { id: 'bayonet',  bit: 1 << 3, name: 'Bayonet charge',    cite: 'for gallantry in the charge' },
+  { id: 'marksman', bit: 1 << 4, name: 'Marksmanship',      cite: 'for steady and deadly marksmanship' },
+  { id: 'lastman',  bit: 1 << 5, name: 'Held alone',        cite: 'for holding his post alone' },
+] as const
+
+/** Career kills at which the marksmanship deed is awarded. */
+export const MARKSMAN_KILLS = 14
 
 // ---------------------------------------------------------------------------
 // Scoring

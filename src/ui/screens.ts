@@ -716,7 +716,7 @@ export function createGameOverScreen(o: {
     highScore: number;
     seed: string;
   };
-  memorial: Array<{ name: string; rank: string; kind: string; wave: number; epitaph: string }>;
+  memorial: Array<{ name: string; rank: string; kind: string; wave: number; epitaph: string; deeds?: string[]; wavesServed?: number }>;
   letter: string | null;
   onRestart: () => void;
   onMenu: () => void;
@@ -821,7 +821,8 @@ export function createGameOverScreen(o: {
       const copy = div('memorial__copy');
       if (hiddenCopy) copy.setAttribute('aria-hidden', 'true');
       for (const m of o.memorial) {
-        const entry = div('memorial-entry');
+        const honoured = (m.deeds?.length ?? 0) > 0 || (m.wavesServed ?? 0) >= 4;
+        const entry = div('memorial-entry' + (honoured ? ' memorial-entry--honoured' : ''));
         const nameLine = div('memorial-entry__name');
         const poppyL = make('span', 'poppy');
         poppyL.setAttribute('aria-hidden', 'true');
@@ -833,9 +834,16 @@ export function createGameOverScreen(o: {
         );
         nameLine.appendChild(poppyR);
         entry.appendChild(nameLine);
-        entry.appendChild(
-          make('div', 'memorial-entry__line', m.kind + ' — fell, wave ' + m.wave),
-        );
+        const service = m.wavesServed && m.wavesServed > 0
+          ? m.kind + ' — fell wave ' + m.wave + ', after ' + m.wavesServed + ' in the line'
+          : m.kind + ' — fell, wave ' + m.wave;
+        entry.appendChild(make('div', 'memorial-entry__line', service));
+        // The decorated are named for their deeds — a distinct honour on the wall.
+        if (m.deeds && m.deeds.length > 0) {
+          entry.appendChild(
+            make('div', 'memorial-entry__deeds', '✠ Mentioned in despatches — ' + m.deeds.join(', ')),
+          );
+        }
         entry.appendChild(
           make('div', 'memorial-entry__epitaph', '“' + m.epitaph + '”'),
         );

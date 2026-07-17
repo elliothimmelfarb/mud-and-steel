@@ -25,6 +25,12 @@ export interface LetterCtx {
   sawGas: boolean;
   mud: boolean;
   morale: 'high' | 'steady' | 'shaken';
+  /** The author's own despatch citation, e.g. "for coolness under heavy fire". */
+  citedDeed?: string | null;
+  /** Waves the author has served — a veteran writes with a different weight. */
+  wavesServed?: number;
+  /** A fallen mate's citation, honoured in passing. */
+  lostMateDeed?: string | null;
 }
 
 type Morale = LetterCtx['morale'];
@@ -325,14 +331,36 @@ const EPITAPH_BUILDERS: readonly EpitaphBuilder[] = [
   (_first, _kind, wave) => `He kept the trench, ${fieldDate(wave)}`,
 ];
 
+/** Service record a man carried to his grave, for the honoured-apart epitaphs. */
+export interface EpitaphService {
+  /** Despatch citations, e.g. ["for coolness under heavy fire"]. */
+  deeds: readonly string[];
+  wavesServed: number;
+}
+
+// Epitaphs reserved for the decorated and the long-serving — the men whose
+// deaths sting. These lean on the citation and the length of service.
+const VETERAN_EPITAPH_BUILDERS: readonly ((first: string, kind: string, wave: number, svc: EpitaphService) => string)[] = [
+  (_f, _k, _w, svc) => `Mentioned in despatches ${svc.deeds[0] ?? 'for devotion to duty'}`,
+  (_f, _k, _w, svc) => `He served through ${svc.wavesServed} attacks, and fell in the last`,
+  (first, _k, _w, svc) => `${first}, an old hand of ${svc.wavesServed} fights, at rest`,
+  (_f, kind, _w) => `A veteran ${kind}, and the steadiest of us`,
+  (_f, _k, _w, svc) => `Long in the line, mentioned ${svc.deeds[0] ?? 'for his good service'}`,
+];
+
 export function makeEpitaph(
   rand: () => number,
   fullName: string,
   kindName: string,
   wave: number,
+  service?: EpitaphService,
 ): string {
   const spaceAt = fullName.indexOf(' ');
   const first = spaceAt > 0 ? fullName.slice(0, spaceAt) : fullName;
+  // A decorated or long-serving man is more likely to be honoured by name and deed.
+  if (service && (service.deeds.length > 0 || service.wavesServed >= 4) && rand() < 0.72) {
+    return pick(rand, VETERAN_EPITAPH_BUILDERS)(first, kindName, wave, service);
+  }
   if (rand() < 0.62) return pick(rand, EPITAPHS);
   return pick(rand, EPITAPH_BUILDERS)(first, kindName, wave);
 }
@@ -669,6 +697,22 @@ const CLOSINGS: Record<Morale, readonly string[]> = {
 // writeLetterHome
 // ---------------------------------------------------------------------------
 
+// A man reporting his own mention in despatches — understated, as they were.
+// `cite` already reads "for coolness under heavy fire", so it slots straight on.
+const DESPATCH_LINES: readonly ((cite: string) => string)[] = [
+  (c) => `The Major was good enough to mention me in despatches ${c}. I make nothing of it, but thought it would please you.`,
+  (c) => `You may hear that I was mentioned in despatches ${c}. It was no more than the next man did, and I would sooner have the leave.`,
+  (c) => `They have gone and put my name in despatches ${c}. Do not tell the whole street; you know you will.`,
+  (c) => `There is to be a mention in despatches ${c}, they tell me. Keep it by you, and do not let Dad crow at the works.`,
+];
+
+// The long-served man writes with the weight of it.
+const VETERAN_LINES: readonly ((n: number) => string)[] = [
+  (n) => `This is my ${ordinalWord(n).toLowerCase()} time in the line, and I have learned to sleep standing and eat near anything.`,
+  (n) => `I have seen ${n} of their attacks off now, and am reckoned an old hand — which out here means only that I am still here.`,
+  (n) => `The new drafts ask me how it is done. ${n} times over the same ground teaches a man to keep his head down and his humour up.`,
+];
+
 function buildDynamicExtras(ctx: LetterCtx): string[] {
   const out: string[] = [
     `It was ${ctx.dateStr} when I began this letter, though the days out here run together like the rain.`,
@@ -743,6 +787,20 @@ export function writeLetterHome(ctx: LetterCtx, rand: () => number): string {
     }
   }
 
+  // A despatch mention of the author's own, reported in the period manner.
+  if (ctx.citedDeed && words <= 110) {
+    const line = pick(rand, DESPATCH_LINES)(ctx.citedDeed);
+    const w = countWords(line);
+    if (words + w <= 128) { para1.push(line); words += w; }
+  }
+  // A veteran of many attacks writes with that weight (kept occasional).
+  const served = ctx.wavesServed ?? 0;
+  if (served >= 3 && words <= 108 && rand() < 0.6) {
+    const line = pick(rand, VETERAN_LINES)(served);
+    const w = countWords(line);
+    if (words + w <= 126) { para1.push(line); words += w; }
+  }
+
   // Pad short letters with trench-life colour until they earn their stamp.
   const used = new Set<number>();
   while (words < 64) {
@@ -772,8 +830,14 @@ export function writeLetterHome(ctx: LetterCtx, rand: () => number): string {
 
   const para2: string[] = [homesick, closing];
 
+  // A fallen mate who had been decorated is honoured in passing.
+  let lostPara = lost;
+  if (lostPara !== null && ctx.lostMateDeed) {
+    lostPara += ` He had been mentioned in despatches ${ctx.lostMateDeed}, and deserved a kinder end than this place gives.`;
+  }
+
   const paras: string[] = [para1.join(' ')];
-  if (lost !== null) paras.push(lost);
+  if (lostPara !== null) paras.push(lostPara);
   paras.push(para2.join(' '));
 
   return `${greeting},\n\n${paras.join('\n\n')}`;

@@ -1543,6 +1543,27 @@ button.ms-kbd:active {
   margin-top: 0.22em;
 }
 
+/* Despatch citation for a decorated man — a brass line above his epitaph. */
+.memorial-entry__deeds {
+  font-family: var(--font-type);
+  font-size: 0.66em;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--brass-hi);
+  opacity: 0.9;
+  margin-top: 0.24em;
+}
+
+/* The long-serving and the decorated are set a little apart on the wall. */
+.memorial-entry--honoured .memorial-entry__name {
+  color: #f0e6c8;
+}
+.memorial-entry--honoured {
+  padding: 0.35em 0;
+  border-top: 1px solid rgba(201, 176, 112, 0.22);
+  border-bottom: 1px solid rgba(201, 176, 112, 0.22);
+}
+
 .poppy {
   display: inline-block;
   width: 0.55em;
@@ -2306,7 +2327,22 @@ button.ms-kbd:active {
   opacity: 0.8;
   font-size: 0.82em;
   letter-spacing: 0.03em;
-  margin: 0.15em 0 0.5em;
+  margin: 0.15em 0 0.35em;
+}
+
+/* Veterancy: service line (waves, progress to next rank) and deed citations. */
+.unit-svc {
+  opacity: 0.6;
+  font-size: 0.74em;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.25em;
+}
+
+.unit-deeds {
+  color: var(--brass-hi, #c9b070);
+  font-size: 0.74em;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.5em;
 }
 
 .unit-status {
