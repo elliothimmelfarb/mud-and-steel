@@ -13,7 +13,12 @@
  * None of this ships in a normal boot — main.ts only imports it behind the flag.
  */
 import type { Game } from './game'
-import type { UnitKindId } from '../core/types'
+import type { Enemy, UnitKindId } from '../core/types'
+import { makeSquad, updateEnemies } from '../sim/enemies'
+import { killSoldier } from '../sim/combat'
+import { planWave } from '../sim/waves'
+import { intelFlavor } from '../core/flavor'
+import { mulberry32 } from '../core/rng'
 
 interface LabWeapon { kind: UnitKindId; label: string }
 
@@ -57,6 +62,38 @@ export interface FpsLabApi {
   zoomModel(dz: number): void
   list(): LabWeapon[]
   current(): string
+  /** Headless probe: spawn a squad in the contact zone, step the sim, and
+   *  report the bounding-overwatch rhythm and the NCO-death morale shock.
+   *  Deterministic (seeded rng). Logs a summary and returns it. */
+  tactics(): TacticsProbe
+  /** Headless probe: seed the director's damage ledger with a category and
+   *  confirm the next wave plan telegraphs a concrete adaptation. */
+  director(category?: string): DirectorProbe
+}
+
+export interface DirectorProbe {
+  /** The damage category the player has been leaning on. */
+  category: string
+  /** The plain-language telegraph carried on the plan (null if none). */
+  adaptation: string | null
+  /** The staff-officer intel line the player actually reads. */
+  intelLine: string
+}
+
+export interface TacticsProbe {
+  members: number
+  /** How many times the moving element swapped over the run (>=2 ⇒ leapfrogging). */
+  boundSwaps: number
+  /** Ticks in which exactly one element was on overwatch while the other moved. */
+  splitTicks: number
+  /** True if at every bounding tick the overwatch men were the non-moving element. */
+  elementsComplementary: boolean
+  ncoBefore: number
+  /** Squadmate morale drop the instant the NCO was cut down (expect a clear dip). */
+  ncoMoraleDrop: number
+  ncoSuppressBump: number
+  /** True once the squad promoted a fresh NCO after the leader fell. */
+  promotedNewLeader: boolean
 }
 
 export function startFpsLab(game: Game): void {
@@ -107,6 +144,8 @@ export function startFpsLab(game: Game): void {
     zoomModel: (dz) => game.fpsMode.debugInspectZoom(dz),
     list: () => WEAPONS.slice(),
     current: () => game.fpsMode.debugName,
+    tactics: () => runTacticsProbe(game),
+    director: (category = 'mg') => runDirectorProbe(game, category),
   }
   ;(window as unknown as { __fpslab: FpsLabApi }).__fpslab = api
 
@@ -131,6 +170,102 @@ export function startFpsLab(game: Game): void {
 
   // eslint-disable-next-line no-console
   console.log('[FPS Lab] ready — window.__fpslab. Weapons:', WEAPONS.map((w) => w.kind).join(', '))
+}
+
+/**
+ * Drive the squad tactics purely in the sim (no rendering) and report the
+ * observable behaviours: the leapfrog rhythm and the NCO-death shock. Used to
+ * capture hard evidence that the new AI does what it claims.
+ */
+function runTacticsProbe(game: Game): TacticsProbe {
+  const ctx = game.ctx
+  const s = ctx.s
+  // Clean slate.
+  s.enemies.length = 0
+  s.squads.length = 0
+
+  // A section of eight riflemen, dropped into the contact zone (within fire
+  // range of the front trench) so the bound engages immediately.
+  const sq = makeSquad(ctx, new Array(8).fill('einf'), 0, s.sections.find((se) => se.line === 'front')?.id ?? 0)
+  const membersOf = (): Enemy[] => s.enemies.filter((e) => e.squadId === sq.id && e.hp > 0)
+  for (const m of membersOf()) {
+    m.pos.z = 40 + (ctx.rand() - 0.5) * 4   // north of the trench (z=80), inside the contact band
+    m.pos.x = (ctx.rand() - 0.5) * 10
+    m.behavior = 'advance'
+  }
+
+  const dt = 1 / 30
+  let boundSwaps = 0
+  let splitTicks = 0
+  let elementsComplementary = true
+  let prevMove = sq.moveElement
+  for (let t = 0; t < 360; t++) {   // 12 seconds
+    updateEnemies(ctx, dt)
+    if (!sq.bounding) continue
+    if (sq.moveElement !== prevMove) { boundSwaps++; prevMove = sq.moveElement }
+    const mem = membersOf()
+    const movers = mem.filter((m) => m.bounding && !m.overwatch)
+    const watch = mem.filter((m) => m.bounding && m.overwatch)
+    if (movers.length > 0 && watch.length > 0) splitTicks++
+    // Every man on overwatch must belong to the non-moving element.
+    for (const m of watch) if (m.element === sq.moveElement) elementsComplementary = false
+  }
+
+  // NCO-death shock: cut the leader down and measure the section's reaction.
+  const leaderId = sq.leaderId
+  const leader = s.enemies.find((e) => e.id === leaderId && e.hp > 0)
+  const others = () => s.enemies.filter((e) => e.squadId === sq.id && e.id !== leaderId && e.hp > 0)
+  const avg = (f: (e: Enemy) => number) => {
+    const g = others(); return g.length ? g.reduce((a, e) => a + f(e), 0) / g.length : 0
+  }
+  const moraleBefore = avg((e) => e.morale)
+  const suppressBefore = avg((e) => e.suppression)
+  if (leader) killSoldier(ctx, leader, 'brit', -1)
+  const moraleDrop = moraleBefore - avg((e) => e.morale)
+  const suppressBump = avg((e) => e.suppression) - suppressBefore
+  updateEnemies(ctx, dt) // let the promotion run
+  const promotedNewLeader = sq.leaderId !== leaderId && sq.leaderId !== -1
+
+  const result: TacticsProbe = {
+    members: 8,
+    boundSwaps,
+    splitTicks,
+    elementsComplementary,
+    ncoBefore: leaderId,
+    ncoMoraleDrop: Math.round(moraleDrop * 1000) / 1000,
+    ncoSuppressBump: Math.round(suppressBump * 1000) / 1000,
+    promotedNewLeader,
+  }
+  // eslint-disable-next-line no-console
+  console.log('[tactics probe]', JSON.stringify(result))
+  // Clean up so the sandbox field is left as we found it.
+  s.enemies.length = 0
+  s.squads.length = 0
+  return result
+}
+
+/**
+ * Feed the director a lopsided damage ledger (as if the player had been
+ * mowing men down with a given weapon) and confirm the next plan telegraphs a
+ * concrete counter. Restores the real ledger afterwards.
+ */
+function runDirectorProbe(game: Game, category: string): DirectorProbe {
+  const ctx = game.ctx
+  const saved = ctx.s.director.dmgByCategory
+  ctx.s.director.dmgByCategory = { [category]: 5000 }
+  // A fresh seeded stream so the probe is reproducible and never disturbs the
+  // run's own wave rng.
+  const rand = mulberry32(0xC0FFEE)
+  const plan = planWave(ctx, 12, 'front', rand)
+  ctx.s.director.dmgByCategory = saved
+  const result: DirectorProbe = {
+    category,
+    adaptation: plan.adaptation,
+    intelLine: intelFlavor(plan.intent, mulberry32(0x1916)),
+  }
+  // eslint-disable-next-line no-console
+  console.log('[director probe]', JSON.stringify(result))
+  return result
 }
 
 function buildPanel(game: Game, api: FpsLabApi): { setInspect: (on: boolean) => void; setSpin: (on: boolean) => void } {

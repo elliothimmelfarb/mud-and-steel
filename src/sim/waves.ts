@@ -160,6 +160,9 @@ export function planWave(ctx: Ctx, wave: number, difficulty: Difficulty, rand: R
     night,
     weatherBias: tpl.weather,
     intent: counter ? counter.intent : defaultIntent(tpl.id),
+    // The concrete adaptation telegraph — only set when the director actually
+    // bought a counter to how the player has been killing its men.
+    adaptation: counter ? counter.telegraph : null,
   }
 }
 
