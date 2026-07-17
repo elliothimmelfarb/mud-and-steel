@@ -137,6 +137,14 @@ export interface Enemy extends Soldier {
   bounty: number
   /** Cavalry: the horse dies separately; rider may continue on foot. */
   mounted: boolean
+  /** Which of the squad's two leapfrog elements this man belongs to (0 or 1). */
+  element: 0 | 1
+  /** The squad NCO this man rallies on (an enemy id); -1 if none / leaderless. */
+  leaderId: number
+  /** Set each tick: the squad is in a bounding rhythm and this man is part of it. */
+  bounding: boolean
+  /** Set each tick: this element is the one holding in cover to fire (not moving). */
+  overwatch: boolean
 }
 
 export interface Squad {
@@ -144,9 +152,15 @@ export interface Squad {
   members: number[] // enemy ids
   /** Squad-level objective: which trench section to assault. */
   targetSectionId: number
-  /** Bounding-overwatch rhythm: squads alternate moving and firing. */
+  /** Bounding-overwatch rhythm: true while the squad is actively leapfrogging. */
   bounding: boolean
   routed: boolean
+  /** The NCO the squad rallies on (enemy id); -1 once the last leader is down. */
+  leaderId: number
+  /** Which element (0/1) is currently the moving bound; the other is on overwatch. */
+  moveElement: 0 | 1
+  /** Seconds left in the current bound before the elements swap roles. */
+  boundT: number
 }
 
 export interface Vehicle {
@@ -369,6 +383,13 @@ export interface WavePlan {
   weatherBias: 'clear' | 'rain' | 'fog'
   /** What the director decided to punish. Shown in intel if recon purchased. */
   intent: string
+  /**
+   * If the director bought a counter this wave, a concrete one-line telegraph
+   * of the adaptation ("They have brought up snipers to silence your machine
+   * guns"). Null when nothing has been adapted to yet. Surfaced prominently in
+   * the intelligence report so the counter is legible before it hits the field.
+   */
+  adaptation: string | null
 }
 
 /** Tracks how the player kills things so the director can adapt. */

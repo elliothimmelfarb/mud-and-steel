@@ -416,17 +416,54 @@ export const DIRECTOR = {
   nightWaves: [6, 9, 13, 17] as readonly number[],  // plus director-chosen ones later
   gasFromWave: 5,
   barrageFromWave: 4,
-  /** Categories the director tracks and its counter-intents. */
+  /**
+   * Categories the director tracks and its counter-intents. `intent` is the
+   * concrete, telegraphed sentence shown in the intelligence report — it names
+   * the adaptation and the weapon it answers, so the counter is legible before
+   * the men who embody it walk onto the field.
+   */
   counters: {
-    mg:        { intent: 'Smoke and snipers against your machine guns', spawns: { esniper: 2, estorm: 1.5 } },
-    artillery: { intent: 'Dispersed order against your artillery', spawns: { estorm: 1.5, ecav: 1.3 } },
-    wire:      { intent: 'Pioneers forward to cut your wire', spawns: { epioneer: 2.5 } },
-    rifle:     { intent: 'Weight of numbers against your rifle line', spawns: { einf: 1.5, emg: 1.4 } },
-    gas:       { intent: 'Assault troops issued new respirators', spawns: { estorm: 1.4 } },
-    mine:      { intent: 'Pioneers probing for your minefield', spawns: { epioneer: 2 } },
-    flame:     { intent: 'Snipers hunting your flame projectors', spawns: { esniper: 1.8 } },
-    sniper:    { intent: 'Officers keeping to the rear', spawns: { emg: 1.3 } },
+    mg:        { intent: 'They have brought up snipers and storm parties to silence your machine guns.', spawns: { esniper: 2, estorm: 1.5 } },
+    artillery: { intent: 'They are coming on in loose, dispersed order to blunt your artillery.', spawns: { estorm: 1.5, ecav: 1.3 } },
+    wire:      { intent: 'Pioneers are moving up ahead of the assault to cut your wire.', spawns: { epioneer: 2.5 } },
+    rifle:     { intent: 'They mean to swamp your rifle line by sheer weight of numbers.', spawns: { einf: 1.5, emg: 1.4 } },
+    gas:       { intent: 'Their assault troops have been issued new respirators against your gas.', spawns: { estorm: 1.4 } },
+    mine:      { intent: 'Pioneers are probing ahead of the advance for your minefield.', spawns: { epioneer: 2 } },
+    flame:     { intent: 'Snipers have been detailed to hunt your flame projectors.', spawns: { esniper: 1.8 } },
+    sniper:    { intent: 'Their officers are keeping well to the rear, out of your sights.', spawns: { emg: 1.3 } },
   } as Record<string, { intent: string; spawns: Partial<Record<EnemyKindId, number>> }>,
+} as const
+
+// ---------------------------------------------------------------------------
+// Squad tactics — bounding overwatch, cohesion, NCOs
+// ---------------------------------------------------------------------------
+
+/**
+ * Assault parties advance by fire-and-movement: one element goes to ground in
+ * cover and fires to suppress while the other sprints crater-to-crater, then
+ * they swap. Men rally on a squad NCO; when he falls the section wavers.
+ * All timings are in seconds / metres. Tuned to read at a glance, not to
+ * simulate a real section attack to the letter.
+ */
+export const SQUAD = {
+  /** Seconds one element rushes before the bound passes to the other (× a small rng jitter). */
+  boundSeconds: 3.4,
+  /** Start bounding once the squad's lead man is within this many metres of the front trench. */
+  boundContactZ: 95,
+  /** Moving element sprints this much faster than a plain advance during a bound. */
+  rushSpeedMul: 1.4,
+  /** Overwatch element moves this fraction of speed while settling into cover. */
+  overwatchSpeedMul: 0.9,
+  /** Men beyond this distance from their NCO feel the pull back toward him. */
+  cohesionRadius: 15,
+  /** Strength of the cohesion steer toward the NCO (relative to the flow vector). */
+  cohesionPull: 0.6,
+  /** A living NCO within this radius steadies a man (morale regen + suppression shed). */
+  rallyRadius: 14,
+  /** Extra morale lost by squadmates the instant their NCO is killed. */
+  leaderMoraleShock: 0.3,
+  /** Suppression spike (hesitation) on squadmates when the NCO falls. */
+  leaderSuppressBump: 0.4,
 } as const
 
 // ---------------------------------------------------------------------------

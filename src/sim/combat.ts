@@ -8,7 +8,7 @@
  * can bury your own charge.
  */
 import type { Enemy, Soldier, Team, Unit, Vehicle } from '../core/types'
-import { COMBAT, ENEMY_DEFS, UNIT_DEFS, VET_ACC_BONUS } from '../core/config'
+import { COMBAT, ENEMY_DEFS, SQUAD, UNIT_DEFS, VET_ACC_BONUS } from '../core/config'
 import { dist2, fx, snd, type Ctx } from './sim'
 import { damageParapet, parapetFactor, sectionAt } from './trench'
 import { fireBullet, muzzlePos, standSurface, G } from './ballistics'
@@ -197,6 +197,22 @@ export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooter
   // Morale shock ripples to nearby friends.
   for (const ally of alliesNear(ctx, target.team, target.pos.x, target.pos.z, 10)) {
     if (ally !== target) ally.morale = Math.max(0, ally.morale - COMBAT.moraleDeathPenalty)
+  }
+
+  // Cutting down the squad NCO is a real, felt counterplay: the whole section
+  // wavers — an extra morale blow and a spike of hesitation across every man
+  // in it, wherever he stands. The squad promotes a replacement next tick.
+  if (target.team === 'german') {
+    const e = target as Enemy
+    const sq = s.squads.find((q) => q.leaderId === target.id && q.id === e.squadId)
+    if (sq) {
+      sq.leaderId = -1
+      for (const m of s.enemies) {
+        if (m === target || m.hp <= 0 || m.squadId !== e.squadId) continue
+        m.morale = Math.max(0, m.morale - SQUAD.leaderMoraleShock)
+        m.suppression = Math.min(1, m.suppression + SQUAD.leaderSuppressBump)
+      }
+    }
   }
 
   if (target.team === 'german') {

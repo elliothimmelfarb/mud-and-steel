@@ -527,6 +527,13 @@ export class Game {
       if (plan.barrages.length > 0) rows.push({ icon: 'ART', label: 'Their guns are registering', detail: 'expect shellfire' })
       rows.push({ icon: 'AIR', label: 'No aerial reconnaissance', detail: 'purchase Recon for full intel' })
     }
+    // The director's adaptation, telegraphed plainly and up top — the men have
+    // learned from the last engagement how the enemy means to answer them. This
+    // shows with or without aerial recon: it is read from their preparations,
+    // not their order of battle.
+    if (plan.adaptation) {
+      rows.unshift({ icon: 'ADAPT', label: 'Enemy has adapted', detail: plan.adaptation })
+    }
     const w: string[] = []
     if (plan.night) w.push('night attack expected')
     if (plan.weatherBias === 'rain') w.push('barometer falling — rain')
