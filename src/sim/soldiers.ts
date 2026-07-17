@@ -5,26 +5,43 @@
  * flare posts).
  */
 import type { Enemy, Soldier, TargetPriority, Unit, Vehicle } from '../core/types'
-import { COMBAT, UNIT_DEFS, VET_ROF_BONUS, WORLD } from '../core/config'
+import { COMBAT, NCO_AURA_LEVEL, NCO_AURA_RANGE, UNIT_DEFS, VET_ROF_BONUS, WORLD } from '../core/config'
 import { dist2, fx, snd, type Ctx } from './sim'
 import {
   combatStance, coverFor, damageSoldier, fireSmallArms, soldierUpkeep, litAt,
 } from './combat'
+import { hasDeed, recordDeed } from './veterancy'
 import { spawnGrenade, spawnMortarBomb, spawnShell, spawnGasShell, spawnFlare } from './projectiles'
 import { losClear, standSurface } from './ballistics'
 import { sectionAt } from './trench'
 
-interface AuraSources { officers: Array<{ x: number; z: number }>; medics: Array<{ x: number; z: number }> }
+interface AuraSources {
+  officers: Array<{ x: number; z: number }>
+  medics: Array<{ x: number; z: number }>
+  /** NCOs (Cpl.+) steady nearby men with a lesser calm than an officer's. */
+  ncos: Array<{ x: number; z: number }>
+}
+
+/** Cheap early-exit test: is any living enemy within `r` of a point? */
+function anyEnemyWithin(ctx: Ctx, x: number, z: number, r: number): boolean {
+  const r2 = r * r
+  for (const e of ctx.s.enemies) if (e.hp > 0 && dist2(e.pos.x, e.pos.z, x, z) < r2) return true
+  return false
+}
 
 export function updateUnits(ctx: Ctx, dt: number): void {
   const { s } = ctx
 
   // Aura sources first.
-  const aura: AuraSources = { officers: [], medics: [] }
+  const aura: AuraSources = { officers: [], medics: [], ncos: [] }
   for (const u of s.units) {
     if (u.disbanded || u.fallenBack) continue
     if (u.kind === 'officer' && u.crew[0]?.hp > 0) aura.officers.push({ x: u.pos.x, z: u.pos.z })
     if (u.kind === 'medic' && u.crew[0]?.hp > 0) aura.medics.push({ x: u.pos.x, z: u.pos.z })
+    // A seasoned NCO who is not himself an officer projects a smaller aura.
+    if (u.kind !== 'officer' && u.vet >= NCO_AURA_LEVEL && u.crew.some((c) => c.hp > 0)) {
+      aura.ncos.push({ x: u.pos.x, z: u.pos.z })
+    }
   }
 
   for (const u of s.units) {
@@ -58,9 +75,11 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   for (const c of u.crew) {
     if (c.hp <= 0) continue
     alive++
-    const officerNear = near(aura.officers, c.pos.x, c.pos.z, 16)
+    // An NCO's calm counts as an officer's for suppression & rally, at shorter reach.
+    const officerNear = near(aura.officers, c.pos.x, c.pos.z, 16) ||
+      near(aura.ncos, c.pos.x, c.pos.z, NCO_AURA_RANGE)
     const medicNear = near(aura.medics, c.pos.x, c.pos.z, 12)
-    soldierUpkeep(ctx, c, dt, officerNear, medicNear)
+    soldierUpkeep(ctx, c, dt, officerNear, medicNear, u.vet)
     c.masked = s.masksOn
     moraleSum += c.morale
     if (c.id === ctx.possessedSoldierId) continue // the player poses himself
@@ -69,6 +88,10 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
     c.animPhase += dt * 7
   }
   if (alive === 0) return
+  // The sole survivor of a weapon team who fights on is cited for holding alone.
+  if (alive === 1 && u.crew.length >= 2 && s.phase === 'assault' && !u.fallenBack) {
+    recordDeed(ctx, u, 'lastman')
+  }
   const avgMorale = moraleSum / alive
 
   // -- morale: break & rally --------------------------------------------------
@@ -154,6 +177,8 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   const rofMult = (1 + u.vet * VET_ROF_BONUS) * (rapid ? 2 : 1)
   shooter.cooldown = 1 / (def.rof * rofMult)
   if (rapid) shooter.morale = Math.max(0.05, shooter.morale - 0.004) // the mad minute costs nerves
+  // Firing on while all but pinned is coolness under fire.
+  if (shooter.suppression > 0.6) recordDeed(ctx, u, 'held')
 
   // Face the enemy.
   const tp = target.kind === 'soldier' ? target.ref.pos : { x: target.ref.pos.x, z: target.ref.pos.z }
@@ -384,6 +409,10 @@ function medicTick(ctx: Ctx, u: Unit, dt: number): void {
   }
   if (worst) {
     worst.hp = Math.min(worst.maxHp, worst.hp + 6 * ctx.mods.healRate * dt)
+    // Working on a badly hurt man with the enemy close is a stretcher-bearer's citation.
+    if (!hasDeed(u, 'rescue') && worstFrac < 0.35 && anyEnemyWithin(ctx, medic.pos.x, medic.pos.z, 35)) {
+      recordDeed(ctx, u, 'rescue')
+    }
   }
 }
 
@@ -395,6 +424,7 @@ function engineerTick(ctx: Ctx, u: Unit, dt: number): void {
   if (sec && !sec.captured && sec.parapetHp < sec.parapetMax) {
     sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 8 * ctx.mods.repairRate * dt)
     if (ctx.rand() < dt * 0.4) snd(ctx.s, { name: 'build', x: sap.pos.x, y: 1, z: sap.pos.z, gain: 0.4 })
+    sapperCitation(ctx, u, sap)
     return
   }
   for (const d of ctx.s.defences) {
@@ -403,7 +433,15 @@ function engineerTick(ctx: Ctx, u: Unit, dt: number): void {
     d.hp = Math.min(d.maxHp, d.hp + 6 * ctx.mods.repairRate * dt)
     d.wear = Math.max(0, d.wear - 0.1 * dt)
     if (ctx.rand() < dt * 0.4) snd(ctx.s, { name: 'wire_snip', x: sap.pos.x, y: 1, z: sap.pos.z, gain: 0.35 })
+    sapperCitation(ctx, u, sap)
     return
+  }
+}
+
+/** Mending the line with the enemy close earns the sapper his mention. */
+function sapperCitation(ctx: Ctx, u: Unit, sap: Soldier): void {
+  if (!hasDeed(u, 'repair') && anyEnemyWithin(ctx, sap.pos.x, sap.pos.z, 35)) {
+    recordDeed(ctx, u, 'repair')
   }
 }
 

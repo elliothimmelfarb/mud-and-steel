@@ -9,8 +9,8 @@ import type {
   TargetPriority, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
-  BUILD_ORDER, COMBAT, DEFENCE_DEFS, ECONOMY, DIRECTOR, ORDER_DEFS, RANKS, SCORE,
-  SIM_DT, TRENCH, UNIT_DEFS, UPGRADE_DEFS, UPGRADE_TIER_WAVE, WIRE_SEGMENT_LEN, WORLD,
+  BUILD_ORDER, COMBAT, DEEDS, DEFENCE_DEFS, ECONOMY, DIRECTOR, ORDER_DEFS, RANKS, SCORE,
+  SIM_DT, TRENCH, UNIT_DEFS, UPGRADE_DEFS, UPGRADE_TIER_WAVE, VET_XP, WIRE_SEGMENT_LEN, WORLD, XP_PER_WAVE,
 } from '../core/config'
 import { EventBus } from '../core/events'
 import { forkRand, hashString, type Rand } from '../core/rng'
@@ -35,6 +35,7 @@ import {
   makeDirector, makeOrders, makeStats, type Ctx, type SimState,
 } from '../sim/sim'
 import { buildSections, sectionAt } from '../sim/trench'
+import { awardXp, leadCrew } from '../sim/veterancy'
 import { updateUnits } from '../sim/soldiers'
 import { updateEnemies, spawnEnemy } from '../sim/enemies'
 import { updateVehicles, spawnVehicle } from '../sim/vehicles'
@@ -66,6 +67,11 @@ export interface SelectedInfo {
   rank: string
   kills: number
   vet: number
+  /** Terse deed labels for the named man, e.g. ["Cool under fire", "Marksmanship"]. */
+  deeds: string[]
+  wavesServed: number
+  /** Experience toward the next rank, 0..1; null once a full Sergeant. */
+  rankProgress: number | null
   crewAlive: number
   crewMax: number
   hpFrac: number
@@ -107,6 +113,20 @@ const ENEMY_LABELS: Record<string, { icon: string; label: string }> = {
   eflamer: { icon: 'FLM', label: 'Flame pioneers' },
   ecar: { icon: 'CAR', label: 'Armoured cars' },
   etank: { icon: 'TNK', label: 'A7V heavy tanks' },
+}
+
+/** Despatch citations for a deed bitmask, e.g. "for coolness under heavy fire". */
+function deedCitations(mask: number): string[] {
+  const out: string[] = []
+  for (const d of DEEDS) if ((mask & d.bit) !== 0) out.push(d.cite)
+  return out
+}
+
+/** Terse UI labels for a deed bitmask, e.g. "Cool under fire". */
+function deedNames(mask: number): string[] {
+  const out: string[] = []
+  for (const d of DEEDS) if ((mask & d.bit) !== 0) out.push(d.name)
+  return out
 }
 
 export class Game {
@@ -170,6 +190,7 @@ export class Game {
   private rangeRing: THREE.LineLoop
   private slotMarkers!: THREE.InstancedMesh
   private chevrons!: THREE.InstancedMesh
+  private rankMarkers!: THREE.InstancedMesh
   private flareSprites: THREE.Sprite[] = []
   private warnRings: Array<{ mesh: THREE.Mesh; t: number }> = []
   private gasBuf = new Float32Array(5 * 240)
@@ -248,6 +269,15 @@ export class Game {
     this.chevrons.count = 0
     this.chevrons.frustumCulled = false
     this.renderer.scene.add(this.chevrons)
+
+    // Rank chevrons: brass stripes floating over a veteran's position — one
+    // per rank level, stacked, so a Sergeant wears three. Cheap instanced bars.
+    const rankGeo = new THREE.BoxGeometry(0.5, 0.07, 0.16)
+    this.rankMarkers = new THREE.InstancedMesh(rankGeo,
+      new THREE.MeshBasicMaterial({ color: 0xd8bf72 }), 180)
+    this.rankMarkers.count = 0
+    this.rankMarkers.frustumCulled = false
+    this.renderer.scene.add(this.rankMarkers)
   }
 
   private refreshSlotMarkers(): void {
@@ -290,6 +320,7 @@ export class Game {
     const persistent = new Set<THREE.Object3D>([this.ghost, this.renderer.camera])
     if (this.slotMarkers) persistent.add(this.slotMarkers)
     if (this.chevrons) persistent.add(this.chevrons)
+    if (this.rankMarkers) persistent.add(this.rankMarkers)
     for (const sp of this.flareSprites) persistent.add(sp)
     for (const p of persistent) oldScene.remove(p)
     oldScene.traverse((o) => {
@@ -328,6 +359,7 @@ export class Game {
     oldScene.add(this.renderer.camera)
     if (this.slotMarkers) oldScene.add(this.slotMarkers)
     if (this.chevrons) oldScene.add(this.chevrons)
+    if (this.rankMarkers) oldScene.add(this.rankMarkers)
     for (const sp of this.flareSprites) oldScene.add(sp)
 
     this.mods = new Mods()
@@ -414,6 +446,7 @@ export class Game {
     // No ghosts of the last battlefield: stale instance counts would render.
     this.slotMarkers.count = 0
     this.chevrons.count = 0
+    this.rankMarkers.count = 0
     this.embodyHintShown = false
     this.audio.setMuffled(s.masksOn ? 0.4 : 0)
     this.rig.target.set(0, 0, WORLD.frontTrenchZ + 30)
@@ -433,6 +466,8 @@ export class Game {
     if (!u) return
     u.xp = su.xp
     u.vet = su.vet as Unit['vet']
+    u.deeds = su.deeds ?? 0
+    u.wavesServed = su.wavesServed ?? 0
     u.targeting = su.targeting
     u.heat = su.heat
     u.ammo = su.ammo
@@ -440,6 +475,7 @@ export class Game {
       if (u.crew[i]) {
         u.crew[i].name = { first: c.first, last: c.last }
         u.crew[i].hp = c.hp
+        u.crew[i].kills = c.kills ?? 0
         if (c.hp <= 0) u.crew[i].stance = 'dead'
       }
     })
@@ -448,13 +484,21 @@ export class Game {
   private subscribeEvents(): void {
     const ev = this.events
     ev.on('soldierDied', (p) => {
+      const cites = deedCitations(p.deeds)
       const rec: CasualtyRecord = {
         name: { first: p.name.split(' ')[0] ?? '', last: p.name.split(' ')[1] ?? '' },
         rank: p.rank, kind: p.kind as UnitKindId, wave: p.wave,
-        epitaph: makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave),
+        epitaph: makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave, {
+          deeds: cites, wavesServed: p.wavesServed,
+        }),
+        deeds: p.deeds, wavesServed: p.wavesServed,
       }
       this.ctx.s.casualties.push(rec)
       this.waveCasualties.push(rec)
+      // A long-serving or decorated man's fall is marked for the player.
+      if (p.wavesServed >= 4 || p.deeds !== 0) {
+        this.hud?.toast(`${p.rank} ${rec.name.last} has fallen — ${p.wavesServed} waves served`, 'warn')
+      }
     })
     ev.on('unitLost', (p) => {
       // Record every man of the lost unit.
@@ -478,9 +522,18 @@ export class Game {
     ev.on('toast', (p) => this.hud?.toast(p.text, p.kind))
     ev.on('promoted', (p) => {
       const u = this.ctx.s.units.find((x) => x.id === p.unitId)
-      if (u && u.crew[0]) {
-        this.hud?.toast(`${RANKS[u.vet]} ${u.crew[0].name.last} — mentioned in dispatches`, 'good')
+      const lead = u ? leadCrew(u) : null
+      if (u && lead) {
+        this.hud?.toast(`${lead.name.last} promoted — ${RANKS[u.vet]}`, 'good')
         this.audio.play('upgrade', { gain: 0.5 })
+      }
+    })
+    ev.on('deed', (p) => {
+      const u = this.ctx.s.units.find((x) => x.id === p.unitId)
+      const lead = u ? leadCrew(u) : null
+      if (lead) {
+        this.hud?.toast(`${RANKS[u!.vet]} ${lead.name.last} mentioned in despatches — ${p.cite}`, 'good')
+        this.audio.play('upgrade', { gain: 0.35 })
       }
     })
   }
@@ -600,12 +653,19 @@ export class Game {
       if (returned > 0) this.hud?.toast(`${returned} wounded returned from the CCS`, 'good')
     }
 
-    // Weapons cool, morale settles, orders reset between waves.
+    // Weapons cool, morale settles, orders reset between waves. Every position
+    // that came through the assault with a living man earns a wave's experience
+    // and a notch on its service — longevity, not just kills, makes veterans.
     for (const u of s.units) {
       u.heat = 0
       u.fallenBack = false
+      const survived = u.crew.some((c) => c.hp > 0)
       for (const c of u.crew) {
         if (c.hp > 0) { c.suppression = 0; c.morale = Math.max(c.morale, 0.75) }
+      }
+      if (survived && !u.disbanded) {
+        u.wavesServed++
+        awardXp(this.ctx, u, XP_PER_WAVE)
       }
     }
     s.clouds.length = 0
@@ -621,21 +681,28 @@ export class Game {
     const author = s.units.filter((u) => !u.disbanded && u.crew.some((c) => c.hp > 0))
     if (author.length > 0 && (this.waveCasualties.length > 0 || s.wave % 3 === 0)) {
       const u = author[Math.floor(this.runRand() * author.length)]
-      const sol = u.crew.find((c) => c.hp > 0)
+      const sol = leadCrew(u)
       if (sol) {
         const w = this.weather.state
+        // If the letter-writer has himself been mentioned in despatches, he may
+        // (modestly) note it home. A lost mate who was decorated is honoured too.
+        const cites = deedCitations(u.deeds)
+        const lostRec = this.waveCasualties[0] ?? null
         const letter = writeLetterHome({
           authorFirst: sol.name.first, authorLast: sol.name.last,
           rank: RANKS[u.vet], regiment: this.regiment,
           wave: s.wave, dateStr: fieldDate(s.wave),
           weather: w.night ? 'night' : w.rain > 0.4 ? 'rain' : w.fog > 0.4 ? 'fog' : 'clear',
           kills: s.stats.kills - this.waveKills,
-          lostMate: this.waveCasualties[0] ? `${this.waveCasualties[0].name.first} ${this.waveCasualties[0].name.last}` : null,
+          lostMate: lostRec ? `${lostRec.name.first} ${lostRec.name.last}` : null,
           sawTank: this.sawTank, sawGas: this.sawGas,
           mud: this.weather.state.wetness > 0.5,
           morale: this.waveCasualties.length > 2 ? 'shaken' : this.waveCasualties.length > 0 ? 'steady' : 'high',
+          citedDeed: cites.length ? cites[Math.floor(this.runRand() * cites.length)] : null,
+          wavesServed: u.wavesServed,
+          lostMateDeed: lostRec && lostRec.deeds ? deedCitations(lostRec.deeds)[0] ?? null : null,
         }, this.runRand)
-        this.hud?.showLetter(letter, `${sol.name.first} ${sol.name.last}`)
+        this.hud?.showLetter(letter, `${RANKS[u.vet]} ${sol.name.first} ${sol.name.last}`)
       }
     }
 
@@ -680,9 +747,10 @@ export class Game {
       breach: s.breach,
       upgrades: [...s.upgrades],
       units: s.units.filter((u) => !u.disbanded).map((u) => ({
-        kind: u.kind, slotId: u.slotId, xp: u.xp, vet: u.vet, targeting: u.targeting,
+        kind: u.kind, slotId: u.slotId, xp: u.xp, vet: u.vet,
+        deeds: u.deeds, wavesServed: u.wavesServed, targeting: u.targeting,
         heat: u.heat, ammo: u.ammo,
-        crew: u.crew.map((c) => ({ first: c.name.first, last: c.name.last, hp: c.hp })),
+        crew: u.crew.map((c) => ({ first: c.name.first, last: c.name.last, hp: c.hp, kills: c.kills })),
       })),
       defences: s.defences.filter((d) => d.hp > 0).map((d) => ({
         kind: d.kind, x: d.pos.x, z: d.pos.z, hp: d.hp, maxHp: d.maxHp, wear: d.wear,
@@ -811,7 +879,8 @@ export class Game {
     const u: Unit = {
       id: s.nextId++, kind, slotId, pos: { x: slot.pos.x, z: slot.pos.z },
       crew: [], heat: 0, venting: false, ammo: kind === 'lewis' ? 6 : -1,
-      xp: 0, vet: 0, targeting: def.targeting, fallenBack: false, disbanded: false,
+      xp: 0, vet: 0, deeds: 0, wavesServed: 0,
+      targeting: def.targeting, fallenBack: false, disbanded: false,
     }
     const hpMult = def.placement === 'pad' ? this.mods.emplacementHp : 1
     for (let i = 0; i < def.crew; i++) {
@@ -869,16 +938,25 @@ export class Game {
   selectedInfo(): SelectedInfo | null {
     const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
     if (!u) return null
-    const lead = u.crew[0]
+    const lead = leadCrew(u)
     const alive = u.crew.filter((c) => c.hp > 0)
     const hp = alive.reduce((a, c) => a + c.hp, 0)
     const hpMax = u.crew.reduce((a, c) => a + c.maxHp, 0)
     const morale = alive.length ? alive.reduce((a, c) => a + c.morale, 0) / alive.length : 0
     const suppression = alive.length ? alive.reduce((a, c) => a + c.suppression, 0) / alive.length : 0
+    // Progress from the current rank's threshold to the next.
+    let rankProgress: number | null = null
+    const xpTable = VET_XP as readonly number[]
+    if (u.vet < xpTable.length) {
+      const floor = u.vet === 0 ? 0 : xpTable[u.vet - 1]
+      const ceil = xpTable[u.vet]
+      rankProgress = Math.max(0, Math.min(1, (u.xp - floor) / Math.max(1, ceil - floor)))
+    }
     return {
       unitId: u.id, kind: u.kind,
       name: lead ? `${lead.name.first} ${lead.name.last}` : '—',
-      rank: RANKS[u.vet], kills: u.xp, vet: u.vet,
+      rank: RANKS[u.vet], kills: lead?.kills ?? 0, vet: u.vet,
+      deeds: deedNames(u.deeds), wavesServed: u.wavesServed, rankProgress,
       crewAlive: alive.length, crewMax: u.crew.length,
       hpFrac: hpMax > 0 ? hp / hpMax : 0,
       heat: u.heat,
@@ -1468,6 +1546,30 @@ export class Game {
       this.chevrons.instanceMatrix.needsUpdate = true
     } else {
       this.chevrons.count = 0
+    }
+
+    // Rank chevrons over veterans: brass stripes floating above the senior man,
+    // one per rank level. The player can read a position's experience at a glance
+    // and knows whom he is about to lose. Hidden in first person (own line only).
+    {
+      const m = new THREE.Matrix4()
+      let n = 0
+      const cap = 180
+      if (!this.fpsMode.active) {
+        for (const u of s.units) {
+          if (u.disbanded || u.vet <= 0) continue
+          const lead = leadCrew(u)
+          if (!lead || lead.hp <= 0) continue
+          const baseY = standY(lead.pos.x, lead.pos.z) + 2.15
+          for (let k = 0; k < u.vet && n < cap; k++) {
+            m.setPosition(lead.pos.x, baseY + k * 0.17, lead.pos.z)
+            this.rankMarkers.setMatrixAt(n++, m)
+          }
+          if (n >= cap) break
+        }
+      }
+      this.rankMarkers.count = n
+      this.rankMarkers.instanceMatrix.needsUpdate = true
     }
 
     // Bullets in flight. The renderer needs the camera's world position to

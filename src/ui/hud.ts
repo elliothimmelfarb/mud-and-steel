@@ -6,7 +6,7 @@
  */
 import type { BuildableId, DefenceKindId, UnitKindId } from '../core/types'
 import {
-  BUILD_ORDER, DEFENCE_DEFS, ECONOMY, ORDER_DEFS, UNIT_DEFS, UPGRADE_DEFS,
+  BUILD_ORDER, DEEDS, DEFENCE_DEFS, ECONOMY, ORDER_DEFS, RANKS, UNIT_DEFS, UPGRADE_DEFS,
 } from '../core/config'
 import type { OrderDef } from '../core/config'
 import { keyLabel, type Action } from '../render/controls'
@@ -397,6 +397,15 @@ export class Hud implements HudBridge {
       subBits.push(`${sel.kills} ${sel.kills === 1 ? 'kill' : 'kills'}`)
       const sub = el('div', 'unit-sub', subBits.join(' · '))
 
+      // Service & citations for the named man — the veterancy surface.
+      const svcBits: string[] = []
+      if (sel.wavesServed > 0) svcBits.push(`${sel.wavesServed} wave${sel.wavesServed === 1 ? '' : 's'} served`)
+      if (sel.rankProgress !== null && sel.vet < 3) svcBits.push(`${Math.round(sel.rankProgress * 100)}% to ${RANKS[sel.vet + 1]}`)
+      const svc = el('div', 'unit-svc', svcBits.join(' · '))
+      if (!svcBits.length) svc.style.display = 'none'
+      const deeds = el('div', 'unit-deeds', sel.deeds.length ? `✠ ${sel.deeds.join(' · ')}` : '')
+      if (!sel.deeds.length) deeds.style.display = 'none'
+
       const status = el('div', 'unit-status')
       status.dataset.role = 'status'
 
@@ -427,7 +436,7 @@ export class Hud implements HudBridge {
       const sellBtn = el('button', 'ms-btn ms-btn--danger ms-btn--small unit-sell', `Disband (£${sel.sellValue})`)
       sellBtn.title = `Refund ${Math.round(ECONOMY.sellRefund * 100)}% (${keyLabel(this.game.input.bindFor('sell'))})`
       sellBtn.addEventListener('click', () => { this.game.sellSelected(); sellBtn.blur() })
-      this.unitPanel.append(head, sub, status, bars, targLabel, targRow, sellBtn)
+      this.unitPanel.append(head, sub, svc, deeds, status, bars, targLabel, targRow, sellBtn)
     }
     const setW = (role: string, frac: number): void => {
       const e = this.unitPanel.querySelector(`[data-role="${role}"]`) as HTMLElement | null
@@ -520,6 +529,8 @@ export class Hud implements HudBridge {
       memorial: s.casualties.map((c) => ({
         name: `${c.name.first} ${c.name.last}`, rank: c.rank,
         kind: UNIT_DEFS[c.kind]?.name ?? c.kind, wave: c.wave, epitaph: c.epitaph,
+        deeds: DEEDS.filter((d) => ((c.deeds ?? 0) & d.bit) !== 0).map((d) => d.name),
+        wavesServed: c.wavesServed ?? 0,
       })),
       letter: null,
       onRestart: () => { this.closeOverlay(); this.game.startRun(this.game.seedStr, this.game.difficulty) },

@@ -62,6 +62,13 @@ export interface Soldier {
 
 export type VeterancyLevel = 0 | 1 | 2 | 3 // green, seasoned, veteran, elite
 
+/**
+ * A soldier's notable deeds, stored as a bitmask on his Unit. Each bit is one
+ * citation the flavour generators can draw on for letters and epitaphs. See
+ * DEEDS in core/config.ts for the flag values and their citations.
+ */
+export type DeedMask = number
+
 export interface Unit {
   id: number
   kind: UnitKindId
@@ -74,8 +81,13 @@ export interface Unit {
   venting: boolean
   /** Shells in the ready rack for mortar/fieldgun/gasproj; -1 = not ammo-limited. */
   ammo: number
+  /** Accumulated experience: kills, waves survived, and deeds all feed it. */
   xp: number
   vet: VeterancyLevel
+  /** Bitmask of notable deeds this position's men have performed (DeedMask). */
+  deeds: DeedMask
+  /** How many waves this position has fought through and survived. */
+  wavesServed: number
   targeting: TargetPriority
   /** True while the crew has abandoned the position (routed / taking cover). */
   fallenBack: boolean
@@ -425,6 +437,10 @@ export interface CasualtyRecord {
   kind: UnitKindId
   wave: number
   epitaph: string
+  /** Bitmask of the deeds he was cited for (DeedMask); 0 if none. */
+  deeds: DeedMask
+  /** Waves he fought through before he fell — a long-serving man is honoured apart. */
+  wavesServed: number
 }
 
 export interface RunStats {

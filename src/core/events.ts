@@ -7,11 +7,12 @@ export interface GameEvents {
   sectionRetaken: { sectionId: number }
   unitPlaced: { unitId: number }
   unitLost: { unitId: number; kind: string }
-  soldierDied: { name: string; rank: string; kind: string; wave: number }
+  soldierDied: { name: string; rank: string; kind: string; wave: number; deeds: number; wavesServed: number }
   gasAlarm: { incoming: boolean }
   barrageWarning: { x: number; z: number; seconds: number }
   tankSighted: Record<string, never>
   promoted: { unitId: number; vet: number }
+  deed: { unitId: number; deed: string; cite: string }
   reqChanged: { req: number }
   gameOver: { victory: boolean }
   toast: { text: string; kind: 'info' | 'warn' | 'danger' | 'good' }

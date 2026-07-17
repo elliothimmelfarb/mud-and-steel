@@ -8,10 +8,11 @@
  * can bury your own charge.
  */
 import type { Enemy, Soldier, Team, Unit, Vehicle } from '../core/types'
-import { COMBAT, ENEMY_DEFS, SQUAD, UNIT_DEFS, VET_ACC_BONUS } from '../core/config'
+import { COMBAT, ENEMY_DEFS, MARKSMAN_KILLS, RANKS, SQUAD, UNIT_DEFS, VET_ACC_BONUS, XP_PER_KILL } from '../core/config'
 import { dist2, fx, snd, type Ctx } from './sim'
 import { damageParapet, parapetFactor, sectionAt } from './trench'
 import { fireBullet, muzzlePos, standSurface, G } from './ballistics'
+import { awardXp, leadCrew, rallyMult, recordDeed, suppressResistMult } from './veterancy'
 
 // ---------------------------------------------------------------------------
 // Geometry / perception helpers
@@ -232,32 +233,40 @@ export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooter
     }
   } else {
     s.stats.losses++
-    // Name the man for the memorial. His unit gives him his rank.
-    let rank = 'Pte.'
+    // Name the man for the memorial. His unit gives him his rank, his deeds,
+    // and the tally of waves he saw through — a long-serving man is honoured
+    // apart from the green drafts.
+    let rank = RANKS[0] as string
     let kind = 'rifleman'
+    let deeds = 0
+    let wavesServed = 0
     for (const u of s.units) {
       if (u.crew.includes(target)) {
-        rank = ['Pte.', 'L/Cpl.', 'Cpl.', 'Sjt.'][u.vet] ?? 'Pte.'
+        rank = RANKS[u.vet] ?? RANKS[0]
         kind = u.kind
+        deeds = u.deeds
+        wavesServed = u.wavesServed
         break
       }
     }
     ctx.events.emit('soldierDied', {
       name: `${target.name.first} ${target.name.last}`,
-      rank, kind, wave: s.wave,
+      rank, kind, wave: s.wave, deeds, wavesServed,
     })
   }
 }
 
 export function creditKill(ctx: Ctx, u: Unit): void {
-  u.xp++
-  if (u.crew.length > 0) u.crew[0].kills++
-  const th = [4, 10, 20]
-  const level = th.filter((t) => u.xp >= t).length as 0 | 1 | 2 | 3
-  if (level > u.vet) {
-    u.vet = level
-    ctx.events.emit('promoted', { unitId: u.id, vet: level })
+  const lead = leadCrew(u)
+  if (lead) lead.kills++
+  awardXp(ctx, u, XP_PER_KILL)
+  // A kill made with cold steel while over the top is a gallantry citation.
+  if (ctx.s.orders.bayonetT > 0 &&
+      (u.kind === 'rifleman' || u.kind === 'grenadier' || u.kind === 'officer')) {
+    recordDeed(ctx, u, 'bayonet')
   }
+  // A man who runs up a long tally is mentioned for his marksmanship.
+  if (lead && lead.kills >= MARKSMAN_KILLS) recordDeed(ctx, u, 'marksman')
 }
 
 export function damageVehicle(
@@ -418,10 +427,14 @@ function* alliesNear(ctx: Ctx, team: Team, x: number, z: number, radius: number)
   }
 }
 
-/** Shared per-soldier upkeep: suppression decay, morale regen, gas coughing. */
-export function soldierUpkeep(ctx: Ctx, sol: Soldier, dt: number, officerNear: boolean, medicNear: boolean): void {
-  sol.suppression = Math.max(0, sol.suppression - COMBAT.suppressDecay * dt * (officerNear ? 1.6 : 1))
-  let regen = COMBAT.moraleRegen * (officerNear ? 2.2 : 1) * (medicNear ? 1.5 : 1) * ctx.mods.rallyRate
+/**
+ * Shared per-soldier upkeep: suppression decay, morale regen, gas coughing.
+ * `vet` is the man's rank level (0..3); steadier veterans shake off suppression
+ * faster and rally sooner — modest perks, not immunity.
+ */
+export function soldierUpkeep(ctx: Ctx, sol: Soldier, dt: number, officerNear: boolean, medicNear: boolean, vet = 0): void {
+  sol.suppression = Math.max(0, sol.suppression - COMBAT.suppressDecay * dt * (officerNear ? 1.6 : 1) * suppressResistMult(vet))
+  let regen = COMBAT.moraleRegen * (officerNear ? 2.2 : 1) * (medicNear ? 1.5 : 1) * rallyMult(vet) * ctx.mods.rallyRate
   sol.morale = Math.min(1, sol.morale + regen * dt)
   const floor = sol.team === 'brit' ? ctx.mods.moraleFloor : 0
   if (sol.morale < floor) sol.morale = floor
