@@ -6,7 +6,7 @@
  * says so. Misses strike real dirt and suppress whoever heard the crack.
  */
 import type { Bullet, ImpactSurface, Soldier, Team, Vec3 } from '../core/types'
-import { ARMOUR_MULT, COMBAT, TRENCH, WORLD } from '../core/config'
+import { ARMOUR_MULT, COMBAT, WORLD } from '../core/config'
 import { dist2, fx, pushFpsFeedback, snd, type Ctx } from './sim'
 import { damageSoldier, damageVehicle, stanceHeight, suppressArea } from './combat'
 import type { Terrain } from '../world/terrain'
@@ -19,23 +19,22 @@ export const G = 9.81
 // ---------------------------------------------------------------------------
 
 /**
- * The surface a soldier stands on: terrain height plus the trench fire-step.
- * The step is tall enough that a STANDING man's muzzle clears the parapet
- * (that is what fire-steps were for) while a CROUCHING man ducks fully
- * behind it — with physical bullets, that difference IS the cover model.
- * Render-side standY must use this same function.
+ * The ground a soldier's boots rest on. Real terrain height, everywhere.
+ * Render-side standY must use this same function — bullets fly at the men
+ * you see, and with physical rounds the height difference IS the cover model.
  *
- * The fire step is now REAL geometry: the enemy wall of each parapet trench
- * carries a carved bench whose top sits at `grade - (depth - fireStepLift)`,
- * with its trench mask cleared. A man on the bench therefore has trenchAt≈0
- * and heightAt≈benchTop, so this returns benchTop — his feet are planted on
- * ground, no synthetic lift, yet the number is IDENTICAL to the old
- * `floor + fireStepLift`. On the deep floor the mask is 1 and the term still
- * lifts a transient (moving) man to the same firing height. One constant,
- * `TRENCH.fireStepLift`, drives both the carve and this formula.
+ * Historically this added `trenchAt * fireStepLift` — a synthetic lift that
+ * stood men at fire-step height because the step didn't exist as geometry.
+ * The benches are CARVED now (and the trench mask is cleared on them, so a
+ * manning soldier already reads real ground); keeping the lift only made men
+ * hover 1.55 m over the deep floor while moving through corridors. Dropping
+ * it puts walking men on the duckboards and — because muzzles, LOS and the
+ * renderer all pass through here — gives trench movement true defilade:
+ * heads below the parapet can neither shoot nor be shot, which is what a
+ * trench is for. Fighting happens from the benches, where men stand tall.
  */
 export function standSurface(ctx: Ctx, x: number, z: number): number {
-  return ctx.terrain.heightAt(x, z) + ctx.terrain.trenchAt(x, z) * TRENCH.fireStepLift
+  return ctx.terrain.heightAt(x, z)
 }
 
 /** Muzzle origin for a firing soldier (cheek height on the fire step). */
