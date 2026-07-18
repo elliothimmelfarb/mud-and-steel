@@ -62,6 +62,9 @@ export interface ReplayRecord {
    *  envelopes are in the log). */
   persona: import('../sim/ai').AiPersona | null
   envs: import('../sim/commands').Envelope[]
+  /** The player embodied someone: first-person actions are not yet in the
+   *  command stream, so playback may diverge from the battle as fought. */
+  embodied?: boolean
 }
 
 export interface IntelData {
@@ -188,8 +191,16 @@ export class Game {
   }
 
   /** FPS embodiment enters/leaves through the command stream (#41 item 2). */
-  possessCmd(unitId: number, soldierId: number): void { this.submit([{ t: 'possess', unitId, soldierId }]) }
+  possessCmd(unitId: number, soldierId: number): void {
+    this.embodiedThisRun = true
+    this.submit([{ t: 'possess', unitId, soldierId }])
+  }
   releaseCmd(): void { this.submit([{ t: 'release' }]) }
+  /** True once the player embodied anyone this run. Until embodiment intents
+   *  land in the protocol (#41 item 1), an embodied battle's war diary can
+   *  diverge from what was played — the diary records the flag and playback
+   *  warns. */
+  embodiedThisRun = false
 
   /** Sim context (undefined before the first startRun, like the old field). */
   get ctx(): Ctx {
@@ -558,6 +569,7 @@ export class Game {
     this.subscribeEvents()
     this.running = true
     this.paused = false
+    this.embodiedThisRun = false
     this.speed = 1
     this.selectedUnitId = -1
     this.buildSelection = null
@@ -590,6 +602,9 @@ export class Game {
         this.runner!.enqueue(JSON.parse(JSON.stringify(env)) as import('../sim/commands').Envelope)
       }
       this.hud?.toast('WAR DIARY — replaying the last battle. Speed keys work; the orders are history.', 'info')
+      if (bigpush.replay.embodied) {
+        this.hud?.toast('This battle had first-person sequences — the diary may differ from the war as fought.', 'warn')
+      }
     }
   }
 
@@ -707,6 +722,7 @@ export class Game {
             v: 1, seedStr: this.seedStr, matchLen: s.matchLen,
             persona: this.net ? null : this.runPersona,
             envs: this.runner.log,
+            embodied: this.embodiedThisRun || undefined,
           }
           localStorage.setItem(Game.REPLAY_KEY, JSON.stringify(rec))
         } catch { /* storage full or blocked — the diary is a luxury */ }
