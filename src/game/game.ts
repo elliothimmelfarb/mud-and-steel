@@ -213,10 +213,9 @@ export class Game {
   submitFpsTool(tool: 'heal' | 'parapet' | 'wire', targetId: number, amount: number): void {
     this.submit([{ t: 'fpstool', tool, targetId, amount }])
   }
-  /** True once the player embodied anyone this run. Until embodiment intents
-   *  land in the protocol (#41 item 1), an embodied battle's war diary can
-   *  diverge from what was played — the diary records the flag and playback
-   *  warns. */
+  /** True once the player embodied anyone this run. Since fpspose/fpsfire/
+   *  fpstool ride the command stream, embodied diaries replay bit-exactly —
+   *  the flag is now just diary metadata (embodied diaries grow ~30 cmds/s). */
   embodiedThisRun = false
 
   /** Sim context (undefined before the first startRun, like the old field). */
@@ -619,9 +618,6 @@ export class Game {
         this.runner!.enqueue(JSON.parse(JSON.stringify(env)) as import('../sim/commands').Envelope)
       }
       this.hud?.toast('WAR DIARY — replaying the last battle. Speed keys work; the orders are history.', 'info')
-      if (bigpush.replay.embodied) {
-        this.hud?.toast('This battle had first-person sequences — the diary may differ from the war as fought.', 'warn')
-      }
     }
   }
 
@@ -1228,8 +1224,9 @@ export class Game {
   /** Step into the boots of the selected unit's senior surviving man. */
   possessSelected(): void {
     if (this.net) {
-      // Possession mutates ctx.possessedSoldierId OUTSIDE the command stream —
-      // a determinism breaker until it becomes a Cmd (issue #41 / M6).
+      // Embodiment now rides the command stream (fpspose/fpsfire/fpstool), so
+      // MP possession is determinism-SAFE — it stays off only until someone
+      // playtests the 6-tick input delay on the possessed soldier's sim body.
       this.hud?.toast('No embodiment in multiplayer yet — command from the map.', 'info')
       return
     }
