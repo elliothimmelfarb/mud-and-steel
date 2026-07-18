@@ -30,6 +30,14 @@ function main(): void {
     return
   }
 
+  // The Big Push lab: headless twin-sim determinism probe (M0). Grows into
+  // the two-trench mode harness as the milestones land. No game boot needed.
+  if (new URLSearchParams(location.search).has('bigpush')) {
+    document.getElementById('boot')?.classList.add('done')
+    import('./game/twinSimLab').then(({ startTwinSimLab }) => startTwinSimLab(app))
+    return
+  }
+
   const settings = loadSettings()
   const audio = new AudioEngine()
   // WebAudio needs a user gesture; unlock on the first interaction.

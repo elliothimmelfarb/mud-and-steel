@@ -226,6 +226,23 @@ export function updateWaveSpawns(ctx: Ctx, elapsed: number): boolean {
   }
 
   const spawnsDone = s.planCursor >= plan.spawns.length
+
+  // Stall-breaker: long after the last spawn, a handful of stragglers with no
+  // armour behind them is a beaten attack, not a fight — an MG team dug in at
+  // extreme range would otherwise pin the wave open forever (soaked headless
+  // runs hit exactly this). They withdraw; the rout path walks them off.
+  if (spawnsDone && elapsed > 240) {
+    const live = s.enemies.filter((e) => e.hp > 0 && e.behavior !== 'rout')
+    const armour = s.vehicles.some((v) => v.team === 'german' && !v.dead)
+    if (live.length > 0 && live.length <= 6 && !armour) {
+      for (const e of live) {
+        e.behavior = 'rout'
+        e.coverTarget = null
+      }
+      ctx.events.emit('toast', { text: 'The attack peters out — the survivors fall back.', kind: 'good' })
+    }
+  }
+
   // Routed men no longer count as fight — the wave is beaten when only backs remain.
   const hostiles = s.enemies.some((e) => e.behavior !== 'rout') ||
     s.vehicles.some((v) => v.team === 'german' && !v.dead)
