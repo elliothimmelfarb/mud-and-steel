@@ -324,6 +324,12 @@ export interface TrenchSection {
   id: number
   /** 'front' | 'support' — support sections are the last line. */
   line: 'front' | 'support'
+  /**
+   * Which way this section fights: +1 = British (enemy toward -z),
+   * -1 = German (enemy toward +z). Decides the fire-step side for
+   * projection, dressing and (Big Push) captured-trench cover.
+   */
+  facing: 1 | -1
   a: Vec2
   b: Vec2
   mid: Vec2

@@ -317,7 +317,7 @@ export class Game {
       const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
       const segLen = Math.hypot(abx, abz) || 1
       let nx = -abz / segLen, nz = abx / segLen
-      if (nz > 0) { nx = -nx; nz = -nz }
+      if (nz * sec.facing > 0) { nx = -nx; nz = -nz }
       const steps = Math.max(2, Math.round(segLen / 2))
       const base = pos.length / 3
       for (let k = 0; k <= steps; k++) {

@@ -11,7 +11,7 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
   const sections: TrenchSection[] = []
   let sectionId = 0
 
-  const addLine = (line: Vec2[], kind: 'front' | 'support') => {
+  const addLine = (line: Vec2[], kind: 'front' | 'support', facing: 1 | -1 = 1) => {
     for (let i = 0; i < line.length - 1; i++) {
       const a = line[i], b = line[i + 1]
       // Fighting sections live on the fire BAYS only — the long x-running
@@ -21,7 +21,7 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
       if (Math.abs(b.x - a.x) < 8 || Math.abs(b.x - a.x) <= 2 * Math.abs(b.z - a.z)) continue
       const mid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }
       sections.push({
-        id: sectionId++, line: kind, a, b, mid,
+        id: sectionId++, line: kind, facing, a, b, mid,
         parapetHp: TRENCH.parapetHp * parapetMult,
         parapetMax: TRENCH.parapetHp * parapetMult,
         captured: false, captureT: 0,
@@ -56,9 +56,10 @@ export function projectToFireStep(
     const margin = Math.min(0.45, 1.0 / segLen)
     let t = ((x - sec.a.x) * abx + (z - sec.a.z) * abz) / len2
     t = Math.max(margin, Math.min(1 - margin, t))
-    // Enemy-facing normal (toward global -z) pushes the post onto the bench.
+    // Enemy-facing normal (toward -z for British sections, +z for German)
+    // pushes the post onto the bench carved into the enemy wall.
     let nx = -abz / segLen, nz = abx / segLen
-    if (nz > 0) { nx = -nx; nz = -nz }
+    if (nz * sec.facing > 0) { nx = -nx; nz = -nz }
     const px = sec.a.x + abx * t + nx * TRENCH.fireStepSlot
     const pz = sec.a.z + abz * t + nz * TRENCH.fireStepSlot
     const d = dist2(x, z, px, pz)

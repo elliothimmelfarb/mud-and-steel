@@ -44,6 +44,8 @@ import {
 export interface RunnerOpts {
   seedStr: string
   difficulty: Difficulty
+  /** 'classic' (default) = the defence campaign; 'bigpush' = two-trench mode. */
+  mode?: 'classic' | 'bigpush'
   resume?: RunSave | null
   /** Share the game's bus so UI subscriptions survive; headless makes its own. */
   events?: EventBus
@@ -78,12 +80,14 @@ export class SimRunner implements CmdHost {
     const upgrades = new Set<string>(resume?.upgrades ?? [])
     mods.recompute(upgrades)
 
-    this.terrain = new Terrain(seed)
+    const mode = opts.mode ?? 'classic'
+    this.terrain = new Terrain(seed, mode === 'bigpush' ? 'bigpush' : 'classic')
     this.weather = new Weather(seed)
 
     const sections = buildSections(this.terrain, mods.parapetMult)
     const s: SimState = {
       seed,
+      mode,
       time: 0,
       tick: 0,
       wave: resume?.wave ?? 1,
