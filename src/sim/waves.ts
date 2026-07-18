@@ -254,13 +254,13 @@ export function updateWaveSpawns(ctx: Ctx, elapsed: number): boolean {
 }
 
 function pickTargetSection(ctx: Ctx): number {
-  const fronts = ctx.s.sections.filter((sec) => sec.line === 'front')
+  const fronts = ctx.s.sections.filter((sec) => sec.line === 'front' && sec.home === 'brit')
   let best = fronts[0]?.id ?? 0
   let bestScore = -Infinity
   for (const sec of fronts) {
     let score = ctx.rand() * 40
     score -= sec.parapetHp / sec.parapetMax * 20
-    if (sec.captured) score += 50 // reinforce success
+    if (sec.owner === 'german') score += 50 // reinforce success
     for (const u of ctx.s.units) {
       if (!u.disbanded && Math.abs(u.pos.x - sec.mid.x) < 12) score -= 8
     }

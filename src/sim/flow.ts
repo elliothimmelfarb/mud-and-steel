@@ -55,7 +55,9 @@ export function rebuildFlow(ctx: Ctx): void {
   }
   for (const d of s.defences) {
     if (d.hp <= 0) continue
-    if (d.kind === 'wire') stamp(d.pos.x, d.pos.z, WIRE_SEGMENT_LEN / 2, 12, 0.5)
+    // flowInf steers the GERMAN attack — their own (bigpush) wire is a lane
+    // they know, not an obstacle. British wire and traps cost everyone.
+    if (d.kind === 'wire' && d.side === 'brit') stamp(d.pos.x, d.pos.z, WIRE_SEGMENT_LEN / 2, 12, 0.5)
     else if (d.kind === 'tanktrap') stamp(d.pos.x, d.pos.z, 3, 1.5, Number.POSITIVE_INFINITY)
   }
   for (const v of s.vehicles) {
@@ -68,16 +70,20 @@ export function rebuildFlow(ctx: Ctx): void {
   const infTargets: Array<{ x: number; z: number }> = []
   let anyCaptured = false
   for (const sec of s.sections) {
-    if (sec.captured) { anyCaptured = true; continue }
+    // The German attack aims at whatever the British HOLD (including their
+    // own lost sections — recapture is a valid objective).
+    if (sec.owner !== 'brit') { if (sec.home === 'brit') anyCaptured = true; continue }
     if (sec.line === 'front') infTargets.push({ x: sec.mid.x, z: sec.mid.z - 3 })
   }
   if (anyCaptured) {
     for (const sec of s.sections) {
-      if (sec.line === 'support' && !sec.captured) infTargets.push({ x: sec.mid.x, z: sec.mid.z - 3 })
+      if (sec.line === 'support' && sec.owner === 'brit' && sec.home === 'brit') {
+        infTargets.push({ x: sec.mid.x, z: sec.mid.z - 3 })
+      }
     }
   }
   // Everything taken (or nothing left to take): head for the breach line.
-  if (infTargets.length === 0 || s.sections.every((sec) => sec.line !== 'front' || sec.captured)) {
+  if (infTargets.length === 0 || s.sections.every((sec) => sec.line !== 'front' || sec.owner !== 'brit')) {
     infTargets.push({ x: -60, z: WORLD.breachZ + 6 }, { x: 0, z: WORLD.breachZ + 6 }, { x: 60, z: WORLD.breachZ + 6 })
   }
   flowInf.compute(infTargets)

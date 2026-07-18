@@ -9,9 +9,9 @@
  * identical state, hash-for-hash. All randomness flows from forks of the run
  * seed; commands apply only at tick boundaries, in (tick, side, seq) order.
  */
-import type { DefenceKindId, Difficulty, Unit, UnitKindId } from '../core/types'
+import type { DefenceKindId, Difficulty, MatchLength, Unit, UnitKindId } from '../core/types'
 import {
-  COMBAT, DIRECTOR, ECONOMY, SCORE, SIM_DT, UNIT_DEFS, WORLD, XP_PER_WAVE,
+  BIGPUSH, COMBAT, DIRECTOR, ECONOMY, SCORE, SIM_DT, UNIT_DEFS, WORLD, XP_PER_WAVE,
 } from '../core/config'
 import { forkRand, hashString, type Rand } from '../core/rng'
 import { waveName } from '../core/flavor'
@@ -53,6 +53,8 @@ export interface RunnerOpts {
   headless?: boolean
   /** Probe/balance-lab override for starting requisition (same on twin sims!). */
   startReq?: number
+  /** Big Push match length (default 'battle'). Ignored in classic. */
+  matchLen?: MatchLength
 }
 
 export class SimRunner implements CmdHost {
@@ -96,12 +98,17 @@ export class SimRunner implements CmdHost {
       endless: resume ? resume.wave > DIRECTOR.victoryWave : false,
       outcome: 'ongoing',
       buildTimer: 0,
-      req: opts.startReq ?? resume?.req ?? Math.round(ECONOMY.startReq[opts.difficulty]),
+      req: opts.startReq ?? resume?.req ?? Math.round(mode === 'bigpush' ? BIGPUSH.startReq : ECONOMY.startReq[opts.difficulty]),
       breach: resume?.breach ?? COMBAT.breachMax,
       masksOn: resume?.masksOn ?? false,
       earlyCallBonus: 0,
+      germanReq: mode === 'bigpush' ? BIGPUSH.startReq : 0,
+      strength: { brit: BIGPUSH.strengthStart, german: BIGPUSH.strengthStart },
+      matchLen: opts.matchLen ?? 'battle',
+      timeLimit: mode === 'bigpush' ? BIGPUSH.matchSeconds[opts.matchLen ?? 'battle'] : 0,
+      holdT: { brit: 0, german: 0 },
       advance: { brit: WORLD.frontTrenchZ, german: -WORLD.frontTrenchZ },
-      units: [], enemies: [], squads: [], vehicles: [], projectiles: [], bullets: [],
+      units: [], enemies: [], squads: [], assaults: [], vehicles: [], projectiles: [], bullets: [],
       clouds: [], defences: [], corpses: [],
       sections,
       fx: [], sounds: [],
@@ -154,6 +161,7 @@ export class SimRunner implements CmdHost {
           s.sections[i].parapetHp = st.parapetHp
           s.sections[i].parapetMax = st.parapetMax
           s.sections[i].captured = st.captured
+          s.sections[i].owner = st.captured ? 'german' : 'brit'
         }
       })
       this.weather.state.tod = resume.weather.tod
@@ -167,8 +175,16 @@ export class SimRunner implements CmdHost {
     rebuildFlow(this.ctx)
   }
 
-  /** Plan the first wave. Call AFTER subscribing to events. */
+  /** Start the match. Call AFTER subscribing to events. */
   begin(): void {
+    const s = this.ctx.s
+    if (s.mode === 'bigpush') {
+      // No wave machine: a stand-to ceasefire to set up, then continuous war.
+      s.phase = 'build'
+      s.buildTimer = BIGPUSH.standToSeconds
+      this.ctx.events.emit('toast', { text: 'Stand-to. The push begins in sixty seconds.', kind: 'info' })
+      return
+    }
     this.prepareNextWave()
   }
 
@@ -251,7 +267,10 @@ export class SimRunner implements CmdHost {
       o.cooldowns[k] = Math.max(0, o.cooldowns[k] - dt)
     }
 
-    if (s.phase === 'build') {
+    if (s.mode === 'bigpush') {
+      this.tickBigPush(dt)
+      if (s.outcome !== 'ongoing') { this.finishTick(); return }
+    } else if (s.phase === 'build') {
       s.buildTimer -= dt
       if (s.buildTimer <= 0) this.startAssault()
     } else if (s.phase === 'assault') {
@@ -284,7 +303,7 @@ export class SimRunner implements CmdHost {
 
     this.updateAdvance()
 
-    if (s.breach <= 0 && s.outcome === 'ongoing') this.finish(false)
+    if (s.mode === 'classic' && s.breach <= 0 && s.outcome === 'ongoing') this.finish(false)
     this.finishTick()
   }
 
@@ -402,12 +421,107 @@ export class SimRunner implements CmdHost {
     this.prepareNextWave()
   }
 
+  // -------------------------------------------------------------------------
+  // The Big Push: continuous war — drip economy, strength, the whistle
+  // -------------------------------------------------------------------------
+
+  private tickBigPush(dt: number): void {
+    const ctx = this.ctx
+    const s = ctx.s
+
+    if (s.phase === 'build') {
+      s.buildTimer -= dt
+      if (s.buildTimer <= 0) {
+        s.phase = 'assault'
+        s.waveStartTime = s.time
+        ctx.events.emit('waveStart', { wave: 1, name: 'THE BIG PUSH' })
+      }
+      return
+    }
+
+    // Creeping barrages etc. still walk (no scheduled wave shoots: plan=null).
+    updateBarrages(ctx, dt, s.time - s.waveStartTime)
+
+    // Divisional supply: a steady drip, compounded by holding the sunken lane
+    // and any enemy-home front sections. Aggression pays for itself.
+    const lane = this.laneHolder()
+    let britMul = 1, gerMul = 1
+    if (lane === 'brit') britMul += BIGPUSH.laneBonus
+    else if (lane === 'german') gerMul += BIGPUSH.laneBonus
+    let britCaps = 0, gerCaps = 0
+    for (const sec of s.sections) {
+      if (sec.line !== 'front') continue
+      if (sec.home === 'german' && sec.owner === 'brit') britCaps++
+      if (sec.home === 'brit' && sec.owner === 'german') gerCaps++
+    }
+    britMul += britCaps * BIGPUSH.capturedSectionBonus
+    gerMul += gerCaps * BIGPUSH.capturedSectionBonus
+    const oldReq = Math.floor(s.req)
+    s.req += BIGPUSH.dripPerSecond * britMul * dt
+    s.germanReq += BIGPUSH.dripPerSecond * gerMul * dt
+    if (Math.floor(s.req) !== oldReq) ctx.events.emit('reqChanged', { req: Math.floor(s.req) })
+
+    // Strength break ends it outright.
+    if (s.strength.brit <= 0 || s.strength.german <= 0) {
+      if (s.strength.brit <= 0 && s.strength.german <= 0) this.finishDraw()
+      else this.finish(s.strength.german <= 0)
+      return
+    }
+
+    // Attrition (and any length): hold a MAJORITY of the enemy's front-line
+    // sections for a continuous minute and their position is untenable.
+    const gerFrontTotal = s.sections.filter((c) => c.line === 'front' && c.home === 'german').length
+    const britFrontTotal = s.sections.filter((c) => c.line === 'front' && c.home === 'brit').length
+    if (gerFrontTotal > 0 && britCaps > gerFrontTotal / 2) s.holdT.brit += dt
+    else s.holdT.brit = 0
+    if (britFrontTotal > 0 && gerCaps > britFrontTotal / 2) s.holdT.german += dt
+    else s.holdT.german = 0
+    if (s.holdT.brit >= BIGPUSH.holdWinSeconds || s.holdT.german >= BIGPUSH.holdWinSeconds) {
+      if (s.holdT.brit >= BIGPUSH.holdWinSeconds && s.holdT.german >= BIGPUSH.holdWinSeconds) this.finishDraw()
+      else this.finish(s.holdT.brit >= BIGPUSH.holdWinSeconds)
+      return
+    }
+
+    // The final whistle (timed matches): enemy front sections held, tie
+    // broken by remaining battalion strength.
+    if (s.timeLimit > 0 && s.time - s.waveStartTime >= s.timeLimit) {
+      if (britCaps !== gerCaps) this.finish(britCaps > gerCaps)
+      else if (s.strength.brit !== s.strength.german) this.finish(s.strength.brit > s.strength.german)
+      else this.finishDraw()
+    }
+  }
+
+  /** Which side, if either, holds the sunken lane (living presence majority). */
+  private laneHolder(): 'brit' | 'german' | null {
+    const s = this.ctx.s
+    let brit = 0, german = 0
+    for (const u of s.units) {
+      if (u.disbanded) continue
+      for (const c of u.crew) {
+        if (c.hp > 0 && Math.abs(c.pos.z) < BIGPUSH.laneHalfWidth) brit++
+      }
+    }
+    for (const e of s.enemies) {
+      if (e.hp > 0 && e.behavior !== 'rout' && Math.abs(e.pos.z) < BIGPUSH.laneHalfWidth) german++
+    }
+    if (brit > german && brit > 0) return 'brit'
+    if (german > brit && german > 0) return 'german'
+    return null
+  }
+
+  private finishDraw(): void {
+    const s = this.ctx.s
+    s.phase = 'debrief'
+    s.outcome = 'draw'
+    this.ctx.events.emit('gameOver', { victory: false, draw: true })
+  }
+
   private finish(victory: boolean): void {
     const s = this.ctx.s
     s.phase = 'debrief'
     s.outcome = victory ? 'victory' : 'defeat'
     let score = s.stats.kills * SCORE.perKill + (s.wave - 1) * SCORE.perWave + Math.round(s.req * SCORE.perReqRemaining)
-    for (const sec of s.sections) if (!sec.captured) score += SCORE.perSectionHeld
+    for (const sec of s.sections) if (sec.owner === 'brit') score += SCORE.perSectionHeld
     s.stats.score = score
     this.ctx.events.emit('gameOver', { victory })
   }

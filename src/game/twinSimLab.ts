@@ -23,6 +23,8 @@ export interface TwinProbeOpts {
   waves?: number
   difficulty?: Difficulty
   mode?: 'classic' | 'bigpush'
+  /** Big Push runs are time-bound (sim seconds) rather than wave-bound. */
+  simSeconds?: number
   startReq?: number
   onProgress?: (line: string) => void
 }
@@ -53,9 +55,59 @@ class ProbeCommander {
   private boughtWave = 0
   private slot = 0
 
+  private bpShopped = false
+  private bpAssaulted = false
+  private bpRecalled = false
+
   think(s: SimState): Cmd[] {
     const cmds: Cmd[] = []
     if (s.outcome !== 'ongoing') return cmds
+
+    // Big Push: no wave machine — buy during stand-to, send one big assault
+    // once the columns have formed, recall it later. All state-derived.
+    if (s.mode === 'bigpush') {
+      if (!this.bpShopped && s.tick >= 30) {
+        this.bpShopped = true
+        const xs = [-16, -8, 0, 8, 16, 24]
+        for (const x of xs) cmds.push({ t: 'buy', kind: 'rifleman', x, z: WORLD.frontTrenchZ })
+        cmds.push({ t: 'buy', kind: 'engineer', x: -24, z: WORLD.frontTrenchZ })
+        cmds.push({ t: 'buy', kind: 'lewis', x: 32, z: WORLD.frontTrenchZ })
+        return cmds
+      }
+      if (!this.bpAssaulted && s.time > 150) {
+        // Own front sections that actually have men on them.
+        const mine = new Set<number>()
+        for (const u of s.units) {
+          if (u.disbanded || u.march || !u.crew.some((c) => c.hp > 0)) continue
+          let best = -1, bestD = 100
+          for (const sec of s.sections) {
+            if (sec.home !== 'brit' || sec.line !== 'front') continue
+            const d = Math.hypot(sec.mid.x - u.pos.x, sec.mid.z - u.pos.z)
+            if (d < bestD) { bestD = d; best = sec.id }
+          }
+          if (best >= 0) mine.add(best)
+        }
+        if (mine.size > 0) {
+          this.bpAssaulted = true
+          // Nearest german-owned front section to x=0.
+          let target = -1, bestAbs = Infinity
+          for (const sec of s.sections) {
+            if (sec.home !== 'german' || sec.line !== 'front' || sec.owner !== 'german') continue
+            if (Math.abs(sec.mid.x) < bestAbs) { bestAbs = Math.abs(sec.mid.x); target = sec.id }
+          }
+          if (target >= 0) cmds.push({ t: 'assault', sections: [...mine].sort((a, b) => a - b), targetSection: target })
+        }
+        return cmds
+      }
+      if (!this.bpRecalled && s.time > 420) {
+        this.bpRecalled = true
+        for (const g of s.assaults) {
+          if (g.side === 'brit' && g.state === 'advancing') cmds.push({ t: 'recall', groupId: g.id })
+        }
+        return cmds
+      }
+      return cmds
+    }
 
     if (s.phase === 'debrief' && s.plan && this.beganWave < s.wave) {
       this.beganWave = s.wave
@@ -144,9 +196,11 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
   let lastWaveSeen = 0
   const MAX_TICKS = 30 * 60 * 120 // 2 sim-hours hard stop
 
+  const bpSeconds = opts.simSeconds ?? 480
   while (a.ctx.s.tick < MAX_TICKS) {
     const s = a.ctx.s
-    if (s.outcome !== 'ongoing' || s.wave > waves) break
+    if (s.outcome !== 'ongoing') break
+    if (s.mode === 'bigpush' ? s.time >= bpSeconds : s.wave > waves) break
     if (s.wave !== lastWaveSeen) {
       lastWaveSeen = s.wave
       say(`wave ${s.wave} — tick ${s.tick}, req £${s.req}, hash ${(hashSim(s) >>> 0).toString(16)}`)
@@ -213,6 +267,131 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
 }
 
 // ---------------------------------------------------------------------------
+// M3 gate probes
+// ---------------------------------------------------------------------------
+
+/**
+ * Scripted assault probe (spec §5 M3 gate): buy a storming party, send it
+ * over the top at a garrisoned line, and assert every stage of the drill —
+ * the advance crosses no-man's-land, wire gets cut, melee kills land, the
+ * section flips, consolidation reverses the bench, recall brings them home.
+ */
+export async function runAssaultProbe(opts: { seed?: string; onProgress?: (l: string) => void } = {}): Promise<Record<string, unknown>> {
+  const say = opts.onProgress ?? (() => {})
+  const r = new SimRunner({ seedStr: opts.seed ?? 'm3-assault', difficulty: 'front', mode: 'bigpush', headless: true, startReq: 900 })
+  r.begin()
+  const s = r.ctx.s
+
+  // Garrison the objective line so there is a fight: spawn german defenders
+  // at their front sections (director-style, via the real squad spawner).
+  const { makeSquad } = await import('../sim/enemies')
+  const gerFront = s.sections.filter((c) => c.home === 'german' && c.line === 'front' && Math.abs(c.mid.x) < 40)
+  for (const sec of gerFront.slice(0, 3)) {
+    const sq = makeSquad(r.ctx, ['einf', 'einf', 'einf'], sec.mid.x, sec.id)
+    // Walk them onto their parapet line (they spawn at the north edge).
+    for (const id of sq.members) {
+      const e = s.enemies.find((x) => x.id === id)
+      if (e) { e.pos.x = sec.mid.x + (r.ctx.rand() - 0.5) * 6; e.pos.z = sec.mid.z; e.behavior = 'takecover' }
+    }
+  }
+  const defenders0 = s.enemies.filter((e) => e.hp > 0).length
+  const wire0 = s.defences.filter((d) => d.kind === 'wire' && d.side === 'german' && d.hp > 0).length
+
+  const bot = new ProbeCommander()
+  let seq = 0
+  const out: Record<string, unknown> = {}
+  let captureTick = 0
+  let consolidatedTick = 0
+  let minZ = 999
+  let targetSec = -1
+
+  const MAX = 30 * 60 * 22 // 22 sim-minutes cap
+  for (let i = 0; i < MAX; i++) {
+    const cmds = bot.think(s)
+    if (cmds.length > 0) r.enqueue({ tick: s.tick, side: 'brit', seq: seq++, cmds })
+    r.step()
+    if (s.tick % 1800 === 0) { say(`t=${Math.round(s.time)}s adv=${s.advance.brit.toFixed(0)} enemies=${s.enemies.filter(e => e.hp > 0).length} assaults=${s.assaults.length}`); await nextTick() }
+    if (s.advance.brit < minZ) minZ = s.advance.brit
+    if (targetSec < 0 && s.assaults.length > 0) targetSec = s.assaults[0].targetSectionId
+    if (!captureTick && targetSec >= 0) {
+      const t = s.sections.find((c) => c.id === targetSec)
+      if (t && t.owner === 'brit') {
+        captureTick = s.tick
+        // Order consolidation the moment it falls.
+        r.enqueue({ tick: s.tick, side: 'brit', seq: seq++, cmds: [{ t: 'consolidate', section: targetSec }] })
+      }
+    }
+    if (captureTick && !consolidatedTick) {
+      const t = s.sections.find((c) => c.id === targetSec)
+      if (t && t.facing === 1) consolidatedTick = s.tick
+    }
+    // After consolidation the bot's own recall (t>420) or ours here wraps up.
+    if (consolidatedTick && s.assaults.length === 0) break
+    if (s.outcome !== 'ongoing') break
+  }
+
+  const t = s.sections.find((c) => c.id === targetSec)
+  out.assaultLaunched = targetSec >= 0
+  out.crossedNml = minZ < 0
+  out.wireCut = s.defences.filter((d) => d.kind === 'wire' && d.side === 'german' && d.hp > 0).length < wire0
+  out.meleeKills = defenders0 - s.enemies.filter((e) => e.hp > 0).length
+  out.captured = captureTick > 0
+  out.consolidated = consolidatedTick > 0
+  out.benchReversedFacing = t ? t.facing : null
+  out.allRecalledHome = s.assaults.length === 0 && s.units.every((u) => u.assaultGroupId === null)
+  out.simSeconds = Math.round(s.time)
+  out.ok = Boolean(out.assaultLaunched && out.crossedNml && out.wireCut && (out.meleeKills as number) > 0 && out.captured && out.consolidated && out.allRecalledHome)
+  return out
+}
+
+/** Verdict probe: every timed length must end, with the right verdict. */
+export async function runVerdictProbe(opts: { onProgress?: (l: string) => void } = {}): Promise<Record<string, unknown>> {
+  const say = opts.onProgress ?? (() => {})
+  const results: Record<string, unknown> = {}
+  for (const len of ['raid', 'battle', 'grand'] as const) {
+    const r = new SimRunner({ seedStr: 'verdict-' + len, difficulty: 'front', mode: 'bigpush', matchLen: len, headless: true })
+    r.begin()
+    const s = r.ctx.s
+    // Tip the scales so the verdict is determinate: bleed german strength.
+    s.strength.german = 40
+    const cap = 30 * (s.timeLimit + 120)
+    let i = 0
+    for (; i < cap && s.outcome === 'ongoing'; i++) r.step()
+    // Whistle time = stand-to + limit.
+    const expected = 60 + s.timeLimit
+    results[len] = {
+      outcome: s.outcome,
+      endedAtSimSeconds: Math.round(s.time),
+      expectedWhistle: expected,
+      ok: s.outcome === 'victory' && Math.abs(s.time - expected) < 2,
+    }
+    say(`${len}: ${JSON.stringify(results[len])}`)
+    await nextTick()
+  }
+  // Attrition: no clock — flip a majority of the german front to brit and the
+  // hold timer must end it inside ~holdWinSeconds.
+  {
+    const r = new SimRunner({ seedStr: 'verdict-attrition', difficulty: 'front', mode: 'bigpush', matchLen: 'attrition', headless: true })
+    r.begin()
+    const s = r.ctx.s
+    for (let i = 0; i < 30 * 61; i++) r.step() // through stand-to
+    for (const sec of s.sections) {
+      if (sec.home === 'german' && sec.line === 'front') { sec.owner = 'brit'; sec.captured = true }
+    }
+    let i = 0
+    for (; i < 30 * 90 && s.outcome === 'ongoing'; i++) r.step()
+    results.attrition = {
+      outcome: s.outcome,
+      heldSeconds: Math.round(i / 30),
+      ok: s.outcome === 'victory' && i / 30 < 75,
+    }
+    say(`attrition: ${JSON.stringify(results.attrition)}`)
+  }
+  results.ok = (['raid', 'battle', 'grand', 'attrition'] as const).every((k) => (results[k] as { ok: boolean }).ok)
+  return results
+}
+
+// ---------------------------------------------------------------------------
 // Page harness
 // ---------------------------------------------------------------------------
 
@@ -232,6 +411,8 @@ export function startTwinSimLab(app: HTMLElement): void {
 
   const api = {
     run: (o: TwinProbeOpts = {}) => runTwinProbe({ onProgress: say, ...o }),
+    assault: (o: { seed?: string } = {}) => runAssaultProbe({ onProgress: say, ...o }),
+    verdicts: () => runVerdictProbe({ onProgress: say }),
   }
   ;(window as unknown as { __twinsim: typeof api }).__twinsim = api
 

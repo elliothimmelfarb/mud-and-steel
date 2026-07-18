@@ -71,7 +71,7 @@ export interface RunSave {
   upgrades: string[]
   units: SavedUnit[]
   defences: SavedDefence[]
-  craterOps: Array<{ x: number; z: number; r: number; d: number; p?: 1 }>
+  craterOps: Array<{ x: number; z: number; r: number; d: number; p?: 1 | 2 }>
   sectionState: Array<{ parapetHp: number; parapetMax: number; captured: boolean }>
   weather: { tod: number; wetness: number }
   stats: RunStats

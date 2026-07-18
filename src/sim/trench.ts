@@ -2,7 +2,7 @@
  * The trench network as a game system: sections with parapet integrity,
  * fighting-post projection, capture/recapture, and sapper repairs.
  */
-import type { TrenchSection, Vec2 } from '../core/types'
+import type { Team, TrenchSection, Vec2 } from '../core/types'
 import { COMBAT, TRENCH } from '../core/config'
 import type { Terrain } from '../world/terrain'
 import { dist2, type Ctx } from './sim'
@@ -11,7 +11,8 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
   const sections: TrenchSection[] = []
   let sectionId = 0
 
-  const addLine = (line: Vec2[], kind: 'front' | 'support', facing: 1 | -1 = 1) => {
+  const addLine = (line: Vec2[], kind: 'front' | 'support', home: Team = 'brit') => {
+    const facing: 1 | -1 = home === 'brit' ? 1 : -1
     for (let i = 0; i < line.length - 1; i++) {
       const a = line[i], b = line[i + 1]
       // Fighting sections live on the fire BAYS only — the long x-running
@@ -21,15 +22,20 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
       if (Math.abs(b.x - a.x) < 8 || Math.abs(b.x - a.x) <= 2 * Math.abs(b.z - a.z)) continue
       const mid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }
       sections.push({
-        id: sectionId++, line: kind, facing, a, b, mid,
+        id: sectionId++, line: kind, facing, home, owner: home, a, b, mid,
         parapetHp: TRENCH.parapetHp * parapetMult,
         parapetMax: TRENCH.parapetHp * parapetMult,
-        captured: false, captureT: 0,
+        captured: false, captureT: 0, consolidating: false, consolidateT: 0,
       })
     }
   }
   addLine(terrain.frontLine, 'front')
   addLine(terrain.supportLine, 'support')
+  // Big Push: the German system fights too — their sections capture the same way.
+  if (terrain.layout === 'bigpush') {
+    addLine(terrain.germanLine, 'front', 'german')
+    addLine(terrain.germanSupportLine, 'support', 'german')
+  }
   return sections
 }
 
@@ -68,6 +74,11 @@ export function projectToFireStep(
   return best
 }
 
+export function sectionById(s: { sections: TrenchSection[] }, id: number): TrenchSection | null {
+  for (const sec of s.sections) if (sec.id === id) return sec
+  return null
+}
+
 export function sectionAt(sections: TrenchSection[], x: number, z: number): TrenchSection | null {
   let best: TrenchSection | null = null
   let bestD = (TRENCH.sectionLen * 0.75) ** 2
@@ -91,48 +102,54 @@ export function damageParapet(ctx: Ctx, x: number, z: number, amount: number): v
   sec.parapetHp = Math.max(0, sec.parapetHp - amount)
 }
 
+/**
+ * Symmetric capture: EITHER side takes a section by having sole living
+ * presence at it long enough. Taking ground away from its digger runs at the
+ * full capture time; winning your own ground back runs faster (0.7×), exactly
+ * as the classic retake always did. Events keep the classic brit-perspective
+ * pair for brit-home sections; german-home flips get their own event.
+ */
 export function updateCapture(ctx: Ctx, dt: number): void {
   const { s } = ctx
   for (const sec of s.sections) {
-    // Defenders near the section?
-    let defenders = 0
+    // Living presence per side near the section.
+    let brit = 0
     for (const u of s.units) {
       if (u.disbanded || u.fallenBack) continue
       for (const c of u.crew) {
-        if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 8 * 8) defenders++
+        if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 8 * 8) brit++
       }
     }
-    // Attackers in the trench itself?
-    let attackers = 0
+    let german = 0
     for (const e of s.enemies) {
       if (e.hp <= 0 || e.behavior === 'rout') continue
-      if (dist2(e.pos.x, e.pos.z, sec.mid.x, sec.mid.z) < 7 * 7) attackers++
+      if (dist2(e.pos.x, e.pos.z, sec.mid.x, sec.mid.z) < 7 * 7) german++
     }
+    const attackers = sec.owner === 'brit' ? german : brit
+    const holders = sec.owner === 'brit' ? brit : german
 
-    if (!sec.captured) {
-      if (attackers > 0 && defenders === 0) {
-        sec.captureT += dt / COMBAT.captureSeconds
-        if (sec.captureT >= 1) {
-          sec.captured = true
-          sec.captureT = 1
-          s.stats.sectionsLost++
-          ctx.events.emit('sectionLost', { sectionId: sec.id })
-          ctx.flowDirty = true
+    if (attackers > 0 && holders === 0) {
+      const taker: Team = sec.owner === 'brit' ? 'german' : 'brit'
+      const seconds = taker === sec.home ? COMBAT.captureSeconds * 0.7 : COMBAT.captureSeconds
+      sec.captureT += dt / seconds
+      if (sec.captureT >= 1) {
+        sec.owner = taker
+        sec.captured = sec.owner !== sec.home
+        sec.captureT = 0
+        ctx.flowDirty = true
+        if (sec.home === 'brit') {
+          if (taker === 'german') {
+            s.stats.sectionsLost++
+            ctx.events.emit('sectionLost', { sectionId: sec.id })
+          } else {
+            ctx.events.emit('sectionRetaken', { sectionId: sec.id })
+          }
+        } else {
+          ctx.events.emit('sectionCaptured', { sectionId: sec.id, by: taker })
         }
-      } else {
-        sec.captureT = Math.max(0, sec.captureT - dt / COMBAT.captureSeconds)
       }
     } else {
-      // Retaking: any brit presence with no live attackers flips it back.
-      if (defenders > 0 && attackers === 0) {
-        sec.captureT -= dt / (COMBAT.captureSeconds * 0.7)
-        if (sec.captureT <= 0) {
-          sec.captured = false
-          sec.captureT = 0
-          ctx.events.emit('sectionRetaken', { sectionId: sec.id })
-          ctx.flowDirty = true
-        }
-      }
+      sec.captureT = Math.max(0, sec.captureT - dt / COMBAT.captureSeconds)
     }
   }
 }

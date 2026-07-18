@@ -289,7 +289,7 @@ function updateEnemy(ctx: Ctx, e: Enemy, dt: number, officerNear: boolean, leade
 
       // Close enough to fight into the trench?
       const sec = sectionAt(s.sections, e.pos.x, e.pos.z)
-      if (sec && !sec.captured && ctx.terrain.trenchAt(e.pos.x, e.pos.z) > 0.3) {
+      if (sec && sec.owner === 'brit' && ctx.terrain.trenchAt(e.pos.x, e.pos.z) > 0.3) {
         e.behavior = 'melee'
         snd(s, { name: 'melee', x: e.pos.x, y: 1, z: e.pos.z })
         return
@@ -451,7 +451,7 @@ function highValueBrit(ctx: Ctx, x: number, z: number, range: number): Soldier |
 
 function nearestDefence(ctx: Ctx, x: number, z: number, kind: 'wire' | 'mine', radius: number) {
   for (const d of ctx.s.defences) {
-    if (d.kind !== kind || d.hp <= 0) continue
+    if (d.kind !== kind || d.hp <= 0 || d.side !== 'brit') continue // your own wire is a lane, not a snare
     if (dist2(d.pos.x, d.pos.z, x, z) < radius * radius) return d
   }
   return null

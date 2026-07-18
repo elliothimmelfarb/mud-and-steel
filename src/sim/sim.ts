@@ -4,9 +4,9 @@
  * brute-force queries cheap at 30 Hz and the code honest.
  */
 import type {
-  ActiveBarrage, Bullet, CasualtyRecord, CreepingBarrage, Defence, Difficulty, DirectorMemory, Enemy,
+  ActiveBarrage, AssaultGroup, Bullet, CasualtyRecord, CreepingBarrage, Defence, Difficulty, DirectorMemory, Enemy,
   FpsFeedbackEvent, FxEvent, GamePhase, GasCloud, MatchOutcome,
-  Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection,
+  MatchLength, Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection,
   Unit, Vehicle, WavePlan,
 } from '../core/types'
 import type { EventBus } from '../core/events'
@@ -52,6 +52,16 @@ export interface SimState {
   masksOn: boolean
   /** Requisition banked by calling the wave early; paid out at wave end. */
   earlyCallBonus: number
+  /** Big Push: the German commander's purse (the AI spends it from M4). */
+  germanReq: number
+  /** Big Push battalion strength per side — a loss condition AND the clock. */
+  strength: { brit: number; german: number }
+  /** Big Push match setup: length id and the whistle (sim seconds; 0 = untimed). */
+  matchLen: MatchLength
+  timeLimit: number
+  /** Attrition: continuous seconds each side has held a majority of the
+   *  ENEMY's front-line sections. */
+  holdT: { brit: number; german: number }
   /**
    * Farthest-forward living soldier per side along the advance axis
    * (brit advances toward -z so this is a min; german a max). Floors at each
@@ -62,6 +72,8 @@ export interface SimState {
   units: Unit[]
   enemies: Enemy[]
   squads: Squad[]
+  /** Big Push assault groups (either side). */
+  assaults: AssaultGroup[]
   vehicles: Vehicle[]
   projectiles: Projectile[]
   /** In-flight small-arms rounds, physically integrated each tick. */

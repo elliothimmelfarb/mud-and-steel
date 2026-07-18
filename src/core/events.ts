@@ -12,6 +12,8 @@ export interface GameEvents {
   upgradeBought: { id: string; side: Team }
   sectionLost: { sectionId: number }
   sectionRetaken: { sectionId: number }
+  /** A GERMAN-home section changed hands (Big Push). */
+  sectionCaptured: { sectionId: number; by: Team }
   unitPlaced: { unitId: number }
   unitLost: { unitId: number; kind: string }
   soldierDied: { name: string; rank: string; kind: string; wave: number; deeds: number; wavesServed: number }
@@ -21,7 +23,7 @@ export interface GameEvents {
   promoted: { unitId: number; vet: number }
   deed: { unitId: number; deed: string; cite: string }
   reqChanged: { req: number }
-  gameOver: { victory: boolean }
+  gameOver: { victory: boolean; draw?: boolean }
   toast: { text: string; kind: 'info' | 'warn' | 'danger' | 'good' }
 }
 

@@ -99,6 +99,27 @@ export interface Unit {
    * up (or always, in classic mode where crews appear at their post).
    */
   march: { path: Vec2[]; idx: number[] } | null
+  /** Big Push: the assault group this unit is committed to (null = holding). */
+  assaultGroupId: number | null
+  /** Which bounding element of its group this unit belongs to. */
+  assaultElement: 0 | 1
+  /** Covering-fire focus: prioritise hostiles near this section (timed). */
+  coverSectionId: number | null
+  coverT: number
+}
+
+/**
+ * Big Push: a body of units ordered over the top at one enemy section.
+ * Groups bound by alternating elements; recall sends everyone home.
+ */
+export interface AssaultGroup {
+  id: number
+  side: Team
+  unitIds: number[]
+  targetSectionId: number
+  state: 'advancing' | 'recalled'
+  moveElement: 0 | 1
+  boundT: number
 }
 
 export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
@@ -106,6 +127,8 @@ export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
 export interface Defence {
   id: number
   kind: DefenceKindId
+  /** Whose works these are — wire only snags the OTHER side's infantry. */
+  side: Team
   pos: Vec2
   /** Wire/sandbags degrade; mines are hp=1 until triggered. */
   hp: number
@@ -229,7 +252,10 @@ export interface CreepingBarrage {
 }
 
 /** Terminal state of a run/match; sim stops advancing phase once decided. */
-export type MatchOutcome = 'ongoing' | 'victory' | 'defeat'
+export type MatchOutcome = 'ongoing' | 'victory' | 'defeat' | 'draw'
+
+/** Big Push match length, chosen at match creation (spec section 3). */
+export type MatchLength = 'raid' | 'battle' | 'grand' | 'attrition'
 
 // ---------------------------------------------------------------------------
 // Ordnance / hazards
@@ -334,9 +360,14 @@ export interface TrenchSection {
   /**
    * Which way this section fights: +1 = British (enemy toward -z),
    * -1 = German (enemy toward +z). Decides the fire-step side for
-   * projection, dressing and (Big Push) captured-trench cover.
+   * projection, dressing and (Big Push) captured-trench cover. Flipped by
+   * consolidation after a capture.
    */
   facing: 1 | -1
+  /** Who dug it. Fixed for the match. */
+  home: Team
+  /** Who holds it now. `captured` is always `owner !== home`. */
+  owner: Team
   a: Vec2
   b: Vec2
   mid: Vec2
@@ -346,6 +377,10 @@ export interface TrenchSection {
   captured: boolean
   /** Progress 0..1 of an enemy capture in progress. */
   captureT: number
+  /** Big Push: consolidation ordered (reversing the fire step). */
+  consolidating: boolean
+  /** Progress 0..1 of the consolidation work. */
+  consolidateT: number
 }
 
 // ---------------------------------------------------------------------------

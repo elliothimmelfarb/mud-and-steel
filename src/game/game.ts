@@ -314,7 +314,7 @@ export class Game {
     const idx: number[] = []
     const HALF = 0.55
     for (const sec of this.ctx.s.sections) {
-      if (sec.captured) continue
+      if (sec.owner !== 'brit') continue
       const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
       const segLen = Math.hypot(abx, abz) || 1
       let nx = -abz / segLen, nz = abx / segLen
@@ -781,7 +781,7 @@ export class Game {
 
     if (id === 'sandbags') {
       const sec = sectionAt(s.sections, x, z)
-      if (sec && !sec.captured) {
+      if (sec && sec.owner === 'brit' && sec.home === 'brit') {
         gx = sec.mid.x; gz = sec.mid.z
         valid = !s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)
       }
@@ -838,6 +838,34 @@ export class Game {
 
   selectAt(x: number, z: number): void {
     const s = this.ctx.s
+    // Big Push: clicks on trench sections drive the assault orders.
+    if (s.mode === 'bigpush') {
+      const sec = sectionAt(s.sections, x, z)
+      if (sec) {
+        if (sec.owner === 'brit' && sec.home === 'brit' && sec.line === 'front') {
+          // Toggle this stretch into the selection.
+          const i = this.selectedSections.indexOf(sec.id)
+          if (i >= 0) this.selectedSections.splice(i, 1)
+          else if (this.selectedSections.length < 6) this.selectedSections.push(sec.id)
+          this.audio.play('ui_click', { gain: 0.5 })
+          if (!this.assaultHintShown && this.selectedSections.length > 0) {
+            this.assaultHintShown = true
+            this.hud?.toast('Sections selected. Click an ENEMY section to send them over the top. B recalls.', 'info')
+          }
+          return
+        }
+        if (sec.owner === 'german' && this.selectedSections.length > 0) {
+          this.submit([{ t: 'assault', sections: [...this.selectedSections], targetSection: sec.id }])
+          this.selectedSections = []
+          return
+        }
+        if (sec.owner === 'brit' && sec.home === 'german' && sec.facing !== 1) {
+          this.submit([{ t: 'consolidate', section: sec.id }])
+          this.hud?.toast('Consolidating — reversing the fire step. Keep men on it.', 'info')
+          return
+        }
+      }
+    }
     let best = -1, bestD = 5 * 5
     for (const u of s.units) {
       if (u.disbanded) continue
@@ -983,12 +1011,17 @@ export class Game {
       } else if (button === 2 && !this.input.pointer.dragging) {
         this.setBuildSelection(null)
         this.selectedUnitId = -1
+        this.selectedSections = []
       }
     }
   }
 
   private lastSelClick = { t: 0, id: -1 }
   private embodyHintShown = false
+  /** Big Push: your selected front sections (the stretch going over the top). */
+  selectedSections: number[] = []
+  private assaultHintShown = false
+  private selRings: THREE.Mesh[] = []
 
   /** Step into the boots of the selected unit's senior surviving man. */
   possessSelected(): void {
@@ -1065,6 +1098,39 @@ export class Game {
     mesh.position.set(x, this.terrain.heightAt(x, z) + 0.3, z)
     this.renderer.scene.add(mesh)
     this.warnRings.push({ mesh, t: seconds })
+  }
+
+  /** Big Push: sound the recall for every group still out. */
+  recallAllAssaults(): void {
+    const cmds: Cmd[] = this.ctx.s.assaults
+      .filter((g) => g.side === 'brit' && g.state === 'advancing')
+      .map((g) => ({ t: 'recall', groupId: g.id }))
+    if (cmds.length === 0) return
+    this.submit(cmds)
+    this.hud?.toast('Recall! Fall back to the line!', 'warn')
+  }
+
+  /** Brass pulse rings over the selected front sections. */
+  private syncSelectionRings(): void {
+    const wanted = this.selectedSections
+    while (this.selRings.length < wanted.length) {
+      const geo = new THREE.TorusGeometry(7, 0.3, 6, 28)
+      geo.rotateX(Math.PI / 2)
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0xc9b070, transparent: true, opacity: 0.5, depthWrite: false,
+      }))
+      this.renderer.scene.add(mesh)
+      this.selRings.push(mesh)
+    }
+    for (let i = 0; i < this.selRings.length; i++) {
+      const ring = this.selRings[i]
+      if (i >= wanted.length) { ring.visible = false; continue }
+      const sec = this.ctx.s.sections.find((x) => x.id === wanted[i])
+      if (!sec) { ring.visible = false; continue }
+      ring.visible = true
+      ring.position.set(sec.mid.x, this.terrain.heightAt(sec.mid.x, sec.mid.z) + 0.4, sec.mid.z)
+      ;(ring.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.abs(Math.sin(this.ctx.s.time * 4)) * 0.3
+    }
   }
 
   applySettings(st: GameSettings): void {
@@ -1161,6 +1227,7 @@ export class Game {
     if (input.consume('speedUp')) this.speed = this.speed === 0.5 ? 1 : this.speed === 1 ? 2 : 4
     if (input.consume('cancel')) {
       if (this.buildSelection) this.setBuildSelection(null)
+      else if (this.selectedSections.length > 0) this.selectedSections = []
       else if (this.selectedUnitId >= 0) this.selectedUnitId = -1
       else if (!this.hud?.hasOverlay()) this.hud?.openPause()
     }
@@ -1174,7 +1241,10 @@ export class Game {
     // Orders.
     if (input.consume('orderCover')) this.issueOrder('takecover')
     if (input.consume('orderRapid')) this.issueOrder('rapidfire')
-    if (input.consume('orderBayonets')) this.issueOrder('bayonets')
+    if (input.consume('orderBayonets')) {
+      if (this.ctx.s.mode === 'bigpush') this.recallAllAssaults()
+      else this.issueOrder('bayonets')
+    }
     if (input.consume('orderMasks')) this.issueOrder('masks')
     if (input.consume('orderFlare')) this.issueOrder('flare')
     if (input.consume('orderBarrage')) this.issueOrder('barrage')
@@ -1267,7 +1337,7 @@ export class Game {
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
         pose.stance = c.stance
-        pose.moveAmount = u.fallenBack || charging || u.march !== null ? 1 : 0
+        pose.moveAmount = u.fallenBack || charging || u.march !== null || u.assaultGroupId !== null ? 1 : 0
         pose.animPhase = c.animPhase
         pose.aiming = s.phase === 'assault' && !u.fallenBack && u.march === null
         pose.recoil = Math.max(0, 1 - c.cooldown * 4)
@@ -1407,6 +1477,8 @@ export class Game {
       this.sky.flarePool[flareIdx].visible = false
       if (this.flareSprites[flareIdx]) this.flareSprites[flareIdx].visible = false
     }
+
+    if (s.mode === 'bigpush') this.syncSelectionRings()
 
     // Warning rings pulse and expire.
     for (let i = this.warnRings.length - 1; i >= 0; i--) {
