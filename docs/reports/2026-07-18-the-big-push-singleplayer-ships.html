@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — The Big Push Ships: Singleplayer Live · 18 Jul 1916 (2026)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:920px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.3rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:66ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .lede a{color:var(--brass)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:.55rem 1rem;text-align:center;min-width:7.5rem}
+  .tally b{display:block;font-size:1.5rem;color:var(--brass)}
+  .tally span{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.enemy{border-left-color:var(--blood)}
+  section.item.works{border-left-color:var(--steel)}
+  section.item.live{border-left-color:var(--wire)}
+  .kicker{font-size:.66rem;letter-spacing:.32em;text-transform:uppercase;color:var(--khaki);margin-bottom:.25rem}
+  h2{font-size:1.28rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.55rem}
+  .item p{margin:.5rem 0;color:var(--ink-soft)}
+  .item p strong{color:var(--ink)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem;color:var(--ink-soft)}
+  li strong{color:var(--ink)}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.83em;background:color-mix(in srgb, var(--rule) 26%, transparent);padding:.06em .32em;border-radius:3px}
+  table{width:100%;border-collapse:collapse;font-size:.9rem;margin:.7rem 0}
+  th{font-variant:small-caps;letter-spacing:.06em;text-align:left;color:var(--khaki);border-bottom:2px solid var(--rule);padding:.4rem .5rem;font-size:.82rem}
+  td{border-bottom:1px solid color-mix(in srgb, var(--rule) 55%, transparent);padding:.45rem .5rem;vertical-align:top;color:var(--ink-soft)}
+  td strong{color:var(--ink)}
+  tr:last-child td{border-bottom:none}
+  a{color:var(--brass)}
+  .verdict{border:2px solid var(--brass);border-radius:6px;padding:1.2rem 1.5rem;margin:1.6rem 0;background:color-mix(in srgb, var(--brass) 7%, transparent)}
+  .verdict h2{color:var(--brass)}
+  footer{text-align:center;margin-top:2.6rem;color:var(--khaki);font-size:.8rem;letter-spacing:.15em;text-transform:uppercase}
+  footer .sig{font-family:'Snell Roundhand','Segoe Script',cursive;font-size:1.5rem;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-top:.4rem}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="crest">Despatch · Battalion Workshops</div>
+  <h1>The Big Push Ships</h1>
+  <div class="sub">Two armies, one field — singleplayer live at <a href="https://mud-and-steel.vercel.app">mud-and-steel.vercel.app</a> · 18 July 1916</div>
+  <div class="stamp">Ship Gate M4</div>
+</header>
+
+<p class="lede">Five milestones of the <strong>Big Push</strong> plan (issues #33/#38, spec in <code>docs/specs/</code>) landed in one push: the command spine, the mirrored battlefield, marching reinforcements, over-the-top assaults, and a German AI commander — merged as PRs <strong>#42, #44, #46, #48, #50</strong> and deployed. The title screen now carries a second campaign: <strong>THE BIG PUSH</strong>.</p>
+
+<div class="tally">
+  <div><b>5</b><span>PRs merged</span></div>
+  <div><b>50</b><span>AI matches, 0 stalls</span></div>
+  <div><b>5,288</b><span>hash checks, 0 diverge</span></div>
+  <div><b>3</b><span>opposing commanders</span></div>
+  <div><b>4</b><span>match lengths</span></div>
+</div>
+
+<section class="item live">
+  <div class="kicker">What you can play tonight</div>
+  <h2>Title screen → The Big Push → pick your war</h2>
+  <ul>
+    <li><strong>Raid (10′) · Battle (20′) · Grand Assault (35′) · Attrition</strong> — timed matches end at the whistle: enemy front sections held, tie broken by remaining battalion strength. Holding a majority of the enemy's front for a full minute ends it early, any length.</li>
+    <li><strong>Three opposing commanders:</strong> Gen. von Halten keeps 2+ men on every bay and bites-and-holds next to his gains; Obst. Sturmfeld hoards requisition, then hammers one section behind a box barrage; Maj. Fuchs finds your thinnest stretch and sends a second party round the flank.</li>
+    <li><strong>Men arrive, they do not appear.</strong> Every purchase despatches a column from your rear edge, up the communication trench, to its post — with an ETA, and with everything shellfire implies on the way.</li>
+    <li><strong>Over the top:</strong> click your front sections (brass rings), click a German section — whistle, ladders, wire, melee, capture. Captured trenches face the wrong way until consolidated (the fire step is <em>really</em> re-carved — cover is terrain height, always). <strong>B</strong> recalls.</li>
+    <li><strong>The camera leash:</strong> you may look across no-man's-land freely; you may not <em>be</em> there. The camera travels only as far as your farthest forward living soldier — advances follow in half a second, deaths ease you back over three.</li>
+  </ul>
+</section>
+
+<section class="item works">
+  <div class="kicker">The architecture underneath</div>
+  <h2>One spine: AI opponent ≡ remote human ≡ replay</h2>
+  <p>Every act of command — buy, assault, recall, barrage — is a tick-stamped <code>Cmd</code> applied only at tick boundaries, in <code>(tick, side, seq)</code> order. The German AI is just the first peer: a pure function of (state, persona, seeded rand) whose envelopes are never logged, because any replay or lockstep client re-derives them from the seed. The twin-sim probe runs two full sims in one process on one command stream and compares 32-bit state hashes every second; the replay probe feeds the recorded log to a third sim and demands the identical final hash. <strong>M5's multiplayer is this same machinery with a WebRTC DataChannel where the local queue is.</strong></p>
+  <table>
+    <tr><th>Gate</th><th>Result</th></tr>
+    <tr><td>Twin sims, 20-wave classic campaign</td><td><strong>CLEAN</strong> — 158,649 ticks, 5,288 checks, replay hash-identical</td></tr>
+    <tr><td>Twin sims, Big Push with full assault drill + AI</td><td><strong>CLEAN</strong> — twin and replay</td></tr>
+    <tr><td>Scripted assault probe (garrisoned line)</td><td>crossed · wire cut · 9 melee kills · captured · consolidated · recalled — <strong>all green</strong></td></tr>
+    <tr><td>Verdict probe (all four lengths)</td><td>every match ended at exactly the whistle / hold window with the correct verdict</td></tr>
+    <tr><td>Balance lab, 50 AI-vs-bot matches</td><td><strong>0 stalls</strong>, every termination correct, 127 s wall</td></tr>
+    <tr><td>Classic campaign regression</td><td>wave-start ticks and requisition <strong>byte-identical</strong> across all five PRs</td></tr>
+  </table>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">Field notes</div>
+  <h2>What the probes taught us</h2>
+  <ul>
+    <li><strong>A lone MG08 pinned a wave open for two sim-hours.</strong> The twin probe found it in its first run: a gun team dug in at extreme range, morale 1.0, forever. A stall-breaker now withdraws beaten stragglers (never men still fighting in the trench) 240 s after the last spawn.</li>
+    <li><strong>Browser timer throttling can lie to you.</strong> Hidden pages clamp <code>setTimeout</code> to once a minute; the probes now yield via <code>MessageChannel</code> and run at full speed regardless.</li>
+    <li><strong>The AI beats a lazy line 49–1</strong> — the lab bot leaves its purse unspent. A human playing normally (seven posts, a Vickers, rapid fire) shot Methodical's first big push flat 22–0 and took the whistle 99:61. The economy rewards spending; balance feels right for a first ship, and the lab is standing by for tuning passes.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <div class="kicker">Next</div>
+  <h2>M5 — a human in the other trench</h2>
+  <ul>
+    <li>Vercel serverless signaling (<code>/api/rooms</code>, 4-letter codes, Upstash Redis) + WebRTC DataChannel lockstep; commands scheduled T+6; hash exchange every 30 ticks; snapshot resync; the AI takes over anyone who disconnects.</li>
+    <li>Determinism debt tracked for M5/M6 in issue <strong>#41</strong> (possession commands, casualties off SimState, pause semantics, seq ordering).</li>
+  </ul>
+  <p><strong>Awaiting the CO:</strong> ① the GitHub↔Vercel connection for push-to-deploy (one click in the Vercel dashboard); ② the Upstash Redis marketplace install when M5 starts; ③ a stray Vercel project <code>cool-lalande-d869cf</code> (created by a mislinked worktree deploy, since relinked) can be deleted from the dashboard.</p>
+</section>
+
+<div class="verdict">
+  <h2>Verdict</h2>
+  <p>The plan's reframe held all the way down: <strong>an AI opponent and a remote human are the same thing — a command stream.</strong> Singleplayer shipped tonight on exactly the spine multiplayer will ride.</p>
+</div>
+
+<footer>
+  Deployed to production · 18 July 1916 · issues #40 #43 #45 #47 #49 closed
+  <div class="sig">— Claude, Battalion Workshops</div>
+</footer>
+
+</div>
+</body>
+</html>
