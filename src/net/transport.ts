@@ -103,24 +103,47 @@ abstract class BufferedTransport implements Transport {
   abstract close(): void
 }
 
-/** Two local tabs, zero servers — for a quick human-vs-human smoke on one machine. */
+/**
+ * Two local tabs, zero servers — for a quick human-vs-human smoke on one
+ * machine. BroadcastChannel has NO disconnect signal, and a hard-killed tab
+ * sends no pagehide bye — so both sides heartbeat every 2 s, and 90 s of
+ * total silence from a peer we HAVE heard from reads as death (the long
+ * timeout survives Chrome's 1-per-minute intensive timer throttling on
+ * long-hidden tabs).
+ */
 export class BroadcastTransport extends BufferedTransport {
   private ch: BroadcastChannel
+  private hbTimer: number
+  private lastHeard = 0
+  private heard = false
+  private dead = false
 
   constructor(room: string, private me: string) {
     super()
     this.ch = new BroadcastChannel(`mudsteel-${room}`)
     this.ch.onmessage = (e) => {
-      const d = e.data as { from: string; msg: unknown }
-      if (d.from !== this.me) this.deliver(d.msg)
+      const d = e.data as { from: string; msg?: unknown; hb?: boolean }
+      if (d.from === this.me) return
+      this.heard = true
+      this.lastHeard = performance.now()
+      if (!d.hb) this.deliver(d.msg)
     }
+    this.hbTimer = window.setInterval(() => {
+      this.ch.postMessage({ from: this.me, hb: true })
+      if (this.heard && !this.dead && performance.now() - this.lastHeard > 90_000) {
+        this.dead = true
+        this.onClose?.()
+      }
+    }, 2000)
   }
 
   send(msg: unknown): void {
+    if (this.dead) return
     this.ch.postMessage({ from: this.me, msg })
   }
 
   close(): void {
+    window.clearInterval(this.hbTimer)
     this.ch.close()
     this.onClose = null
   }

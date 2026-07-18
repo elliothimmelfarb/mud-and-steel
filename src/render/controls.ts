@@ -285,7 +285,7 @@ export class CameraRig {
   update(dt: number, input: Input, pointerEdge: { x: number; y: number; inside: boolean }, uiHasFocus: boolean): void {
     // The leash boundary moves on its own (men advance, men die) — re-clamp
     // every frame so a receding boundary GLIDES the camera back, input or not.
-    if (this.leashMinZ !== null) this.clampTarget()
+    if (this.leashMinZ !== null || this.leashMaxZ !== null) this.clampTarget()
     const panSpeed = this.curDist * 0.85 * this.speedMul
     let mx = 0, mz = 0
     if (!uiHasFocus) {
@@ -350,11 +350,14 @@ export class CameraRig {
    * (fast on advances, slow on recessions) so the clamp glides, never snaps.
    */
   leashMinZ: number | null = null
+  /** Mirror leash for the German commander (his front advances southward). */
+  leashMaxZ: number | null = null
 
   private clampTarget(): void {
     this.target.x = clamp(this.target.x, -WORLD.width / 2 - 10, WORLD.width / 2 + 10)
     const minZ = this.leashMinZ ?? -WORLD.depth / 2 - 10
-    this.target.z = clamp(this.target.z, Math.max(minZ, -WORLD.depth / 2 - 10), WORLD.depth / 2 + 30)
+    const maxZ = this.leashMaxZ ?? WORLD.depth / 2 + 30
+    this.target.z = clamp(this.target.z, Math.max(minZ, -WORLD.depth / 2 - 10), Math.min(maxZ, WORLD.depth / 2 + 30))
   }
 
   /** Camera pos + facing for the audio listener. */

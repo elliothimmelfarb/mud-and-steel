@@ -507,7 +507,7 @@ export class Game {
       this.mySide = 'brit'
       this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: mode === 'bigpush' ? (bigpush?.persona ?? 'methodical') : null })
     }
-    this.leashZ = WORLD.frontTrenchZ - 12
+    this.leashZ = this.mySide === 'german' ? -(WORLD.frontTrenchZ - 12) : WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
     this.terrainMesh = new TerrainMesh(this.terrain)
@@ -657,8 +657,12 @@ export class Game {
       } else if (p.draw) {
         this.hud?.toast('A draw — both armies spent, the line where it began.', 'warn')
       }
-      this.audio.play(p.victory ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
-      this.hud?.gameOver(p.victory, s.mode === 'classic' && p.victory)
+      // Verdicts are recorded brit-POV in the sim; present them from the
+      // seat this machine actually occupies (the German human's win is
+      // Britain's defeat). Draws stay draws.
+      const won = p.draw ? false : (this.mySide === 'german' ? !p.victory : p.victory)
+      this.audio.play(won ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
+      this.hud?.gameOver(won, s.mode === 'classic' && won)
     })
     ev.on('thunder', () => this.audio.play('thunder', { gain: 0.7 }))
     ev.on('orderIssued', (p) => this.onOrderIssued(p.id as OrderId))
@@ -1332,14 +1336,25 @@ export class Game {
 
     // The Big Push camera leash: follow your men forward within ~0.5 s;
     // ease back over ~3 s when the forward men die (never yank the view).
-    if (s.mode === 'bigpush' && this.mySide === 'brit' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
-      const want = s.advance.brit - 12
-      const tau = want < this.leashZ ? 0.15 : 1.0
-      this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
-      this.rig.leashMinZ = this.leashZ
+    if (s.mode === 'bigpush' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
+      if (this.mySide === 'brit') {
+        const want = s.advance.brit - 12
+        const tau = want < this.leashZ ? 0.15 : 1.0
+        this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
+        this.rig.leashMinZ = this.leashZ
+        this.rig.leashMaxZ = null
+      } else {
+        // Mirrored for the German commander: his men advance southward
+        // (decreasing advance.german), so his leash is a MAX-z bound.
+        const want = s.advance.german + 12
+        const tau = want > this.leashZ ? 0.15 : 1.0
+        this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
+        this.rig.leashMaxZ = this.leashZ
+        this.rig.leashMinZ = null
+      }
     } else {
-      // German commander (MP): free camera v1 — his leash mirrors in M6.
       this.rig.leashMinZ = null
+      this.rig.leashMaxZ = null
     }
 
     this.render(dt)

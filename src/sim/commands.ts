@@ -57,6 +57,16 @@ export type Cmd =
 export interface Envelope {
   tick: number
   side: Team
+  /**
+   * Producer-local counter. INVARIANT (#41 item 5): at most ONE live
+   * producer per side at any moment — a human session, or the takeover AI
+   * after a disconnect, never both. seq values can repeat across producer
+   * eras (a rejoined session restarts at 0), which is safe because equal
+   * (tick, side, seq) keys keep stable insertion order in the drain sort,
+   * and the resync dedup only ever compares within one era's live tail.
+   * Any future third producer (spectator relays, side handoff) must add a
+   * producer id to this key.
+   */
   seq: number
   cmds: Cmd[]
   /**
