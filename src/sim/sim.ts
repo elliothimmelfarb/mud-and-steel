@@ -4,7 +4,7 @@
  * brute-force queries cheap at 30 Hz and the code honest.
  */
 import type {
-  ActiveBarrage, Bullet, CasualtyRecord, CreepingBarrage, Defence, Difficulty, DirectorMemory, Enemy,
+  ActiveBarrage, AssaultGroup, Bullet, CasualtyRecord, CreepingBarrage, Defence, Difficulty, DirectorMemory, Enemy,
   FpsFeedbackEvent, FxEvent, GamePhase, GasCloud, MatchOutcome,
   MatchLength, Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection,
   Unit, Vehicle, WavePlan,
@@ -72,6 +72,8 @@ export interface SimState {
   units: Unit[]
   enemies: Enemy[]
   squads: Squad[]
+  /** Big Push assault groups (either side). */
+  assaults: AssaultGroup[]
   vehicles: Vehicle[]
   projectiles: Projectile[]
   /** In-flight small-arms rounds, physically integrated each tick. */

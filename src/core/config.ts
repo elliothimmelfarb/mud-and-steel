@@ -39,6 +39,7 @@ export const BIGPUSH = {
   strengthStart: 100,
   strengthPerMan: 0.9,      // battalion strength drained per man killed
   holdWinSeconds: 60,       // attrition: hold majority of enemy front this long
+  consolidateSeconds: 40,   // reversing a captured fire step (engineers 2x)
   matchSeconds: { raid: 600, battle: 1200, grand: 2100, attrition: 0 } as Record<string, number>,
 } as const
 

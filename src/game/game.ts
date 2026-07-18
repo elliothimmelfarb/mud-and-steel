@@ -1267,7 +1267,7 @@ export class Game {
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
         pose.stance = c.stance
-        pose.moveAmount = u.fallenBack || charging || u.march !== null ? 1 : 0
+        pose.moveAmount = u.fallenBack || charging || u.march !== null || u.assaultGroupId !== null ? 1 : 0
         pose.animPhase = c.animPhase
         pose.aiming = s.phase === 'assault' && !u.fallenBack && u.march === null
         pose.recoil = Math.max(0, 1 - c.cooldown * 4)

@@ -13,7 +13,8 @@ import {
 import { hasDeed, recordDeed } from './veterancy'
 import { spawnGrenade, spawnMortarBomb, spawnShell, spawnGasShell, spawnFlare } from './projectiles'
 import { losClear, standSurface } from './ballistics'
-import { sectionAt } from './trench'
+import { sectionAt, sectionById } from './trench'
+import { assaultTick, updateAssaultGroups } from './assault'
 
 interface AuraSources {
   officers: Array<{ x: number; z: number }>
@@ -31,6 +32,10 @@ function anyEnemyWithin(ctx: Ctx, x: number, z: number, r: number): boolean {
 
 export function updateUnits(ctx: Ctx, dt: number): void {
   const { s } = ctx
+
+  // Big Push assault-group orchestration (bounding cadence, recall cleanup,
+  // consolidation work) runs once, before the per-unit ticks read its flags.
+  if (s.mode === 'bigpush') updateAssaultGroups(ctx, dt)
 
   // Aura sources first.
   const aura: AuraSources = { officers: [], medics: [], ncos: [] }
@@ -98,6 +103,20 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   if (u.march) {
     marchTick(ctx, u, dt)
     return
+  }
+
+  // -- Big Push: over the top — the assault brain owns this unit -------------
+  if (u.assaultGroupId !== null) {
+    // Crew cooldowns tick here (assaultShoot reads them).
+    for (const c of u.crew) if (c.hp > 0 && c.cooldown > 0) c.cooldown -= dt
+    assaultTick(ctx, u, dt)
+    return
+  }
+
+  // Covering-fire focus decays.
+  if (u.coverT > 0) {
+    u.coverT = Math.max(0, u.coverT - dt)
+    if (u.coverT === 0) u.coverSectionId = null
   }
 
   // -- morale: break & rally --------------------------------------------------
@@ -391,6 +410,12 @@ export function pickTarget(
     const d2v = dist2(e.pos.x, e.pos.z, px, pz)
     if (d2v < min2 || d2v > r2) continue
     let score = -Math.sqrt(d2v)
+    // Covering fire: this unit is ordered onto a frontage — anything near the
+    // named section outranks everything else.
+    if (u.coverSectionId !== null) {
+      const cs = sectionById(s, u.coverSectionId)
+      if (cs && dist2(e.pos.x, e.pos.z, cs.mid.x, cs.mid.z) < 30 * 30) score += 300
+    }
     switch (prio) {
       case 'strongest': score = e.maxHp - Math.sqrt(d2v) * 0.3; break
       case 'officers':

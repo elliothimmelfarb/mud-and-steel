@@ -121,7 +121,7 @@ export class Terrain implements TerrainLike {
   /** Wetness value at the last water-map refresh (dead-band anchor). */
   private wetnessApplied = -1
   /** Deformation history: shell craters, plus pads dug for emplacements (p: 1). */
-  private craterOps: Array<{ x: number; z: number; r: number; d: number; p?: 1 }> = []
+  private craterOps: Array<{ x: number; z: number; r: number; d: number; p?: 1 | 2 }> = []
   /**
    * Fire-step bench cells (vi -> carved bench height). Recorded by the parapet
    * lines so the communication trenches — carved after them — can't dig the
@@ -310,12 +310,13 @@ export class Terrain implements TerrainLike {
   }
 
   /** Serialized deformation history (for save games). */
-  getCraterOps(): ReadonlyArray<{ x: number; z: number; r: number; d: number; p?: 1 }> { return this.craterOps }
-  replayCraterOps(ops: ReadonlyArray<{ x: number; z: number; r: number; d: number; p?: 1 }>): void {
+  getCraterOps(): ReadonlyArray<{ x: number; z: number; r: number; d: number; p?: 1 | 2 }> { return this.craterOps }
+  replayCraterOps(ops: ReadonlyArray<{ x: number; z: number; r: number; d: number; p?: 1 | 2 }>): void {
     // Order matters: a pad dug after a shell hit levels that hole, and vice
     // versa — both kinds replay through the same list in sequence.
     for (const o of ops) {
-      if (o.p) this.digPad(o.x, o.z, o.r)
+      if (o.p === 2) this.raiseBench(o.x, o.z, o.r, o.d)
+      else if (o.p) this.digPad(o.x, o.z, o.r)
       else this.crater(o.x, o.z, o.r, o.d)
     }
   }
@@ -339,6 +340,36 @@ export class Terrain implements TerrainLike {
       this.base[i] = this.base[i] * (1 - k) + h0 * k
     })
     this.craterOps.push({ x, z, r: radius, d: 0, p: 1 })
+    const minCol = Math.max(0, Math.floor(this.colAt(x - reach)) - AO_REACH)
+    const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + reach)) + AO_REACH)
+    const minRow = Math.max(0, Math.floor(this.rowAt(z - reach)) - AO_REACH)
+    const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(z + reach)) + AO_REACH)
+    this.computeAO(minCol, minRow, maxCol, maxRow)
+    this.refreshWater(minCol, minRow, maxCol, maxRow)
+    this.onDirty?.({ minCol, minRow, maxCol, maxRow })
+  }
+
+  /**
+   * Consolidation: raise a disc of TRENCH floor up to an absolute bench-top
+   * height (never lowers anything, never touches open ground) — the captured
+   * fire step gets a REAL bench on its new enemy wall, because cover is
+   * terrain height here, always. Recorded as op p:2 (d = target height) so
+   * saves and resyncs replay it in sequence.
+   */
+  raiseBench(x: number, z: number, radius: number, benchTop: number): void {
+    const reach = radius + 0.6
+    this.forEachCellInDisc(x, z, reach, (_c, _r, wx, wz, i) => {
+      const d = Math.hypot(wx - x, wz - z)
+      if (d > reach) return
+      if (this.trench[i] < 0.3) return // only inside the carved corridor
+      const k = d < radius ? 1 : 1 - (d - radius) / 0.6
+      const target = benchTop
+      if (this.heights[i] < target) {
+        this.heights[i] = this.heights[i] * (1 - k) + target * k
+        if (this.base[i] < this.heights[i]) this.base[i] = this.heights[i]
+      }
+    })
+    this.craterOps.push({ x, z, r: radius, d: benchTop, p: 2 })
     const minCol = Math.max(0, Math.floor(this.colAt(x - reach)) - AO_REACH)
     const maxCol = Math.min(this.cols, Math.ceil(this.colAt(x + reach)) + AO_REACH)
     const minRow = Math.max(0, Math.floor(this.rowAt(z - reach)) - AO_REACH)

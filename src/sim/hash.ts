@@ -97,6 +97,8 @@ export function hashSim(s: SimState): number {
     h.f64(u.xp); h.byte(u.vet); h.u32(u.deeds); h.u32(u.wavesServed)
     h.byte(TARGETING_IDX[u.targeting])
     h.bool(u.fallenBack); h.bool(u.disbanded)
+    h.u32((u.assaultGroupId ?? -1) >>> 0); h.byte(u.assaultElement)
+    h.u32((u.coverSectionId ?? -1) >>> 0); h.f64(u.coverT)
     if (u.march) {
       h.bool(true)
       h.u32(u.march.path.length)
@@ -127,6 +129,15 @@ export function hashSim(s: SimState): number {
     h.u32(e.squadId); h.byte(e.element)
     h.f64(e.speedMul); h.bool(e.mounted)
     if (e.coverTarget) { h.bool(true); h.f64(e.coverTarget.x); h.f64(e.coverTarget.z) } else h.bool(false)
+  }
+
+  // Assault groups.
+  h.u32(s.assaults.length)
+  for (const g of s.assaults) {
+    h.u32(g.id); h.byte(g.side === 'brit' ? 0 : 1)
+    h.u32(g.targetSectionId); h.byte(g.state === 'advancing' ? 0 : 1)
+    h.byte(g.moveElement); h.f64(g.boundT)
+    for (const uid of g.unitIds) h.u32(uid)
   }
 
   // Squads.
@@ -180,6 +191,7 @@ export function hashSim(s: SimState): number {
     h.bool(sec.captured); h.f64(sec.captureT)
     h.byte(sec.owner === 'brit' ? 0 : 1); h.byte(sec.home === 'brit' ? 0 : 1)
     h.byte(sec.facing === 1 ? 0 : 1)
+    h.bool(sec.consolidating); h.f64(sec.consolidateT)
   }
 
   // Barrages.

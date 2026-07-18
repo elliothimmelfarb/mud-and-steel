@@ -22,6 +22,7 @@ import { projectToFireStep, sectionAt } from './trench'
 import { spawnFlare } from './projectiles'
 import { spawnVehicle } from './vehicles'
 import { startCreepingBarrage } from './barrage'
+import { issueAssault, issueConsolidate, issueCovering, issueRecall } from './assault'
 
 export type OrderId = keyof typeof ORDER_DEFS
 
@@ -220,6 +221,7 @@ export function createUnit(
     xp: 0, vet: 0, deeds: 0, wavesServed: 0,
     targeting: def.targeting, fallenBack: false, disbanded: false,
     march: null,
+    assaultGroupId: null, assaultElement: 0, coverSectionId: null, coverT: 0,
   }
   const hpMult = def.placement === 'pad' ? ctx.mods.emplacementHp : 1
 
@@ -441,11 +443,17 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
       break
     }
 
-    // The Big Push assault orders arrive in M3.
     case 'assault':
+      if (s.mode === 'bigpush') issueAssault(ctx, side, cmd.sections, cmd.targetSection)
+      break
     case 'covering':
+      if (s.mode === 'bigpush') issueCovering(ctx, side, cmd.sections, cmd.targetSection)
+      break
     case 'recall':
+      if (s.mode === 'bigpush') issueRecall(ctx, side, cmd.groupId)
+      break
     case 'consolidate':
+      if (s.mode === 'bigpush') issueConsolidate(ctx, side, cmd.section)
       break
   }
 }

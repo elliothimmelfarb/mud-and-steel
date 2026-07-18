@@ -25,7 +25,7 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
         id: sectionId++, line: kind, facing, home, owner: home, a, b, mid,
         parapetHp: TRENCH.parapetHp * parapetMult,
         parapetMax: TRENCH.parapetHp * parapetMult,
-        captured: false, captureT: 0,
+        captured: false, captureT: 0, consolidating: false, consolidateT: 0,
       })
     }
   }
@@ -72,6 +72,11 @@ export function projectToFireStep(
     if (d < bestD) { bestD = d; best = { x: px, z: pz, sectionId: sec.id } }
   }
   return best
+}
+
+export function sectionById(s: { sections: TrenchSection[] }, id: number): TrenchSection | null {
+  for (const sec of s.sections) if (sec.id === id) return sec
+  return null
 }
 
 export function sectionAt(sections: TrenchSection[], x: number, z: number): TrenchSection | null {

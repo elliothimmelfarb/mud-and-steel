@@ -108,7 +108,7 @@ export class SimRunner implements CmdHost {
       timeLimit: mode === 'bigpush' ? BIGPUSH.matchSeconds[opts.matchLen ?? 'battle'] : 0,
       holdT: { brit: 0, german: 0 },
       advance: { brit: WORLD.frontTrenchZ, german: -WORLD.frontTrenchZ },
-      units: [], enemies: [], squads: [], vehicles: [], projectiles: [], bullets: [],
+      units: [], enemies: [], squads: [], assaults: [], vehicles: [], projectiles: [], bullets: [],
       clouds: [], defences: [], corpses: [],
       sections,
       fx: [], sounds: [],

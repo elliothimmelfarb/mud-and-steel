@@ -99,6 +99,27 @@ export interface Unit {
    * up (or always, in classic mode where crews appear at their post).
    */
   march: { path: Vec2[]; idx: number[] } | null
+  /** Big Push: the assault group this unit is committed to (null = holding). */
+  assaultGroupId: number | null
+  /** Which bounding element of its group this unit belongs to. */
+  assaultElement: 0 | 1
+  /** Covering-fire focus: prioritise hostiles near this section (timed). */
+  coverSectionId: number | null
+  coverT: number
+}
+
+/**
+ * Big Push: a body of units ordered over the top at one enemy section.
+ * Groups bound by alternating elements; recall sends everyone home.
+ */
+export interface AssaultGroup {
+  id: number
+  side: Team
+  unitIds: number[]
+  targetSectionId: number
+  state: 'advancing' | 'recalled'
+  moveElement: 0 | 1
+  boundT: number
 }
 
 export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
@@ -356,6 +377,10 @@ export interface TrenchSection {
   captured: boolean
   /** Progress 0..1 of an enemy capture in progress. */
   captureT: number
+  /** Big Push: consolidation ordered (reversing the fire step). */
+  consolidating: boolean
+  /** Progress 0..1 of the consolidation work. */
+  consolidateT: number
 }
 
 // ---------------------------------------------------------------------------
