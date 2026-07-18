@@ -313,11 +313,11 @@ function sweep(ctx: Ctx, b: Bullet): boolean {
     // whenever nobody is embodied — the natural gate the HUD relies on.
     // `c.hp` is read AFTER damageSoldier() above, so a killing blow reports
     // as a kill marker rather than a plain hit confirmation.
-    if (ctx.possessedSoldierId >= 0) {
-      if (b.shooterId === ctx.possessedSoldierId) {
+    if (ctx.s.possessedSoldierId >= 0) {
+      if (b.shooterId === ctx.s.possessedSoldierId) {
         pushFpsFeedback(ctx, { t: 'hit', kill: c.hp <= 0 })
       }
-      if (c.id === ctx.possessedSoldierId) {
+      if (c.id === ctx.s.possessedSoldierId) {
         // The direction a round came FROM is the negative of the direction
         // it was travelling — exactly the bearing the HUD's directional
         // wedge needs in order to point back at the shooter.
@@ -346,7 +346,7 @@ function sweep(ctx: Ctx, b: Bullet): boolean {
       // Armour hits that actually damaged the vehicle still confirm for the
       // possessed shooter (the bounce case above does not — nothing about a
       // shrugged-off round earns a hit marker).
-      if (ctx.possessedSoldierId >= 0 && b.shooterId === ctx.possessedSoldierId) {
+      if (ctx.s.possessedSoldierId >= 0 && b.shooterId === ctx.s.possessedSoldierId) {
         pushFpsFeedback(ctx, { t: 'hit', kill: false })
       }
     }

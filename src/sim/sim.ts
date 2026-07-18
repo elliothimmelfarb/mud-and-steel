@@ -50,6 +50,20 @@ export interface SimState {
   req: number
   breach: number            // 0..COMBAT.breachMax; 0 = the line is broken
   masksOn: boolean
+  /**
+   * Soldier id the player is embodying in first person (-1 = none). The AI
+   * must not move, pose or fire this man — the player does. SIM STATE (set
+   * only by the possess/release commands, hashed): every lockstep peer and
+   * every replay must agree on whose trigger the sim doesn't pull.
+   */
+  possessedSoldierId: number
+  /**
+   * Unit id whose weapon the player is operating in first person (-1 =
+   * none). The whole unit stands down from auto-firing — the player is the
+   * gunner; other crew merely feed and load. Also gates a manned medic's or
+   * sapper's automatic work. Commanded and hashed like possessedSoldierId.
+   */
+  possessedUnitId: number
   /** Requisition banked by calling the wave early; paid out at wave end. */
   earlyCallBonus: number
   /** Big Push: the German commander's purse (the AI spends it from M4). */
@@ -126,18 +140,6 @@ export interface Ctx {
   flowDirty: boolean
   /** Difficulty knobs resolved at run start. */
   night: boolean
-  /**
-   * Soldier id the player is currently embodying in first person (-1 = none).
-   * The AI must not move, pose or fire this man — the player does.
-   */
-  possessedSoldierId: number
-  /**
-   * Unit id whose weapon the player is currently operating in first person
-   * (-1 = none). The whole unit stands down from auto-firing — the player is
-   * the gunner now; other crew merely feed and load. Also gates a manned
-   * medic/sapper's automatic healing/repair, which the player performs by hand.
-   */
-  possessedUnitId: number
   /**
    * FPS Lab only: while true, the possessed soldier can be hit (so hurt feedback
    * still fires) but is never dropped below a sliver of hp — killSoldier never

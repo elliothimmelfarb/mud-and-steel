@@ -9,8 +9,10 @@
 import { Redis } from '@upstash/redis'
 
 export function redisOr503(): Redis | Response {
-  const url = process.env.UPSTASH_REDIS_REST_URL
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN
+  // The Vercel-native Upstash integration injects KV_REST_API_*; a manually
+  // configured Upstash database injects UPSTASH_REDIS_REST_*. Take either.
+  const url = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL
+  const token = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN
   if (!url || !token) {
     return json({ error: 'signaling not configured (Upstash Redis env missing)' }, 503)
   }

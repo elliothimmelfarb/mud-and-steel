@@ -109,6 +109,7 @@ export class SimRunner implements CmdHost {
       req: opts.startReq ?? resume?.req ?? Math.round(mode === 'bigpush' ? BIGPUSH.startReq : ECONOMY.startReq[opts.difficulty]),
       breach: resume?.breach ?? COMBAT.breachMax,
       masksOn: resume?.masksOn ?? false,
+      possessedSoldierId: -1, possessedUnitId: -1,
       earlyCallBonus: 0,
       germanReq: mode === 'bigpush' ? BIGPUSH.startReq : 0,
       strength: { brit: BIGPUSH.strengthStart, german: BIGPUSH.strengthStart },
@@ -148,7 +149,6 @@ export class SimRunner implements CmdHost {
       flowInf, flowVeh,
       events: this.events, rand: forkRand(seed, 'combat'),
       mods, flowDirty: true, night: false,
-      possessedSoldierId: -1, possessedUnitId: -1,
       fpsInvincible: false,
       fpsFeedback: [],
     }

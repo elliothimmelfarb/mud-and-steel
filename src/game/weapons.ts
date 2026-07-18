@@ -1344,11 +1344,13 @@ export function clampToBand(fromX: number, fromZ: number, tx: number, tz: number
 // Discharge — turn one trigger event into real ordnance
 // ---------------------------------------------------------------------------
 
-export interface FireCtx {
-  game: Game
-  ctx: Ctx
-  unit: Unit
-  soldier: Soldier
+/**
+ * Everything one trigger event needs to know, minus the sim itself. Built by
+ * FpsMode at the moment of the click, carried verbatim inside an `fpsfire`
+ * command, and consumed by `dischargeWeaponSim` at the next tick boundary —
+ * so both lockstep sims (and every replay) spawn the identical ordnance.
+ */
+export interface FireParams {
   /** Camera/eye world position. */
   camPos: Vec3
   /** Aim unit vector (camera forward). */
@@ -1360,27 +1362,30 @@ export interface FireCtx {
   /** Ground point under the crosshair (indirect/thrown weapons). */
   ground: GroundHit | null
   /** World position of the viewmodel's muzzle tip — where the flash belongs. */
-  muzzleWorld?: Vec3
+  muzzle: Vec3
 }
 
 /**
- * Fire one discharge of `profile`. All ammo/heat/interval gating is the
- * caller's job; by the time we're here the shot is happening. Returns nothing —
- * every consequence is a real entity in the sim.
+ * SIM half of a discharge: spawn the ordnance and nothing else. No Game, no
+ * audio, no effects — those played the instant the trigger dropped (see
+ * `presentDischarge`). Runs only from `applyCmd` at a tick boundary, which is
+ * what makes every `ctx.rand` draw here (sniper crit, tracer chance, gas
+ * scatter) land identically on every lockstep peer and in every replay.
+ * All ammo/heat/interval gating is the submitting client's job; by the time
+ * we're here the shot is happening.
  */
-export function dischargeWeapon(profile: WeaponProfile, f: FireCtx): void {
+export function dischargeWeaponSim(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
   switch (profile.control) {
-    case 'bolt': case 'semi': case 'auto': return fireBulletShot(profile, f)
-    case 'throw': return throwGrenade(profile, f)
-    case 'lob': return lobBomb(profile, f)
-    case 'directgun': return fireGun(profile, f)
-    case 'flame': return sprayFlame(profile, f)
-    case 'tool': return // continuous; handled frame-by-frame by FpsMode
+    case 'bolt': case 'semi': case 'auto': return fireBulletShot(profile, ctx, unit, soldier, f)
+    case 'throw': return throwGrenade(profile, ctx, unit, soldier, f)
+    case 'lob': return lobBomb(profile, ctx, unit, soldier, f)
+    case 'directgun': return fireGun(profile, ctx, unit, soldier, f)
+    case 'flame': return sprayFlame(profile, ctx, unit, soldier, f)
+    case 'tool': return // continuous; rides fpstool commands instead
   }
 }
 
-function fireBulletShot(profile: WeaponProfile, f: FireCtx): void {
-  const { ctx, game, soldier, unit } = f
+function fireBulletShot(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
   const def = UNIT_DEFS[profile.id]
   let spread = lerp(profile.spreadHip, profile.spreadAds, f.ads)
   spread *= soldier.stance === 'prone' ? 0.7 : soldier.stance === 'crouch' ? 0.88 : 1
@@ -1404,36 +1409,24 @@ function fireBulletShot(profile: WeaponProfile, f: FireCtx): void {
     // Ballistics ride the boresight `from` (aim-true); the visible barrel tip is
     // ~0.5 m below the eye, so hand the renderer the real muzzle to weld the
     // tracer's launch streak to the flash instead of the screen centre.
-    muzzle: f.muzzleWorld,
+    muzzle: f.muzzle,
   })
   soldier.facing = f.yaw
-
-  if (profile.heat) {
-    unit.heat = Math.min(1, unit.heat + COMBAT.vickersHeatPerShot * ctx.mods.heatRate)
-    if (unit.heat >= 1) game.audio.play('steam_vent', { x: unit.pos.x, y: 1, z: unit.pos.z })
-  }
-  const big = profile.id === 'vickers'
-  game.audio.play(profile.sound, { x: from.x, y: from.y, z: from.z, gain: profile.id === 'sniper' ? 1 : 0.9 })
-  // First person only: the flash itself is welded to the viewmodel barrel in
-  // FpsMode; from here we just kick the world ejecta (sparks, smoke, brass) off
-  // the real muzzle tip. `core=false` suppresses the world-space flash sprite.
-  const m = f.muzzleWorld ?? from
-  game.effects.muzzleFlash(m.x, m.y, m.z, f.dir.x, f.dir.z, big, 0.5, false)
+  // NO heat here: the jacket is the player's to nurse — his local heat model
+  // rides in on the fpspose stream, so both sims read the same value without
+  // double-counting a shot's warmth.
 }
 
-function throwGrenade(profile: WeaponProfile, f: FireCtx): void {
-  const { ctx, game, soldier, unit } = f
+function throwGrenade(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
   const g = f.ground
   if (!g) return
   const p = clampToBand(soldier.pos.x, soldier.pos.z, g.x, g.z, profile.minRange, profile.maxRange)
   soldier.facing = f.yaw
   spawnGrenade(ctx, soldier, p.x, p.z, UNIT_DEFS.grenadier.damage * ctx.mods.grenDmg,
     UNIT_DEFS.grenadier.aoe + ctx.mods.grenAoe, unit.id)
-  game.audio.play('whistle_attack', { x: soldier.pos.x, y: 1.6, z: soldier.pos.z, gain: 0.2, rate: 1.6 })
 }
 
-function lobBomb(profile: WeaponProfile, f: FireCtx): void {
-  const { ctx, game, soldier, unit } = f
+function lobBomb(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
   const g = f.ground
   if (!g) return
   const p = clampToBand(soldier.pos.x, soldier.pos.z, g.x, g.z, profile.minRange, profile.maxRange)
@@ -1443,7 +1436,6 @@ function lobBomb(profile: WeaponProfile, f: FireCtx): void {
       spawnGasShell(ctx, soldier.pos.x, soldier.pos.z, p.x + (ctx.rand() - 0.5) * 14, p.z + (ctx.rand() - 0.5) * 14)
     }
     ctx.s.stats.gasClouds++
-    game.effects.muzzleFlash(soldier.pos.x, fromY, soldier.pos.z, f.dir.x, f.dir.z, true)
   } else {
     spawnMortarBombAt(ctx, soldier.pos.x, soldier.pos.z, fromY, p.x, p.z,
       UNIT_DEFS.mortar.damage, UNIT_DEFS.mortar.aoe, unit.id)
@@ -1451,8 +1443,7 @@ function lobBomb(profile: WeaponProfile, f: FireCtx): void {
   }
 }
 
-function fireGun(profile: WeaponProfile, f: FireCtx): void {
-  const { ctx, game, soldier, unit } = f
+function fireGun(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
   const from: Vec3 = {
     x: f.camPos.x + f.dir.x * 1.1,
     y: f.camPos.y + f.dir.y * 1.1 - 0.05,
@@ -1462,26 +1453,68 @@ function fireGun(profile: WeaponProfile, f: FireCtx): void {
     UNIT_DEFS.fieldgun.damage, UNIT_DEFS.fieldgun.aoe, unit.id)
   ctx.s.stats.shellsFired++
   soldier.facing = f.yaw
-  game.audio.play('fieldgun', { x: from.x, y: from.y, z: from.z })
-  // Barrel flash is welded to the viewmodel in FpsMode; keep only the world
-  // ejecta out here (core=false). muzzleFlash now throws its own big night-scaled
-  // ground light in both views, so no separate flash() call is needed.
-  const m = f.muzzleWorld ?? from
-  game.effects.muzzleFlash(m.x, m.y, m.z, f.dir.x, f.dir.z, true, 0.5, false)
   void profile
 }
 
-let flameSndT = 0
-function sprayFlame(profile: WeaponProfile, f: FireCtx): void {
-  const { ctx, game, soldier, unit } = f
+function sprayFlame(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
   soldier.facing = f.yaw
   // The cone is instant-area; we call it in short puffs, so scale the bite to
   // roughly a satisfying close-range DPS without vaporising the whole wave.
   flameCone(ctx, soldier, 'brit', profile.maxRange, UNIT_DEFS.flamer.damage * 0.42, unit.id)
-  flameSndT -= profile.fireInterval
-  if (flameSndT <= 0) {
-    flameSndT = 0.22
-    game.audio.play('gas_pop', { x: soldier.pos.x, y: 1.4, z: soldier.pos.z, gain: 0.32, rate: 0.6 })
+}
+
+/**
+ * PRESENTATION half of a discharge: the report and the world ejecta, played
+ * the very frame the trigger drops — feel never waits for a tick boundary.
+ * The barrel flash itself is welded to the viewmodel in FpsMode; audio here is
+ * game-local (never the sim sound queue), so a lockstep peer hears our shots
+ * through the sim's own snd events instead, exactly as it hears AI fire.
+ * `soldier` may lag the camera by ≤1 tick; at audio ranges that is nothing.
+ */
+let flameSndT = 0
+export function presentDischarge(profile: WeaponProfile, game: Game, soldier: Soldier, f: FireParams): void {
+  switch (profile.control) {
+    case 'bolt': case 'semi': case 'auto': {
+      const fx = f.camPos.x + f.dir.x * 0.7
+      const fy = f.camPos.y + f.dir.y * 0.7 - 0.06
+      const fz = f.camPos.z + f.dir.z * 0.7
+      game.audio.play(profile.sound, { x: fx, y: fy, z: fz, gain: profile.id === 'sniper' ? 1 : 0.9 })
+      // Kick the world ejecta (sparks, smoke, brass) off the real muzzle tip.
+      // `core=false` suppresses the world-space flash sprite.
+      game.effects.muzzleFlash(f.muzzle.x, f.muzzle.y, f.muzzle.z, f.dir.x, f.dir.z,
+        profile.id === 'vickers', 0.5, false)
+      return
+    }
+    case 'throw':
+      game.audio.play('whistle_attack', { x: soldier.pos.x, y: 1.6, z: soldier.pos.z, gain: 0.2, rate: 1.6 })
+      return
+    case 'lob':
+      // The launch pop/whistle arrives via the sim sound queue with the bomb
+      // itself (≤1 tick); only the Livens' visible battery flash is instant.
+      if (profile.id === 'gasproj') {
+        const fromY = standSurface(game.ctx, soldier.pos.x, soldier.pos.z) + 0.8
+        game.effects.muzzleFlash(soldier.pos.x, fromY, soldier.pos.z, f.dir.x, f.dir.z, true)
+      }
+      return
+    case 'directgun': {
+      const fx = f.camPos.x + f.dir.x * 1.1
+      const fy = f.camPos.y + f.dir.y * 1.1 - 0.05
+      const fz = f.camPos.z + f.dir.z * 1.1
+      game.audio.play('fieldgun', { x: fx, y: fy, z: fz })
+      // Barrel flash is welded to the viewmodel in FpsMode; keep only the world
+      // ejecta out here (core=false). muzzleFlash now throws its own big
+      // night-scaled ground light in both views, so no separate flash() call.
+      game.effects.muzzleFlash(f.muzzle.x, f.muzzle.y, f.muzzle.z, f.dir.x, f.dir.z, true, 0.5, false)
+      return
+    }
+    case 'flame':
+      flameSndT -= profile.fireInterval
+      if (flameSndT <= 0) {
+        flameSndT = 0.22
+        game.audio.play('gas_pop', { x: soldier.pos.x, y: 1.4, z: soldier.pos.z, gain: 0.32, rate: 0.6 })
+      }
+      return
+    case 'tool': return
   }
 }
 

@@ -24,6 +24,8 @@ export interface MatchTerms {
   matchLen: MatchLength
   side: Team
   isCreator: boolean
+  /** Host's tick at hello. > 0 = mid-battle: the joiner must fast-forward. */
+  hostTick: number
 }
 
 const POLL_MS = 1000
@@ -58,11 +60,15 @@ interface SignalPayload {
  * Negotiate a DataChannel through the room mailbox. Resolves when the
  * channel is OPEN. The host creates the channel + offer; the joiner answers.
  */
-export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) => void): Promise<RtcTransport> {
+export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) => void, opts?: { fromEnd?: boolean }): Promise<RtcTransport> {
   return new Promise<RtcTransport>((resolve, reject) => {
     const t = new RtcTransport()
     const pc = t.pc
     let cursor = 0
+    // Rejoin reuses the room mailbox: skip everything already in it (the
+    // dead negotiation's offers/answers/ICE) and process only what arrives
+    // after we reopened. The first poll just moves the cursor to the end.
+    let skipFirst = opts?.fromEnd === true
     let settled = false
     let pollTimer = 0
 
@@ -70,6 +76,7 @@ export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) =
       if (settled) return
       settled = true
       window.clearInterval(pollTimer)
+      window.clearInterval(repostTimer)
       window.clearTimeout(deadline)
       if (err) { t.close(); reject(err) } else resolve(t)
     }
@@ -91,12 +98,21 @@ export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) =
       t.attach(dc)
       dc.onopen = () => { onStatus?.('channel open'); finish() }
     }
+    let repostTimer = 0
     if (role === 'host') {
       armChannel(pc.createDataChannel('game', { ordered: true }))
       void pc.createOffer()
         .then((offer) => pc.setLocalDescription(offer))
         .then(() => sendSignal(code, role, { t: 'offer', sdp: pc.localDescription!.sdp } satisfies SignalPayload))
         .catch((e: Error) => finish(e))
+      // Re-post until answered: a late joiner (rejoin path) reads the
+      // mailbox from the end and would miss a one-shot offer. Once ICE
+      // gathering finishes, localDescription.sdp carries the candidates
+      // inline, so the repost alone is enough to connect.
+      repostTimer = window.setInterval(() => {
+        if (settled || pc.signalingState !== 'have-local-offer' || !pc.localDescription) return
+        void sendSignal(code, role, { t: 'offer', sdp: pc.localDescription.sdp } satisfies SignalPayload).catch(() => {})
+      }, 5000)
     } else {
       pc.ondatachannel = (e) => armChannel(e.channel)
     }
@@ -125,9 +141,10 @@ export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) =
       if (busy || settled) return
       busy = true
       try {
-        const { msgs } = await api<{ msgs: Array<{ from: NetRole; payload: SignalPayload }>; next: number }>(
+        const { msgs, next } = await api<{ msgs: Array<{ from: NetRole; payload: SignalPayload }>; next: number }>(
           `/api/rooms/${code}?since=${cursor}`,
         )
+        if (skipFirst) { skipFirst = false; cursor = next; return }
         for (const m of msgs) {
           if (settled) return
           const p = m.payload
@@ -172,7 +189,7 @@ export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) =
  * Runs BEFORE LockstepSession construction on both ends (the RTC and
  * Broadcast transports buffer anything that races the wiring).
  */
-export function helloAsHost(t: Transport, seedStr: string, matchLen: MatchLength, timeoutMs = 120_000): Promise<MatchTerms> {
+export function helloAsHost(t: Transport, seedStr: string, matchLen: MatchLength, timeoutMs = 120_000, tickOf: () => number = () => 0, side: Team = 'brit'): Promise<MatchTerms> {
   return new Promise<MatchTerms>((resolve, reject) => {
     const deadline = window.setTimeout(() => {
       t.onMessage = null
@@ -183,11 +200,13 @@ export function helloAsHost(t: Transport, seedStr: string, matchLen: MatchLength
       if (m.t !== 'hi') return
       // Echo the joiner's nonce: exactly one joiner pairs; a third tab in the
       // same BroadcastChannel room keeps beaconing and times out instead of
-      // silently corrupting a two-player battle.
-      t.send({ t: 'hello', seedStr, matchLen, hostSide: 'brit', nonce: m.nonce } satisfies NetMsg)
+      // silently corrupting a two-player battle. tick > 0 tells a rejoiner
+      // the battle is already running and it must fast-forward.
+      const tick = tickOf()
+      t.send({ t: 'hello', seedStr, matchLen, hostSide: side, nonce: m.nonce, tick } satisfies NetMsg)
       window.clearTimeout(deadline)
       t.onMessage = null
-      resolve({ transport: t, seedStr, matchLen, side: 'brit', isCreator: true })
+      resolve({ transport: t, seedStr, matchLen, side, isCreator: true, hostTick: tick })
     }
   })
 }
@@ -214,6 +233,7 @@ export function helloAsJoiner(t: Transport, timeoutMs = 120_000): Promise<MatchT
         matchLen: m.matchLen,
         side: m.hostSide === 'brit' ? 'german' : 'brit',
         isCreator: false,
+        hostTick: m.tick ?? 0,
       })
     }
     t.send({ t: 'hi', nonce } satisfies NetMsg)

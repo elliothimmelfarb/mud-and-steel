@@ -6,7 +6,7 @@
 import * as THREE from 'three'
 import type {
   BuildableId, CasualtyRecord, DefenceKindId, Difficulty, GameSettings,
-  TargetPriority, Team, Unit, UnitKindId, WavePlan,
+  Stance, TargetPriority, Team, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
   BUILD_ORDER, DEEDS, DEFENCE_DEFS, ECONOMY, PLACEMENT, RANKS,
@@ -49,9 +49,23 @@ import {
   type Cmd, type OrderId,
 } from '../sim/commands'
 import { FpsMode } from './fps'
-import { setViewmodelEmissive } from './weapons'
+import { setViewmodelEmissive, type FireParams } from './weapons'
 
 export type { OrderId } from '../sim/commands'
+
+/** A finished Big Push battle, portable: seed + envelope log IS the battle. */
+export interface ReplayRecord {
+  v: 1
+  seedStr: string
+  matchLen: import('../core/types').MatchLength
+  /** From-start AI persona to re-derive (SP), or null (MP — adopted-AI
+   *  envelopes are in the log). */
+  persona: import('../sim/ai').AiPersona | null
+  envs: import('../sim/commands').Envelope[]
+  /** The player embodied someone: first-person actions are not yet in the
+   *  command stream, so playback may diverge from the battle as fought. */
+  embodied?: boolean
+}
 
 export interface IntelData {
   wave: number
@@ -157,15 +171,52 @@ export class Game {
   net: LockstepSession | null = null
   /** Which commander this machine is. Always 'brit' outside multiplayer. */
   mySide: Team = 'brit'
+  /** main.ts hooks this to reopen the signaling room so the peer can rejoin. */
+  onNetPeerLost: (() => void) | null = null
+  /** Watching a recorded battle: commands are history, input is camera-only. */
+  replayMode = false
+  static readonly REPLAY_KEY = 'ms-war-diary'
+  /** The from-start AI persona of the CURRENT run (null in MP) — recorded
+   *  into the replay so playback re-derives the same AI from the seed. */
+  private runPersona: import('../sim/ai').AiPersona | null = null
   get theirSide(): Team { return this.mySide === 'brit' ? 'german' : 'brit' }
   seedStr = ''
   difficulty: Difficulty = 'front'
   private runRand: Rand = Math.random
   /** Local command sink. All player actions route through here. */
   private submit(cmds: Cmd[]): void {
+    if (this.replayMode) return // the war diary is already written
     if (this.net) this.net.submit(cmds)
     else this.runner?.submit('brit', cmds)
   }
+
+  /** FPS embodiment enters/leaves through the command stream (#41 item 2). */
+  possessCmd(unitId: number, soldierId: number): void {
+    this.embodiedThisRun = true
+    this.submit([{ t: 'possess', unitId, soldierId }])
+  }
+  releaseCmd(): void { this.submit([{ t: 'release' }]) }
+  /** FpsMode's predicted pose, at most once per tick (heat only for heat weapons). */
+  submitFpsPose(x: number, z: number, stance: Stance, facing: number, heat?: number, venting?: boolean): void {
+    const cmd: Extract<Cmd, { t: 'fpspose' }> = { t: 'fpspose', x, z, stance, facing }
+    if (heat !== undefined) { cmd.heat = heat; cmd.venting = venting }
+    this.submit([cmd])
+  }
+  /** One trigger pull. Presentation already played; the ordnance spawns at the boundary. */
+  submitFpsFire(p: FireParams): void {
+    this.submit([{
+      t: 'fpsfire', camPos: p.camPos, dir: p.dir, yaw: p.yaw, pitch: p.pitch,
+      ads: p.ads, moving: p.moving, ground: p.ground, muzzle: p.muzzle,
+    }])
+  }
+  /** A quantum of medic/sapper work — `amount` is seconds at the task. */
+  submitFpsTool(tool: 'heal' | 'parapet' | 'wire', targetId: number, amount: number): void {
+    this.submit([{ t: 'fpstool', tool, targetId, amount }])
+  }
+  /** True once the player embodied anyone this run. Since fpspose/fpsfire/
+   *  fpstool ride the command stream, embodied diaries replay bit-exactly —
+   *  the flag is now just diary metadata (embodied diaries grow ~30 cmds/s). */
+  embodiedThisRun = false
 
   /** Sim context (undefined before the first startRun, like the old field). */
   get ctx(): Ctx {
@@ -422,7 +473,7 @@ export class Game {
   // Run lifecycle
   // -------------------------------------------------------------------------
 
-  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; net?: { transport: Transport; side: Team; isCreator: boolean } }): void {
+  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; net?: { transport: Transport; side: Team; isCreator: boolean; catchUp?: boolean }; replay?: ReplayRecord }): void {
     this.seedStr = seedStr
     this.difficulty = difficulty
     // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
@@ -484,6 +535,7 @@ export class Game {
           onPeerLost: () => {
             if (this.theirSide === 'german') {
               this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn')
+              this.onNetPeerLost?.()
             } else {
               // No AI can command Britain yet (#41): the German human wins
               // by walkover. The peer is gone, so ending locally is safe.
@@ -501,9 +553,16 @@ export class Game {
       this.runner = this.net.runner
     } else {
       this.mySide = 'brit'
-      this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: mode === 'bigpush' ? (bigpush?.persona ?? 'methodical') : null })
+      // Replays re-derive the from-start AI from the seed, so the persona
+      // must match the recording exactly — including null for MP diaries
+      // (their adopted-AI envelopes travel in the log instead).
+      const persona = mode !== 'bigpush' ? null
+        : bigpush?.replay ? bigpush.replay.persona
+        : (bigpush?.persona ?? 'methodical')
+      this.runPersona = persona
+      this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: persona })
     }
-    this.leashZ = WORLD.frontTrenchZ - 12
+    this.leashZ = this.mySide === 'german' ? -(WORLD.frontTrenchZ - 12) : WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
     this.terrainMesh = new TerrainMesh(this.terrain)
@@ -526,6 +585,7 @@ export class Game {
     this.subscribeEvents()
     this.running = true
     this.paused = false
+    this.embodiedThisRun = false
     this.speed = 1
     this.selectedUnitId = -1
     this.buildSelection = null
@@ -544,21 +604,41 @@ export class Game {
     this.applySettings(this.settings)
     // Plan the first wave (fires wavePrepared → intel paper via the handlers above).
     this.runner!.begin()
+    // Rejoining a battle already in progress: ask the survivor for the log
+    // and fast-forward (the same rebuild path desync recovery uses).
+    if (this.net && netCfg?.catchUp) {
+      this.hud?.toast('Rejoining the battle — the runners are bringing the war diary…', 'info')
+      this.net.requestLog()
+    }
+    // War diary playback: the whole battle is in the envelopes. Speed keys
+    // work; commands are refused at the submit() door.
+    this.replayMode = Boolean(mode === 'bigpush' && bigpush?.replay)
+    if (mode === 'bigpush' && bigpush?.replay) {
+      for (const env of bigpush.replay.envs) {
+        this.runner!.enqueue(JSON.parse(JSON.stringify(env)) as import('../sim/commands').Envelope)
+      }
+      this.hud?.toast('WAR DIARY — replaying the last battle. Speed keys work; the orders are history.', 'info')
+    }
+  }
+
+  startReplay(rec: ReplayRecord): void {
+    this.startRun(rec.seedStr, 'front', null, 'bigpush', { matchLen: rec.matchLen, replay: rec })
   }
 
   private subscribeEvents(): void {
     const ev = this.events
     ev.on('soldierDied', (p) => {
       const cites = deedCitations(p.deeds)
-      const rec: CasualtyRecord = {
+      // The sim already recorded him (combat.ts pushes the roster entry —
+      // #41 item 3); we only write the epitaph, which is presentation.
+      const rec: CasualtyRecord = this.ctx.s.casualties[this.ctx.s.casualties.length - 1] ?? {
         name: { first: p.name.split(' ')[0] ?? '', last: p.name.split(' ')[1] ?? '' },
         rank: p.rank, kind: p.kind as UnitKindId, wave: p.wave,
-        epitaph: makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave, {
-          deeds: cites, wavesServed: p.wavesServed,
-        }),
-        deeds: p.deeds, wavesServed: p.wavesServed,
+        epitaph: '', deeds: p.deeds, wavesServed: p.wavesServed,
       }
-      this.ctx.s.casualties.push(rec)
+      rec.epitaph = makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave, {
+        deeds: cites, wavesServed: p.wavesServed,
+      })
       this.waveCasualties.push(rec)
       // A long-serving or decorated man's fall is marked for the player.
       if (p.wavesServed >= 4 || p.deeds !== 0) {
@@ -646,14 +726,32 @@ export class Game {
       const s = this.ctx.s
       this.modalOpen = true
       this.running = false
+      // Every finished Big Push battle leaves a war diary: seed + envelope
+      // log is the WHOLE battle (the replay contract). MP diaries carry the
+      // adopted-AI envelopes in the log, so persona stays null for them.
+      if (s.mode === 'bigpush' && !this.replayMode && this.runner) {
+        try {
+          const rec: ReplayRecord = {
+            v: 1, seedStr: this.seedStr, matchLen: s.matchLen,
+            persona: this.net ? null : this.runPersona,
+            envs: this.runner.log,
+            embodied: this.embodiedThisRun || undefined,
+          }
+          localStorage.setItem(Game.REPLAY_KEY, JSON.stringify(rec))
+        } catch { /* storage full or blocked — the diary is a luxury */ }
+      }
       if (s.mode === 'classic') {
         submitScore(s.stats.score)
         clearRun()
       } else if (p.draw) {
         this.hud?.toast('A draw — both armies spent, the line where it began.', 'warn')
       }
-      this.audio.play(p.victory ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
-      this.hud?.gameOver(p.victory, s.mode === 'classic' && p.victory)
+      // Verdicts are recorded brit-POV in the sim; present them from the
+      // seat this machine actually occupies (the German human's win is
+      // Britain's defeat). Draws stay draws.
+      const won = p.draw ? false : (this.mySide === 'german' ? !p.victory : p.victory)
+      this.audio.play(won ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
+      this.hud?.gameOver(won, s.mode === 'classic' && won)
     })
     ev.on('thunder', () => this.audio.play('thunder', { gain: 0.7 }))
     ev.on('orderIssued', (p) => this.onOrderIssued(p.id as OrderId))
@@ -1125,9 +1223,11 @@ export class Game {
 
   /** Step into the boots of the selected unit's senior surviving man. */
   possessSelected(): void {
+    if (this.replayMode) return // you can watch the war, not refight it
     if (this.net) {
-      // Possession mutates ctx.possessedSoldierId OUTSIDE the command stream —
-      // a determinism breaker until it becomes a Cmd (issue #41 / M6).
+      // Embodiment now rides the command stream (fpspose/fpsfire/fpstool), so
+      // MP possession is determinism-SAFE — it stays off only until someone
+      // playtests the 6-tick input delay on the possessed soldier's sim body.
       this.hud?.toast('No embodiment in multiplayer yet — command from the map.', 'info')
       return
     }
@@ -1327,14 +1427,25 @@ export class Game {
 
     // The Big Push camera leash: follow your men forward within ~0.5 s;
     // ease back over ~3 s when the forward men die (never yank the view).
-    if (s.mode === 'bigpush' && this.mySide === 'brit' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
-      const want = s.advance.brit - 12
-      const tau = want < this.leashZ ? 0.15 : 1.0
-      this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
-      this.rig.leashMinZ = this.leashZ
+    if (s.mode === 'bigpush' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active && !this.replayMode) {
+      if (this.mySide === 'brit') {
+        const want = s.advance.brit - 12
+        const tau = want < this.leashZ ? 0.15 : 1.0
+        this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
+        this.rig.leashMinZ = this.leashZ
+        this.rig.leashMaxZ = null
+      } else {
+        // Mirrored for the German commander: his men advance southward
+        // (decreasing advance.german), so his leash is a MAX-z bound.
+        const want = s.advance.german + 12
+        const tau = want > this.leashZ ? 0.15 : 1.0
+        this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
+        this.rig.leashMaxZ = this.leashZ
+        this.rig.leashMinZ = null
+      }
     } else {
-      // German commander (MP): free camera v1 — his leash mirrors in M6.
       this.rig.leashMinZ = null
+      this.rig.leashMaxZ = null
     }
 
     this.render(dt)
@@ -1465,7 +1576,7 @@ export class Game {
       if (u.disbanded) continue
       for (const c of u.crew) {
         if (c.hp <= 0) continue
-        if (c.id === this.ctx.possessedSoldierId) continue // you can't see your own body
+        if (c.id === this.ctx.s.possessedSoldierId) continue // you can't see your own body
         pose.x = c.pos.x; pose.z = c.pos.z
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
@@ -1523,7 +1634,7 @@ export class Game {
     // person — the camera sits inside it, so its full-size mesh would wall the
     // view and hide the first-person viewmodel (see syncUnits).
     this.scenery.syncDefences(s.defences, w.night)
-    this.scenery.syncUnits(s.units, this.fpsMode.active ? this.ctx.possessedUnitId : -1)
+    this.scenery.syncUnits(s.units, this.fpsMode.active ? this.ctx.s.possessedUnitId : -1)
     this.scenery.syncVehicles(s.vehicles)
 
     // Burning wrecks.

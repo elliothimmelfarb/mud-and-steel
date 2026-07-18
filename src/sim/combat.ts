@@ -171,7 +171,7 @@ export function damageSoldier(
   // above still fire his hurt feedback) but is floored at a sliver so killSoldier
   // never runs — no 'dead' stance soft-lock, no stray corpse. FpsMode restores
   // him to full next frame. Scoped tightly to the possessed man; nil in real play.
-  if (ctx.fpsInvincible && target.id === ctx.possessedSoldierId) {
+  if (ctx.fpsInvincible && target.id === ctx.s.possessedSoldierId) {
     if (target.hp < 1) target.hp = 1
     return
   }
@@ -252,6 +252,17 @@ export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooter
         wavesServed = u.wavesServed
         break
       }
+    }
+    // The casualty roster is SIM state (#41 item 3): headless runs, replays
+    // and lockstep peers all record the same fallen, so the hospital-return
+    // splice in endWave behaves identically everywhere. The epitaph is
+    // presentation — the game layer decorates the record after the tick.
+    if (kind) {
+      s.casualties.push({
+        name: { first: target.name.first, last: target.name.last },
+        rank, kind: kind as import('../core/types').UnitKindId,
+        wave: s.wave, epitaph: '', deeds, wavesServed,
+      })
     }
     ctx.events.emit('soldierDied', {
       name: `${target.name.first} ${target.name.last}`,

@@ -85,7 +85,7 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
     soldierUpkeep(ctx, c, dt, officerNear, medicNear, u.vet)
     c.masked = s.masksOn
     moraleSum += c.morale
-    if (c.id === ctx.possessedSoldierId) continue // the player poses himself
+    if (c.id === ctx.s.possessedSoldierId) continue // the player poses himself
     const inTrench = ctx.terrain.trenchAt(c.pos.x, c.pos.z) > 0.45
     combatStance(c, inTrench, takingCover)
     c.animPhase += dt * 7
@@ -136,7 +136,7 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   } else if (u.fallenBack) {
     // Scramble toward the support line.
     for (const c of u.crew) {
-      if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+      if (c.hp <= 0 || c.id === ctx.s.possessedSoldierId) continue
       const tz = WORLD.supportTrenchZ + 6
       const dx = homeX - c.pos.x, dz = tz - c.pos.z
       const d = Math.hypot(dx, dz)
@@ -156,7 +156,7 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
   // The player has this unit's weapon in hand — it does not fire, heat, heal
   // or repair on its own. His crew stay put and load; every trigger-pull,
   // bandage and spanner-turn is now the player's. Crew upkeep already ran.
-  if (u.id === ctx.possessedUnitId) return
+  if (u.id === ctx.s.possessedUnitId) return
 
   // -- weapon heat ------------------------------------------------------------
   if (u.kind === 'vickers') {
@@ -173,7 +173,7 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
 
   // -- role behaviors -----------------------------------------------------------
   // Never auto-fire the man the player is embodying — his trigger, his rifle.
-  const shooter = u.crew.find((c) => c.hp > 0 && c.id !== ctx.possessedSoldierId)
+  const shooter = u.crew.find((c) => c.hp > 0 && c.id !== ctx.s.possessedSoldierId)
   if (!shooter) return
   if (shooter.cooldown > 0) shooter.cooldown -= dt
   if (takingCover) return // heads down
@@ -305,7 +305,7 @@ function marchTick(ctx: Ctx, u: Unit, dt: number): void {
   let stillMarching = false
   for (let i = 0; i < u.crew.length; i++) {
     const c = u.crew[i]
-    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+    if (c.hp <= 0 || c.id === ctx.s.possessedSoldierId) continue
     if (m.idx[i] >= m.path.length) continue
     stillMarching = true
     // Under fire: hit the dirt; the render's prone stance IS the scatter read.
@@ -335,7 +335,7 @@ function marchTick(ctx: Ctx, u: Unit, dt: number): void {
 function formUp(ctx: Ctx, u: Unit, homeX: number, homeZ: number, dt: number): void {
   for (let i = 0; i < u.crew.length; i++) {
     const c = u.crew[i]
-    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+    if (c.hp <= 0 || c.id === ctx.s.possessedSoldierId) continue
     const ox = (i % 2) * 1.1 - 0.55 * (u.crew.length > 1 ? 1 : 0)
     const oz = Math.floor(i / 2) * 1.0
     const tx = homeX + ox, tz = homeZ + oz
@@ -352,7 +352,7 @@ function formUp(ctx: Ctx, u: Unit, homeX: number, homeZ: number, dt: number): vo
 function chargeMove(ctx: Ctx, u: Unit, dt: number): void {
   // Over the top: run at the nearest enemy within 40m north, melee on contact.
   for (const c of u.crew) {
-    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+    if (c.hp <= 0 || c.id === ctx.s.possessedSoldierId) continue
     let best: Enemy | null = null
     let bestD = 42 * 42
     for (const e of ctx.s.enemies) {
