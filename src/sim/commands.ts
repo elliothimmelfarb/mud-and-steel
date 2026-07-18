@@ -333,6 +333,13 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
   const s = ctx.s
   if (s.outcome !== 'ongoing' && cmd.t !== 'continueendless') return
 
+  // The classic command surface belongs to the BRITISH commander (v1: the
+  // host side). A german envelope carrying these is dropped identically on
+  // every client.
+  const britOnly = cmd.t === 'buy' || cmd.t === 'sell' || cmd.t === 'order' || cmd.t === 'upgrade' ||
+    cmd.t === 'targeting' || cmd.t === 'callwave' || cmd.t === 'beginwave' || cmd.t === 'continueendless'
+  if (britOnly && side !== 'brit') return
+
   switch (cmd.t) {
     case 'buy': {
       const cost = costOf(ctx, cmd.kind)

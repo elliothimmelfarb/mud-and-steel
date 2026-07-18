@@ -379,6 +379,27 @@ export class Terrain implements TerrainLike {
     this.onDirty?.({ minCol, minRow, maxCol, maxRow })
   }
 
+  /**
+   * Adopt another terrain's exact surface (lockstep resync/rejoin): buffer
+   * copies into THIS instance so the mesh and every held reference stay
+   * valid. Both instances must share seed + layout (same dimensions).
+   */
+  copyFrom(other: Terrain): void {
+    this.heights.set(other.heights)
+    this.base.set(other.base)
+    this.churn.set(other.churn)
+    this.churnVis.set(other.churnVis)
+    this.trench.set(other.trench)
+    this.water.set(other.water)
+    this.ao.set(other.ao)
+    this.craterOps.length = 0
+    this.craterOps.push(...other.craterOps)
+    this.benchGuard = new Map(other.benchGuard)
+    this.wetness = other.wetness
+    this.wetnessApplied = other.wetnessApplied
+    this.onDirty?.({ minCol: 0, minRow: 0, maxCol: this.cols, maxRow: this.rows })
+  }
+
   // -- water ------------------------------------------------------------------
 
   setWetness(w: number): void {
