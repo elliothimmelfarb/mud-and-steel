@@ -12,17 +12,14 @@ import { spawnTankShell } from './projectiles'
 
 const _dir = { x: 0, z: 0 }
 
-/** Phantom gunners so vehicle MGs can reuse the small-arms pipeline. */
-const gunners = new Map<number, Soldier>()
-
 export function spawnVehicle(ctx: Ctx, kind: VehicleKindId, x: number, z: number): Vehicle {
   const def = VEHICLE_DEFS[kind]
   const team = kind === 'friendlytank' ? 'brit' : 'german'
+  const id = ctx.s.nextId++
+  const pos = { x, z }
+  const facing = team === 'german' ? Math.PI : 0
   const v: Vehicle = {
-    id: ctx.s.nextId++,
-    kind, team,
-    pos: { x, z },
-    facing: team === 'german' ? Math.PI : 0,
+    id, kind, team, pos, facing,
     hp: def.hp, maxHp: def.hp,
     armour: def.armour,
     speed: def.speed,
@@ -30,13 +27,14 @@ export function spawnVehicle(ctx: Ctx, kind: VehicleKindId, x: number, z: number
     cooldownMain: 2 + ctx.rand() * 3,
     cooldownMG: 1 + ctx.rand() * 2,
     dead: false, burnT: 0,
+    // Phantom gunner (small-arms pipeline); pos aliases the hull's.
+    gunner: {
+      id: -id, team, pos, facing, hp: 1, maxHp: 1,
+      stance: 'stand', suppression: 0, morale: 1, masked: true, gasExposure: 0,
+      animPhase: 0, cooldown: 0, name: { first: '', last: '' }, kills: 0,
+    },
   }
   ctx.s.vehicles.push(v)
-  gunners.set(v.id, {
-    id: -v.id, team, pos: v.pos, facing: v.facing, hp: 1, maxHp: 1,
-    stance: 'stand', suppression: 0, morale: 1, masked: true, gasExposure: 0,
-    animPhase: 0, cooldown: 0, name: { first: '', last: '' }, kills: 0,
-  })
   if (kind === 'etank') ctx.events.emit('tankSighted', {})
   return v
 }
@@ -49,7 +47,6 @@ export function updateVehicles(ctx: Ctx, dt: number): void {
     if (v.dead) {
       v.burnT -= dt
       if (v.burnT > -300) { s.vehicles[w++] = v } // wrecks persist as scenery
-      else gunners.delete(v.id)
       continue
     }
     updateVehicle(ctx, v, dt)
@@ -93,8 +90,7 @@ function updateVehicle(ctx: Ctx, v: Vehicle, dt: number): void {
   }
 
   // Weapons.
-  const gunner = gunners.get(v.id)
-  if (!gunner) return
+  const gunner = v.gunner
   gunner.pos = v.pos
   gunner.facing = v.facing
 

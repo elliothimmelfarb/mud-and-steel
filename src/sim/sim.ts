@@ -4,7 +4,8 @@
  * brute-force queries cheap at 30 Hz and the code honest.
  */
 import type {
-  Bullet, CasualtyRecord, Defence, DirectorMemory, Enemy, FpsFeedbackEvent, FxEvent, GamePhase, GasCloud,
+  ActiveBarrage, Bullet, CasualtyRecord, CreepingBarrage, Defence, Difficulty, DirectorMemory, Enemy,
+  FpsFeedbackEvent, FxEvent, GamePhase, GasCloud, MatchOutcome,
   Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection,
   Unit, Vehicle, WavePlan,
 } from '../core/types'
@@ -35,12 +36,26 @@ export interface ActiveOrders {
 export interface SimState {
   seed: number
   time: number
+  /** Fixed 30 Hz tick counter. Commands are stamped with and applied at ticks. */
+  tick: number
   wave: number
   phase: GamePhase
+  /** Run configuration; sim data so twin sims and replays agree. */
+  difficulty: Difficulty
+  endless: boolean
+  outcome: MatchOutcome
   buildTimer: number
   req: number
   breach: number            // 0..COMBAT.breachMax; 0 = the line is broken
   masksOn: boolean
+  /** Requisition banked by calling the wave early; paid out at wave end. */
+  earlyCallBonus: number
+  /**
+   * Farthest-forward living soldier per side along the advance axis
+   * (brit advances toward -z so this is a min; german a max). Floors at each
+   * side's own front-trench line. Feeds the Big Push camera leash.
+   */
+  advance: { brit: number; german: number }
 
   units: Unit[]
   enemies: Enemy[]
@@ -69,6 +84,17 @@ export interface SimState {
   planCursor: number        // next spawn index
   planBarrageCursor: number
   waveStartTime: number
+
+  /** Active enemy barrage shoots + the player's creeping barrage (was module
+   *  state in barrage.ts — moved here so saves/twin-sims see it). */
+  barrages: ActiveBarrage[]
+  creeping: CreepingBarrage | null
+  /** Gas-gong pacing (was module state in gas.ts). */
+  gasAlarmCooldown: number
+  /** Terrain-wetness push cadence (wetness changes mud → sim-affecting). */
+  wetnessTimer: number
+  /** Last sim time the flow fields were rebuilt (rebuild cadence is sim). */
+  lastFlowRebuild: number
 
   nextId: number
 }

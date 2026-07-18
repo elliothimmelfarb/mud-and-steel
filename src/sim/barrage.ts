@@ -2,38 +2,19 @@
  * Artillery beyond the horizon: enemy preparatory barrages (with warning —
  * listen for the whistles), gas shoots, and your own creeping barrage that
  * walks a curtain of shellfire north across no-man's land.
+ *
+ * All barrage state lives on SimState (s.barrages / s.creeping) — never at
+ * module level — so saves, twin sims and lockstep replays all see it.
  */
 import { WORLD } from '../core/config'
 import { gauss } from '../core/rng'
 import { snd, type Ctx } from './sim'
 import { spawnBarrageShell } from './projectiles'
 
-interface ActiveBarrage {
-  x: number
-  z: number
-  shellsLeft: number
-  gas: boolean
-  t: number            // <0 during the warning
-  interval: number
-}
-
-interface CreepingBarrage {
-  z: number
-  t: number
-  volleys: number
-}
-
-const active: ActiveBarrage[] = []
-let creeping: CreepingBarrage | null = null
-
-export function resetBarrages(): void {
-  active.length = 0
-  creeping = null
-}
-
 export function updateBarrages(ctx: Ctx, dt: number, elapsed: number): void {
   const { s } = ctx
   const plan = s.plan
+  const active = s.barrages
 
   // Kick off scheduled enemy barrages.
   if (plan) {
@@ -61,6 +42,7 @@ export function updateBarrages(ctx: Ctx, dt: number, elapsed: number): void {
   }
 
   // Creeping barrage (player-owned).
+  const creeping = s.creeping
   if (creeping) {
     creeping.t -= dt
     if (creeping.t <= 0) {
@@ -71,21 +53,21 @@ export function updateBarrages(ctx: Ctx, dt: number, elapsed: number): void {
         spawnBarrageShell(ctx, 'brit', sx, creeping.z + gauss(ctx.rand, 0, 4), 65, false)
       }
       creeping.z -= 4.6
-      if (creeping.z < -150) creeping = null
+      if (creeping.z < -150) s.creeping = null
     }
   }
 }
 
 export function startCreepingBarrage(ctx: Ctx): void {
-  creeping = { z: 52, t: 0.2, volleys: 0 }
+  ctx.s.creeping = { z: 52, t: 0.2, volleys: 0 }
   ctx.events.emit('toast', { text: 'Creeping barrage — walking north. Mind your wire.', kind: 'info' })
   snd(ctx.s, { name: 'whistle_attack', x: 0, y: 2, z: 100, gain: 0.8 })
 }
 
-export function barrageIncoming(): boolean {
-  return active.some((b) => b.t < 0) // warning phase
+export function barrageIncoming(ctx: Ctx): boolean {
+  return ctx.s.barrages.some((b) => b.t < 0) // warning phase
 }
 
-export function anyBarrageActive(): boolean {
-  return active.length > 0 || creeping !== null
+export function anyBarrageActive(ctx: Ctx): boolean {
+  return ctx.s.barrages.length > 0 || ctx.s.creeping !== null
 }

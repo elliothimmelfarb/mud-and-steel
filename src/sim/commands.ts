@@ -1,0 +1,371 @@
+/**
+ * The command spine. Every act of command — buying a unit, issuing an order,
+ * selling, upgrading — is a serialisable, tick-stamped `Cmd` consumed by the
+ * sim ONLY at tick boundaries (see runner.ts). The local player, the AI
+ * commander and a remote lockstep peer are all just sources of these.
+ *
+ * Everything here must stay deterministic: same state + same command → same
+ * result, with randomness drawn only from `ctx.rand`. Application re-validates
+ * every command (a scheduled command can arrive after the state that justified
+ * it has changed) and drops invalid ones silently and identically on all
+ * clients.
+ */
+import type { BuildableId, DefenceKindId, Team, TargetPriority, Unit, UnitKindId } from '../core/types'
+import {
+  DEFENCE_DEFS, ECONOMY, ORDER_DEFS, PLACEMENT, TRENCH, UNIT_DEFS, UPGRADE_DEFS,
+  UPGRADE_TIER_WAVE, WIRE_SEGMENT_LEN, WORLD,
+} from '../core/config'
+import { forkRand } from '../core/rng'
+import { makeSoldierName } from '../core/flavor'
+import { type Ctx, type SimState } from './sim'
+import { projectToFireStep, sectionAt } from './trench'
+import { spawnFlare } from './projectiles'
+import { spawnVehicle } from './vehicles'
+import { startCreepingBarrage } from './barrage'
+
+export type OrderId = keyof typeof ORDER_DEFS
+
+/**
+ * Command protocol v1 (spec §4) plus the classic-mode actions. The Big Push
+ * order commands (assault/covering/recall/consolidate) are typed now so the
+ * protocol is stable, and become live in M3.
+ */
+export type Cmd =
+  | { t: 'buy'; kind: BuildableId; x: number; z: number; angle?: number }
+  | { t: 'sell'; unitId: number }
+  | { t: 'order'; id: OrderId; x?: number; z?: number }
+  | { t: 'upgrade'; id: string }
+  | { t: 'targeting'; unitId: number; p: TargetPriority }
+  | { t: 'callwave' }
+  | { t: 'beginwave' }
+  | { t: 'continueendless' }
+  | { t: 'assault'; sections: number[]; targetSection: number }
+  | { t: 'covering'; sections: number[]; targetSection: number }
+  | { t: 'recall'; groupId: number }
+  | { t: 'consolidate'; section: number }
+
+export interface Envelope {
+  tick: number
+  side: Team
+  seq: number
+  cmds: Cmd[]
+}
+
+/** What a command needs from its host besides the sim context. */
+export interface CmdHost {
+  ctx: Ctx
+  /** Advance the wave lifecycle (continueendless re-arms the next wave). */
+  prepareNextWave(): void
+}
+
+// ---------------------------------------------------------------------------
+// Validation helpers — shared by the sim (authoritative, at apply time) and
+// the UI (advisory, for the placement ghost / button states).
+// ---------------------------------------------------------------------------
+
+export function costOf(ctx: Ctx, id: BuildableId): number {
+  const base = (UNIT_DEFS as Record<string, { cost: number }>)[id]?.cost ?? DEFENCE_DEFS[id as DefenceKindId].cost
+  return Math.round(base * ctx.mods.costMult)
+}
+
+export function isUnitKind(id: BuildableId): id is UnitKindId {
+  return id in UNIT_DEFS
+}
+
+/** Distance from (x,z) to the nearest live unit's post (Infinity when none). */
+export function unitClearance(s: SimState, x: number, z: number): number {
+  let best = Infinity
+  for (const u of s.units) {
+    if (u.disbanded) continue
+    const d = (u.pos.x - x) ** 2 + (u.pos.z - z) ** 2
+    if (d < best) best = d
+  }
+  return Math.sqrt(best)
+}
+
+/** Open ground behind the front line, off the trenches, clear of other units. */
+export function padSpotValid(ctx: Ctx, x: number, z: number): boolean {
+  if (Math.abs(x) > WORLD.width / 2 - 6) return false
+  if (z < WORLD.frontTrenchZ + PLACEMENT.padMarginZ || z > WORLD.depth / 2 - 10) return false
+  if (unitClearance(ctx.s, x, z) < PLACEMENT.padSpacing) return false
+  // The whole pad must be open ground — the dig skips trench cells, so a
+  // gun straddling a corridor would hang over the void.
+  if (ctx.terrain.trenchAt(x, z) > PLACEMENT.padMaxTrench) return false
+  const r = PLACEMENT.padRadius * 0.8
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2
+    if (ctx.terrain.trenchAt(x + Math.cos(a) * r, z + Math.sin(a) * r) > PLACEMENT.padMaxTrench) return false
+  }
+  return true
+}
+
+export function fieldBuildAllowed(s: SimState): boolean {
+  return s.phase !== 'assault'
+}
+
+/**
+ * Resolve a requested placement to a snapped position, or null when invalid.
+ * This is the single validity rule for both the ghost and the applied command.
+ */
+export function resolvePlacement(ctx: Ctx, id: BuildableId, x: number, z: number): { x: number; z: number } | null {
+  const s = ctx.s
+  const placement = isUnitKind(id) ? UNIT_DEFS[id].placement : DEFENCE_DEFS[id as DefenceKindId].placement
+
+  if (id === 'sandbags') {
+    const sec = sectionAt(s.sections, x, z)
+    if (!sec || sec.captured) return null
+    const gx = sec.mid.x, gz = sec.mid.z
+    if (s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)) return null
+    return { x: gx, z: gz }
+  }
+  if (placement === 'trench') {
+    const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist)
+    if (!post) return null
+    if (unitClearance(s, post.x, post.z) < PLACEMENT.trenchSpacing) return null
+    return { x: post.x, z: post.z }
+  }
+  if (placement === 'pad') {
+    return padSpotValid(ctx, x, z) ? { x, z } : null
+  }
+  // Field placement: forward of the front line, not in a trench, build phase only.
+  const zMin = id === 'flarepost' ? 20 : -60
+  const zMax = WORLD.frontTrenchZ - 5
+  const ok = fieldBuildAllowed(s) &&
+    z > zMin && z < zMax &&
+    Math.abs(x) < WORLD.width / 2 - 6 &&
+    ctx.terrain.trenchAt(x, z) < 0.25
+  return ok ? { x, z } : null
+}
+
+export function orderReady(s: SimState, id: OrderId): boolean {
+  const def = ORDER_DEFS[id]
+  if (def.needsUpgrade && !s.upgrades.has(def.needsUpgrade)) return false
+  if (id === 'masks') return true
+  const cd = s.orders.cooldowns[id as keyof typeof s.orders.cooldowns]
+  return cd <= 0 && s.req >= def.cost
+}
+
+export function upgradeAvailable(s: SimState, id: string): 'owned' | 'locked' | 'unaffordable' | 'buyable' {
+  const def = UPGRADE_DEFS.find((u) => u.id === id)
+  if (!def) return 'locked'
+  if (s.upgrades.has(id)) return 'owned'
+  if (s.wave < UPGRADE_TIER_WAVE[def.tier]) return 'locked'
+  if (def.requires && !s.upgrades.has(def.requires)) return 'locked'
+  if (s.req < def.cost) return 'unaffordable'
+  return 'buyable'
+}
+
+// ---------------------------------------------------------------------------
+// Spawning (command-driven; all randomness from ctx.rand)
+// ---------------------------------------------------------------------------
+
+export function createUnit(ctx: Ctx, kind: UnitKindId, x: number, z: number, announce: boolean): Unit {
+  const s = ctx.s
+  const def = UNIT_DEFS[kind]
+  const u: Unit = {
+    id: s.nextId++, kind, pos: { x, z },
+    crew: [], heat: 0, venting: false, ammo: kind === 'lewis' ? 6 : -1,
+    xp: 0, vet: 0, deeds: 0, wavesServed: 0,
+    targeting: def.targeting, fallenBack: false, disbanded: false,
+  }
+  const hpMult = def.placement === 'pad' ? ctx.mods.emplacementHp : 1
+  for (let i = 0; i < def.crew; i++) {
+    u.crew.push({
+      id: s.nextId++, team: 'brit',
+      pos: { x: x + (i % 2) * 1.1 - 0.5, z: z + Math.floor(i / 2) },
+      facing: 0, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
+      stance: 'stand', suppression: 0, morale: 1, masked: s.masksOn, gasExposure: 0,
+      animPhase: ctx.rand() * 10, cooldown: ctx.rand(),
+      name: makeSoldierName(ctx.rand), kills: 0,
+    })
+  }
+  s.units.push(u)
+  if (announce) ctx.events.emit('unitPlaced', { unitId: u.id })
+  return u
+}
+
+export function createDefence(ctx: Ctx, kind: DefenceKindId, x: number, z: number, angle: number): void {
+  const s = ctx.s
+  const def = DEFENCE_DEFS[kind]
+  const hp = kind === 'flarepost' ? 40 : def.hp
+  s.defences.push({
+    id: s.nextId++, kind, pos: { x, z }, hp: Math.max(1, hp), maxHp: Math.max(1, hp),
+    wear: 0, active: false, angle: kind === 'wire' ? angle : 0,
+  })
+  if (kind === 'sandbags') {
+    const sec = sectionAt(s.sections, x, z)
+    if (sec) {
+      sec.parapetMax += 80 * ctx.mods.parapetMult
+      sec.parapetHp += 80 * ctx.mods.parapetMult
+    }
+  }
+}
+
+/**
+ * The sector has been fought over for two years — no front line ever stood
+ * behind bare grass. Two staggered rows of WORN wire (reduced hp, high wear)
+ * front the fire trench, with sally-port gaps on the communication-trench
+ * axes plus a couple of random blast gaps.
+ */
+export function placeStartingWire(s: SimState): void {
+  const rand = forkRand(s.seed, 'wire0')
+  const gaps: number[] = [...TRENCH.commTrenchXs]
+  const nExtra = 2 + (rand() < 0.5 ? 1 : 0)
+  for (let i = 0; i < nExtra; i++) gaps.push((rand() - 0.5) * 2 * (TRENCH.frontSpanX - 20))
+  for (const row of [0, 1]) {
+    const z0 = WORLD.frontTrenchZ - 10.5 - row * 3.5
+    for (let x = -TRENCH.frontSpanX + 4; x <= TRENCH.frontSpanX - 4; x += WIRE_SEGMENT_LEN) {
+      const wx = x + (row ? WIRE_SEGMENT_LEN / 2 : 0)
+      if (gaps.some((g) => Math.abs(wx - g) < 4.5)) continue
+      const hp = Math.round(DEFENCE_DEFS.wire.hp * (0.35 + rand() * 0.2))
+      s.defences.push({
+        id: s.nextId++, kind: 'wire',
+        pos: { x: wx, z: z0 + (rand() - 0.5) * 1.6 },
+        hp, maxHp: hp, wear: 0.35 + rand() * 0.35, active: false,
+        angle: (rand() - 0.5) * 0.15,
+      })
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Application — sim mutations only; presentation reacts via the event bus.
+// ---------------------------------------------------------------------------
+
+export function applyEnvelope(host: CmdHost, env: Envelope): void {
+  for (const cmd of env.cmds) applyCmd(host, env.side, cmd)
+}
+
+export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
+  const ctx = host.ctx
+  const s = ctx.s
+  if (s.outcome !== 'ongoing' && cmd.t !== 'continueendless') return
+
+  switch (cmd.t) {
+    case 'buy': {
+      const cost = costOf(ctx, cmd.kind)
+      if (s.req < cost) return
+      const spot = resolvePlacement(ctx, cmd.kind, cmd.x, cmd.z)
+      if (!spot) return
+      if (isUnitKind(cmd.kind)) {
+        // An emplacement crew digs in: level a pad under the gun first so it
+        // sits true (recorded in the ops history — saves replay the dig).
+        if (UNIT_DEFS[cmd.kind].placement === 'pad') {
+          ctx.terrain.digPad(spot.x, spot.z, PLACEMENT.padRadius)
+        }
+        createUnit(ctx, cmd.kind, spot.x, spot.z, true)
+      } else {
+        createDefence(ctx, cmd.kind as DefenceKindId, spot.x, spot.z, cmd.angle ?? 0)
+      }
+      s.req -= cost
+      ctx.events.emit('reqChanged', { req: s.req })
+      ctx.flowDirty = true
+      break
+    }
+
+    case 'sell': {
+      const u = s.units.find((x) => x.id === cmd.unitId && !x.disbanded)
+      if (!u) return
+      u.disbanded = true
+      s.req += Math.round(costOf(ctx, u.kind) * ECONOMY.sellRefund)
+      ctx.events.emit('reqChanged', { req: s.req })
+      break
+    }
+
+    case 'targeting': {
+      const u = s.units.find((x) => x.id === cmd.unitId)
+      if (u) u.targeting = cmd.p
+      break
+    }
+
+    case 'order': {
+      if (!orderReady(s, cmd.id)) return
+      const def = ORDER_DEFS[cmd.id]
+      s.req -= def.cost
+      switch (cmd.id) {
+        case 'takecover':
+          s.orders.coverT = def.duration
+          s.orders.cooldowns.takecover = def.cooldown
+          break
+        case 'rapidfire':
+          s.orders.rapidT = def.duration
+          s.orders.cooldowns.rapidfire = def.cooldown
+          break
+        case 'bayonets':
+          s.orders.bayonetT = def.duration
+          s.orders.cooldowns.bayonets = def.cooldown
+          break
+        case 'masks':
+          s.masksOn = !s.masksOn
+          break
+        case 'flare': {
+          s.orders.cooldowns.flare = def.cooldown
+          const x = cmd.x ?? 0
+          const z = Math.min(60, Math.max(-40, (cmd.z ?? 0) - 60))
+          spawnFlare(ctx, x, z)
+          break
+        }
+        case 'barrage':
+          s.orders.cooldowns.barrage = def.cooldown
+          startCreepingBarrage(ctx)
+          break
+        case 'marktank':
+          s.orders.cooldowns.marktank = def.cooldown
+          spawnVehicle(ctx, 'friendlytank', (ctx.rand() - 0.5) * 60, WORLD.supportTrenchZ + 25)
+          break
+      }
+      ctx.events.emit('orderIssued', { id: cmd.id, side })
+      ctx.events.emit('reqChanged', { req: s.req })
+      break
+    }
+
+    case 'upgrade': {
+      if (upgradeAvailable(s, cmd.id) !== 'buyable') return
+      const def = UPGRADE_DEFS.find((u) => u.id === cmd.id)
+      if (!def) return
+      s.req -= def.cost
+      s.upgrades.add(cmd.id)
+      const oldParapet = ctx.mods.parapetMult
+      ctx.mods.recompute(s.upgrades)
+      if (ctx.mods.parapetMult !== oldParapet) {
+        const scale = ctx.mods.parapetMult / oldParapet
+        for (const sec of s.sections) {
+          sec.parapetMax *= scale
+          sec.parapetHp *= scale
+        }
+      }
+      ctx.events.emit('upgradeBought', { id: cmd.id, side })
+      ctx.events.emit('reqChanged', { req: s.req })
+      break
+    }
+
+    case 'callwave': {
+      if (s.phase !== 'build') return
+      s.earlyCallBonus += s.buildTimer * ECONOMY.earlyCallBonusPerSecond
+      s.buildTimer = 0
+      break
+    }
+
+    case 'beginwave': {
+      if (s.phase !== 'debrief' || !s.plan) return
+      s.phase = 'build'
+      s.buildTimer = ECONOMY.buildPhaseSeconds
+      break
+    }
+
+    case 'continueendless': {
+      if (s.outcome !== 'victory') return
+      s.outcome = 'ongoing'
+      s.endless = true
+      host.prepareNextWave()
+      break
+    }
+
+    // The Big Push assault orders arrive in M3.
+    case 'assault':
+    case 'covering':
+    case 'recall':
+    case 'consolidate':
+      break
+  }
+}

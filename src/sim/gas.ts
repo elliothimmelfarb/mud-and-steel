@@ -8,13 +8,6 @@ import { COMBAT } from '../core/config'
 import { snd, type Ctx } from './sim'
 import { killSoldier } from './combat'
 
-let alarmCooldown = 0
-
-/** Module state reset between runs. */
-export function resetGas(): void {
-  alarmCooldown = 0
-}
-
 export function createGasCloud(ctx: Ctx, x: number, z: number, team: Team): void {
   const blobs = []
   for (let i = 0; i < 5; i++) {
@@ -29,7 +22,7 @@ export function updateGas(ctx: Ctx, dt: number): void {
   const { s } = ctx
   const w = ctx.weather.state
   const decay = (0.012 + w.rain * 0.04) * dt
-  alarmCooldown = Math.max(0, alarmCooldown - dt)
+  s.gasAlarmCooldown = Math.max(0, s.gasAlarmCooldown - dt)
 
   let writeIdx = 0
   for (let i = 0; i < s.clouds.length; i++) {
@@ -46,10 +39,10 @@ export function updateGas(ctx: Ctx, dt: number): void {
     if (maxC > 0.06) s.clouds[writeIdx++] = cloud
 
     // Gas alarm: an enemy cloud drifting onto the position.
-    if (cloud.team === 'german' && alarmCooldown <= 0) {
+    if (cloud.team === 'german' && s.gasAlarmCooldown <= 0) {
       for (const b of cloud.blobs) {
         if (b.z > 45 && b.c > 0.2) {
-          alarmCooldown = 25
+          s.gasAlarmCooldown = 25
           snd(s, { name: 'gas_gong', x: 0, y: 2, z: 90, gain: 1 })
           ctx.events.emit('gasAlarm', { incoming: true })
           if (ctx.mods.autoMasks) s.masksOn = true

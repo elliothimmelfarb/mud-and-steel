@@ -194,7 +194,35 @@ export interface Vehicle {
   dead: boolean
   /** Burning wreck timer. */
   burnT: number
+  /**
+   * Phantom gunner so vehicle MGs can reuse the small-arms pipeline. Lives on
+   * the vehicle (not module state) so twin sims in one process stay independent.
+   * `gunner.pos` aliases `pos`.
+   */
+  gunner: Soldier
 }
+
+// ---------------------------------------------------------------------------
+// Barrages (sim state — lives on SimState, never module-level)
+// ---------------------------------------------------------------------------
+
+export interface ActiveBarrage {
+  x: number
+  z: number
+  shellsLeft: number
+  gas: boolean
+  t: number            // <0 during the warning
+  interval: number
+}
+
+export interface CreepingBarrage {
+  z: number
+  t: number
+  volleys: number
+}
+
+/** Terminal state of a run/match; sim stops advancing phase once decided. */
+export type MatchOutcome = 'ongoing' | 'victory' | 'defeat'
 
 // ---------------------------------------------------------------------------
 // Ordnance / hazards
