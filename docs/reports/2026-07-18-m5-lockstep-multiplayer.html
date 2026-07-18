@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — M5: Two Human Commanders, One Wire · 18 Jul 1916 (2026)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:920px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.3rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:66ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .lede a{color:var(--brass)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:.55rem 1rem;text-align:center;min-width:7.5rem}
+  .tally b{display:block;font-size:1.5rem;color:var(--brass)}
+  .tally span{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.enemy{border-left-color:var(--blood)}
+  section.item.works{border-left-color:var(--steel)}
+  section.item.live{border-left-color:var(--wire)}
+  .kicker{font-size:.66rem;letter-spacing:.32em;text-transform:uppercase;color:var(--khaki);margin-bottom:.25rem}
+  h2{font-size:1.28rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.55rem}
+  .item p{margin:.5rem 0;color:var(--ink-soft)}
+  .item p strong{color:var(--ink)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem;color:var(--ink-soft)}
+  li strong{color:var(--ink)}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.83em;background:color-mix(in srgb, var(--rule) 26%, transparent);padding:.06em .32em;border-radius:3px}
+  table{width:100%;border-collapse:collapse;font-size:.9rem;margin:.7rem 0}
+  th{font-variant:small-caps;letter-spacing:.06em;text-align:left;color:var(--khaki);border-bottom:2px solid var(--rule);padding:.4rem .5rem;font-size:.82rem}
+  td{border-bottom:1px solid color-mix(in srgb, var(--rule) 55%, transparent);padding:.45rem .5rem;vertical-align:top;color:var(--ink-soft)}
+  td strong{color:var(--ink)}
+  tr:last-child td{border-bottom:none}
+  a{color:var(--brass)}
+  .verdict{border:2px solid var(--brass);border-radius:6px;padding:1.2rem 1.5rem;margin:1.6rem 0;background:color-mix(in srgb, var(--brass) 7%, transparent)}
+  .verdict h2{color:var(--brass)}
+  .blocked{border:2px dashed var(--blood);border-radius:6px;padding:1.1rem 1.5rem;margin:1.6rem 0;background:color-mix(in srgb, var(--blood) 6%, transparent)}
+  .blocked h2{color:var(--blood)}
+  footer{text-align:center;margin-top:2.6rem;color:var(--khaki);font-size:.8rem;letter-spacing:.15em;text-transform:uppercase}
+  footer .sig{font-family:'Snell Roundhand','Segoe Script',cursive;font-size:1.5rem;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-top:.4rem}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="crest">Despatch · Battalion Workshops</div>
+  <h1>Two Human Commanders, One Wire</h1>
+  <div class="sub">M5 — deterministic P2P lockstep multiplayer, merged as <a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/53">PR #53</a> · 18 July 1916</div>
+  <div class="stamp">Ship Gate M5</div>
+</header>
+
+<p class="lede">The command spine built in M0 always had a second seat waiting. It is now occupied: <strong>The Big Push takes a human German commander</strong> — over a WebRTC DataChannel negotiated through a four-letter room code, or between two browser tabs on one machine. Both machines run the full sim; only tick-stamped orders, frame beacons and state hashes cross the wire. Same seed, same envelopes, same war.</p>
+
+<div class="tally">
+  <div><b>2</b><span>PR commits + fixes</span></div>
+  <div><b>0</b><span>desyncs, kill+rejoin probe</span></div>
+  <div><b>3</b><span>skeptics, every attack held</span></div>
+  <div><b>2</b><span>real desync bugs killed</span></div>
+  <div><b>6</b><span>ticks of input delay</span></div>
+</div>
+
+<section class="item live">
+  <div class="kicker">What landed</div>
+  <h2>Host a match · Join with code · or two tabs on one machine</h2>
+  <ul>
+    <li><strong>The lobby</strong> lives on the Big Push title panel: <em>Host a Match</em> opens a room (4-letter code, 15-minute TTL) through <code>/api/rooms</code> on Vercel; <em>Join with Code</em> answers it; the WebRTC DataChannel opens and the signaling server leaves the conversation for good. STUN only, v1.</li>
+    <li><strong>The German seat is playable:</strong> his own requisition purse in the top strip, hotkeys 1–4 despatching rifle squads, MG teams, Stosstruppen and pioneers to the line, and the same section-click grammar mirrored — select your bays, click an enemy one, over the top. The British bottom bar is his no longer.</li>
+    <li><strong>Time belongs to both commanders:</strong> speed locked to 1, no pause, menus and modals do not stop the battle. If the other side's frames stop coming, a toast says so within three seconds instead of leaving a silent freeze.</li>
+    <li><strong>Leaving is handled like a soldier:</strong> quit, restart, or close the tab and a <code>bye</code> crosses first — the survivor's machine seats the AI at the abandoned German desk, or claims the walkover if Britain's commander deserted.</li>
+  </ul>
+</section>
+
+<section class="item works">
+  <div class="kicker">The machinery</div>
+  <h2>Sealed frames: a proof, not a heuristic</h2>
+  <p>After every stepped tick a peer sends <code>frame T</code>. Because the channel is ordered and every order is stamped <code>tick+6</code> before it is sent, holding frame <code>T</code> <em>proves</em> you hold every peer envelope for ticks ≤ <code>T+6</code> — so the gate <code>next ≤ peerFrame + 6</code> makes late input structurally impossible rather than merely unlikely. Hashes cross every 30 ticks; a mismatch triggers the one recovery path there is: <strong>rebuild from the creator's seed + envelope log</strong>, the same replay contract the probes have been enforcing since M0. Rejoin after a dropped connection is that same rebuild with a new transport.</p>
+  <table>
+    <tr><th>Bug the probe caught</th><th>Mechanism</th><th>Fix</th></tr>
+    <tr><td><strong>In-flight envelopes lost at the snapshot</strong></td><td>Orders stamped past the log-send tick were in nobody's log — dead transport at first rejoin, or wiped by state adoption</td><td>The log reply carries the sender's pending queue; adoption keeps the tail; the resync buffer dedups</td></tr>
+    <tr><td><strong>582 desyncs, every 30 ticks, forever</strong></td><td>State adoption forced a pathfinding-flow rebuild at a tick the other machine didn't rebuild — and the rebuild cadence anchor is hashed state</td><td>Flow cadence adopted verbatim; 582 became 0</td></tr>
+  </table>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">Adversarial verification</div>
+  <h2>Three skeptics, briefed to refute it</h2>
+  <p>Per standing orders for determinism-touching work, three independent reviewers attacked the merged diff along different bearings — protocol interleavings, hidden state and purity, integration seams. <strong>The core held every attack:</strong> the one-tick margin of the sealed-frame gate, the rebuild arithmetic, state-adoption coverage, and the AI-takeover logging contract were each explicitly assaulted and survived. What they refuted was the <em>failure-of-the-failure-path</em> layer — fourteen confirmed findings, all fixed the same evening: a gate deadlock when a peer died mid-desync, orders half-applied during a rebuild, quits that never said goodbye, a signaling mailbox that discarded messages when one throw landed mid-batch, ICE candidates lost to an ordering race, a third local tab corrupting a two-tab room.</p>
+  <p>Two findings were deferred with eyes open: <strong>cross-engine float determinism</strong> (transcendentals differ between browser engines in the last bits — matches are effectively same-engine until sim math goes software) and <strong>production rejoin wiring</strong> (the machinery is probe-proven; the lobby flow to re-signal a dropped match is M6).</p>
+</section>
+
+<div class="verdict">
+  <h2>Gates passed</h2>
+  <ul>
+    <li><strong>Kill + rejoin probe</strong> (jittered loopback, 480 s): German client killed mid-match at tick 7,920 → AI takeover → fresh client rejoins at 10,080 and fast-forwards from the log → <strong>zero desyncs</strong>, both sims finish tick- and hash-identical (13,367 / <code>4027734813</code>).</li>
+    <li><strong>Live two-tab match</strong> over BroadcastChannel: 3,000+ ticks hash-clean with orders crossing both directions; a German squad raised in one tab marched in both worlds.</li>
+    <li><strong>Live goodbye:</strong> one commander leaves → the other's machine seats the AI, battle marches on. Verified in the browser, not just the lab.</li>
+    <li><strong>Classic regression:</strong> twin+replay probe still clean — 40,509 ticks, 1,350 hash checks, replay identical.</li>
+  </ul>
+</div>
+
+<div class="blocked">
+  <h2>Awaiting the Quartermaster (Elliot)</h2>
+  <ul>
+    <li><strong>Upstash Redis</strong> marketplace install on the Vercel project — the signaling routes answer a polite 503 until the env vars exist; room codes cannot be minted before then.</li>
+    <li><strong>GitHub ↔ Vercel connect</strong> — CLI deploys are permission-blocked from the workshop, so production still serves the M4 build until merges auto-deploy (or a manual deploy).</li>
+    <li>Housekeeping: delete the stray Vercel project <code>cool-lalande-d869cf</code>.</li>
+  </ul>
+  <p>When both land, the final M5 field gate is a formality with teeth: two browsers on different networks, a Battle to the whistle, one side yanked mid-assault.</p>
+</div>
+
+<footer>
+  Issues #52 closed · PR #53 merged · debt ledger #41 updated · next: M6 — FPS intents in the protocol, spectate, rejoin lobby
+  <div class="sig">— Claude, Battalion Workshops</div>
+</footer>
+
+</div>
+</body>
+</html>
