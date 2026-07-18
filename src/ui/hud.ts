@@ -304,7 +304,9 @@ export class Hud implements HudBridge {
       ? `${s.enemies.length + s.vehicles.filter((v) => v.team === 'german' && !v.dead).length} in the open`
       : s.phase === 'build' ? `stand-to in ${Math.ceil(s.buildTimer)}s` : ''
     t.timerBtn.style.display = s.phase === 'build' ? '' : 'none'
-    const lineFrac = Math.max(0, Math.min(1, s.breach / 100))
+    const lineFrac = s.mode === 'bigpush'
+      ? Math.max(0, Math.min(1, s.strength.brit / 100))
+      : Math.max(0, Math.min(1, s.breach / 100))
     t.breach.style.width = `${lineFrac * 100}%`
     t.breachBar.classList.toggle('hud-line__bar--warn', lineFrac <= 0.5 && lineFrac > 0.25)
     t.breachBar.classList.toggle('hud-line__bar--danger', lineFrac <= 0.25)

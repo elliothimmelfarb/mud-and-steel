@@ -400,7 +400,7 @@ export class Game {
   // Run lifecycle
   // -------------------------------------------------------------------------
 
-  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic'): void {
+  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona }): void {
     this.seedStr = seedStr
     this.difficulty = difficulty
     // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
@@ -445,7 +445,7 @@ export class Game {
     this.events.clear()
     // The runner builds the whole battle headlessly (terrain, weather, state,
     // starting wire / save restore); the game wires rendering onto it.
-    this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events })
+    this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: mode === 'bigpush' ? (bigpush?.persona ?? 'methodical') : null })
     this.leashZ = WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
@@ -587,10 +587,14 @@ export class Game {
       const s = this.ctx.s
       this.modalOpen = true
       this.running = false
-      submitScore(s.stats.score)
-      clearRun()
+      if (s.mode === 'classic') {
+        submitScore(s.stats.score)
+        clearRun()
+      } else if (p.draw) {
+        this.hud?.toast('A draw — both armies spent, the line where it began.', 'warn')
+      }
       this.audio.play(p.victory ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
-      this.hud?.gameOver(p.victory, p.victory)
+      this.hud?.gameOver(p.victory, s.mode === 'classic' && p.victory)
     })
     ev.on('thunder', () => this.audio.play('thunder', { gain: 0.7 }))
     ev.on('orderIssued', (p) => this.onOrderIssued(p.id as OrderId))
@@ -715,6 +719,7 @@ export class Game {
 
   private autosave(): void {
     const s = this.ctx.s
+    if (s.mode !== 'classic') return
     const save: RunSave = {
       version: 2,
       seed: this.seedStr,

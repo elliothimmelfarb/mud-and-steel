@@ -88,8 +88,9 @@ export function updateEnemies(ctx: Ctx, dt: number): void {
     updateEnemy(ctx, e, dt, officerNear, leaderPos)
 
     // Routed men fade once they're clear of the fight; men over the breach line score.
-    if (e.behavior === 'rout' && e.pos.z < 0) continue
-    if (e.pos.z > WORLD.breachZ) {
+    const routGoneZ = s.mode === 'bigpush' ? -(WORLD.frontTrenchZ + 35) : 0
+    if (e.behavior === 'rout' && e.pos.z < routGoneZ) continue
+    if (s.mode === 'classic' && e.pos.z > WORLD.breachZ) {
       s.breach = Math.max(0, s.breach - COMBAT.breachPerEnemy)
       ctx.events.emit('toast', { text: 'They are through the line!', kind: 'danger' })
       continue
@@ -119,6 +120,26 @@ function updateEnemy(ctx: Ctx, e: Enemy, dt: number, officerNear: boolean, leade
   }
 
   switch (e.behavior) {
+    case 'garrison': {
+      // Big Push: a defender walks to his post and holds it — pops up to
+      // shoot, meets anyone in the trench with the bayonet, never wanders.
+      const post = e.coverTarget
+      if (post) {
+        const dx = post.x - e.pos.x, dz = post.z - e.pos.z
+        const d = Math.hypot(dx, dz)
+        if (d > 1.6) {
+          e.facing = Math.atan2(dx, -dz)
+          moveEnemy(ctx, e, dx / d, dz / d, def.speed, dt)
+          return
+        }
+      }
+      const intruder = nearestBrit(ctx, e.pos.x, e.pos.z, 9)
+      if (intruder) { e.behavior = 'melee'; e.behaviorT = 0; return }
+      e.stance = e.suppression > COMBAT.suppressCrouch ? 'prone' : inTrench ? 'crouch' : 'stand'
+      tryShoot(ctx, e, def, dt)
+      return
+    }
+
     case 'rout': {
       // North, away from this place.
       e.facing = Math.PI
@@ -180,8 +201,9 @@ function updateEnemy(ctx: Ctx, e: Enemy, dt: number, officerNear: boolean, leade
     case 'melee': {
       const victim = nearestBrit(ctx, e.pos.x, e.pos.z, 12)
       if (!victim) {
-        // Trench cleared here — push along it (mop up) or on toward support.
-        e.behavior = 'mopup'
+        // Trench cleared here — a garrison man returns to his post; an
+        // attacker pushes along it (mop up) or on toward support.
+        e.behavior = e.coverTarget && ctx.s.mode === 'bigpush' && e.pos.z < 0 ? 'garrison' : 'mopup'
         return
       }
       e.facing = Math.atan2(victim.pos.x - e.pos.x, -(victim.pos.z - e.pos.z))
@@ -482,7 +504,14 @@ function clamp(v: number, lo: number, hi: number): number {
 // Squads (director-facing helpers)
 // ---------------------------------------------------------------------------
 
-export function makeSquad(ctx: Ctx, kinds: EnemyKindId[], x: number, targetSectionId: number): Squad {
+export interface SquadOpts {
+  /** Spawn row (default the classic north edge). */
+  spawnZ?: number
+  /** Garrison: men walk to their section and HOLD it instead of attacking. */
+  role?: 'assault' | 'garrison'
+}
+
+export function makeSquad(ctx: Ctx, kinds: EnemyKindId[], x: number, targetSectionId: number, opts?: SquadOpts): Squad {
   const squad: Squad = {
     id: ctx.s.nextId++,
     members: [],
@@ -499,8 +528,17 @@ export function makeSquad(ctx: Ctx, kinds: EnemyKindId[], x: number, targetSecti
     const row = Math.floor(i / 4)
     const col = (i % 4) - 1.5
     const ex = x + col * 3.2 + (ctx.rand() - 0.5) * 1.5
-    const ez = WORLD.enemySpawnZ - row * 3 - ctx.rand() * 2
+    const ez = (opts?.spawnZ ?? WORLD.enemySpawnZ) - row * 3 - ctx.rand() * 2
     const m = spawnEnemy(ctx, kinds[i], ex, ez, squad.id)
+    if (opts?.role === 'garrison') {
+      // His post: a spot spread along the garrisoned section.
+      const sec = ctx.s.sections.find((c) => c.id === targetSectionId)
+      if (sec) {
+        const t = 0.2 + 0.6 * (i / Math.max(1, kinds.length - 1))
+        m.behavior = 'garrison'
+        m.coverTarget = { x: sec.a.x + (sec.b.x - sec.a.x) * t, z: sec.a.z + (sec.b.z - sec.a.z) * t }
+      }
+    }
     // Two interleaved leapfrog elements, so each bound has men spread across
     // the frontage rather than one flank moving while the other sits.
     m.element = (i % 2) as 0 | 1
@@ -589,7 +627,7 @@ export function updateSquads(ctx: Ctx, dt: number, byId: Map<number, Enemy>): vo
       if (!m || m.hp <= 0) continue
       const excluded = m.kind === 'emg' || m.kind === 'esniper' || m.kind === 'eflamer' ||
         m.behavior === 'melee' || m.behavior === 'mopup' || m.behavior === 'cutting' ||
-        m.behavior === 'rout' || m.behavior === 'setup'
+        m.behavior === 'rout' || m.behavior === 'setup' || m.behavior === 'garrison'
       if (!sq.bounding || excluded) {
         m.bounding = false
         m.overwatch = false

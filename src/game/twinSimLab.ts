@@ -25,6 +25,8 @@ export interface TwinProbeOpts {
   mode?: 'classic' | 'bigpush'
   /** Big Push runs are time-bound (sim seconds) rather than wave-bound. */
   simSeconds?: number
+  /** Big Push: german AI persona; null disables the AI (isolated probes). */
+  aiPersona?: 'methodical' | 'stosstrupp' | 'opportunist' | null
   startReq?: number
   onProgress?: (line: string) => void
 }
@@ -55,30 +57,44 @@ class ProbeCommander {
   private boughtWave = 0
   private slot = 0
 
-  private bpShopped = false
-  private bpAssaulted = false
-  private bpRecalled = false
+  private bpNextShop = 1
+  private bpLastAssault = 0
+  private bpAssaultStarted = new Map<number, number>()
 
   think(s: SimState): Cmd[] {
     const cmds: Cmd[] = []
     if (s.outcome !== 'ongoing') return cmds
 
-    // Big Push: no wave machine — buy during stand-to, send one big assault
-    // once the columns have formed, recall it later. All state-derived.
+    // Big Push: continuous war. Keep the line bought, send a fresh assault
+    // whenever a party has formed, recall anything out too long. Cyclical and
+    // purely state-derived, so it doubles as the balance-lab British side.
     if (s.mode === 'bigpush') {
-      if (!this.bpShopped && s.tick >= 30) {
-        this.bpShopped = true
-        const xs = [-16, -8, 0, 8, 16, 24]
-        for (const x of xs) cmds.push({ t: 'buy', kind: 'rifleman', x, z: WORLD.frontTrenchZ })
-        cmds.push({ t: 'buy', kind: 'engineer', x: -24, z: WORLD.frontTrenchZ })
-        cmds.push({ t: 'buy', kind: 'lewis', x: 32, z: WORLD.frontTrenchZ })
+      if (s.tick % 60 !== 0) return cmds
+      // Shopping: keep ~10 posts manned.
+      const live = s.units.filter((u) => !u.disbanded && u.crew.some((c) => c.hp > 0))
+      if (s.time >= this.bpNextShop && live.length < 10 && s.req >= 70) {
+        this.bpNextShop = s.time + 20
+        const xs = [-16, -8, 0, 8, 16, 24, -32, 32]
+        const have = live.length
+        for (let i = 0; i < Math.min(4, 10 - have); i++) {
+          cmds.push({ t: 'buy', kind: i === 3 ? 'engineer' : 'rifleman', x: xs[(have + i) % xs.length], z: WORLD.frontTrenchZ })
+        }
         return cmds
       }
-      if (!this.bpAssaulted && s.time > 150) {
-        // Own front sections that actually have men on them.
+      // Recall parties out longer than 3 minutes.
+      for (const g of s.assaults) {
+        if (g.side !== 'brit' || g.state !== 'advancing') continue
+        const started = this.bpAssaultStarted.get(g.id) ?? s.time
+        if (!this.bpAssaultStarted.has(g.id)) this.bpAssaultStarted.set(g.id, s.time)
+        if (s.time - started > 180) cmds.push({ t: 'recall', groupId: g.id })
+      }
+      if (cmds.length > 0) return cmds
+      // Assault when a party is formed and nothing is already out.
+      const anyOut = s.assaults.some((g) => g.side === 'brit')
+      const formed = live.filter((u) => !u.march && u.assaultGroupId === null)
+      if (!anyOut && formed.length >= 6 && s.time - this.bpLastAssault > 90 && s.time > 120) {
         const mine = new Set<number>()
-        for (const u of s.units) {
-          if (u.disbanded || u.march || !u.crew.some((c) => c.hp > 0)) continue
+        for (const u of formed) {
           let best = -1, bestD = 100
           for (const sec of s.sections) {
             if (sec.home !== 'brit' || sec.line !== 'front') continue
@@ -87,24 +103,24 @@ class ProbeCommander {
           }
           if (best >= 0) mine.add(best)
         }
-        if (mine.size > 0) {
-          this.bpAssaulted = true
-          // Nearest german-owned front section to x=0.
-          let target = -1, bestAbs = Infinity
-          for (const sec of s.sections) {
-            if (sec.home !== 'german' || sec.line !== 'front' || sec.owner !== 'german') continue
-            if (Math.abs(sec.mid.x) < bestAbs) { bestAbs = Math.abs(sec.mid.x); target = sec.id }
-          }
-          if (target >= 0) cmds.push({ t: 'assault', sections: [...mine].sort((a, b) => a - b), targetSection: target })
+        let target = -1, bestAbs = Infinity
+        for (const sec of s.sections) {
+          if (sec.home !== 'german' || sec.line !== 'front' || sec.owner !== 'german') continue
+          if (Math.abs(sec.mid.x) < bestAbs) { bestAbs = Math.abs(sec.mid.x); target = sec.id }
+        }
+        if (mine.size > 0 && target >= 0) {
+          this.bpLastAssault = s.time
+          // Leave a third of the sections home as a garrison.
+          const list = [...mine].sort((a, b) => a - b)
+          cmds.push({ t: 'assault', sections: list.slice(0, Math.max(1, Math.ceil(list.length * 0.7))), targetSection: target })
         }
         return cmds
       }
-      if (!this.bpRecalled && s.time > 420) {
-        this.bpRecalled = true
-        for (const g of s.assaults) {
-          if (g.side === 'brit' && g.state === 'advancing') cmds.push({ t: 'recall', groupId: g.id })
+      // Consolidate anything we hold that still faces the wrong way.
+      for (const sec of s.sections) {
+        if (sec.home === 'german' && sec.owner === 'brit' && sec.facing !== 1 && !sec.consolidating) {
+          cmds.push({ t: 'consolidate', section: sec.id })
         }
-        return cmds
       }
       return cmds
     }
@@ -183,7 +199,7 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
   const say = opts.onProgress ?? (() => {})
   const t0 = performance.now()
 
-  const mk = () => new SimRunner({ seedStr: seed, difficulty, mode: opts.mode ?? 'classic', headless: true, startReq })
+  const mk = () => new SimRunner({ seedStr: seed, difficulty, mode: opts.mode ?? 'classic', aiPersona: opts.aiPersona, headless: true, startReq })
   const a = mk()
   const b = mk()
   ;(window as unknown as { __twinsimLast: object }).__twinsimLast = { a, b }
@@ -278,7 +294,7 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
  */
 export async function runAssaultProbe(opts: { seed?: string; onProgress?: (l: string) => void } = {}): Promise<Record<string, unknown>> {
   const say = opts.onProgress ?? (() => {})
-  const r = new SimRunner({ seedStr: opts.seed ?? 'm3-assault', difficulty: 'front', mode: 'bigpush', headless: true, startReq: 900 })
+  const r = new SimRunner({ seedStr: opts.seed ?? 'm3-assault', difficulty: 'front', mode: 'bigpush', aiPersona: null, headless: true, startReq: 900 })
   r.begin()
   const s = r.ctx.s
 
@@ -349,7 +365,7 @@ export async function runVerdictProbe(opts: { onProgress?: (l: string) => void }
   const say = opts.onProgress ?? (() => {})
   const results: Record<string, unknown> = {}
   for (const len of ['raid', 'battle', 'grand'] as const) {
-    const r = new SimRunner({ seedStr: 'verdict-' + len, difficulty: 'front', mode: 'bigpush', matchLen: len, headless: true })
+    const r = new SimRunner({ seedStr: 'verdict-' + len, difficulty: 'front', mode: 'bigpush', matchLen: len, aiPersona: null, headless: true })
     r.begin()
     const s = r.ctx.s
     // Tip the scales so the verdict is determinate: bleed german strength.
@@ -371,7 +387,7 @@ export async function runVerdictProbe(opts: { onProgress?: (l: string) => void }
   // Attrition: no clock — flip a majority of the german front to brit and the
   // hold timer must end it inside ~holdWinSeconds.
   {
-    const r = new SimRunner({ seedStr: 'verdict-attrition', difficulty: 'front', mode: 'bigpush', matchLen: 'attrition', headless: true })
+    const r = new SimRunner({ seedStr: 'verdict-attrition', difficulty: 'front', mode: 'bigpush', matchLen: 'attrition', aiPersona: null, headless: true })
     r.begin()
     const s = r.ctx.s
     for (let i = 0; i < 30 * 61; i++) r.step() // through stand-to
@@ -389,6 +405,62 @@ export async function runVerdictProbe(opts: { onProgress?: (l: string) => void }
   }
   results.ok = (['raid', 'battle', 'grand', 'attrition'] as const).every((k) => (results[k] as { ok: boolean }).ok)
   return results
+}
+
+/**
+ * The balance lab (M4 gate): N headless AI-vs-AI(bot) matches across lengths
+ * and personas. Every timed match must terminate at (or before) its whistle;
+ * a match still 'ongoing' past the whistle grace is a STALL and fails the lab.
+ */
+export async function runBalanceLab(n = 50, opts: { onProgress?: (l: string) => void } = {}): Promise<Record<string, unknown>> {
+  const say = opts.onProgress ?? (() => {})
+  const lengths = ['raid', 'battle', 'grand'] as const
+  const personas = ['methodical', 'stosstrupp', 'opportunist'] as const
+  const results: Array<Record<string, unknown>> = []
+  let stalls = 0
+  const outcomes: Record<string, number> = { victory: 0, defeat: 0, draw: 0 }
+  const t0 = performance.now()
+
+  for (let i = 0; i < n; i++) {
+    // Weight raids heaviest to keep the lab quick; grands every 5th.
+    const len = i % 5 === 4 ? 'grand' : lengths[i % 2]
+    const persona = personas[i % 3]
+    const r = new SimRunner({
+      seedStr: `lab-${i}`, difficulty: 'front', mode: 'bigpush',
+      matchLen: len, aiPersona: persona, headless: true,
+    })
+    r.begin()
+    const s = r.ctx.s
+    const bot = new ProbeCommander()
+    let seq = 0
+    const grace = 60 + s.timeLimit + 10
+    const cap = Math.round(30 * grace)
+    let ticks = 0
+    for (; ticks < cap && s.outcome === 'ongoing'; ticks++) {
+      const cmds = bot.think(s)
+      if (cmds.length > 0) r.enqueue({ tick: s.tick, side: 'brit', seq: seq++, cmds })
+      r.step()
+      if (ticks % 12000 === 11999) await nextTick()
+    }
+    const stalled = s.outcome === 'ongoing'
+    if (stalled) stalls++
+    else outcomes[s.outcome] = (outcomes[s.outcome] ?? 0) + 1
+    results.push({
+      i, len, persona, outcome: s.outcome, simSeconds: Math.round(s.time),
+      strength: { brit: Math.round(s.strength.brit), german: Math.round(s.strength.german) },
+      stalled,
+    })
+    say(`match ${i + 1}/${n} [${len}/${persona}]: ${s.outcome} @ ${Math.round(s.time)}s (str ${Math.round(s.strength.brit)}:${Math.round(s.strength.german)})`)
+    await nextTick()
+  }
+  const summary = {
+    n, stalls, outcomes,
+    ok: stalls === 0,
+    wallMs: Math.round(performance.now() - t0),
+    results,
+  }
+  say(`LAB ${summary.ok ? 'CLEAN' : 'FAILED'} — ${n} matches, ${stalls} stalls, ${JSON.stringify(outcomes)}, ${summary.wallMs} ms`)
+  return summary
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +485,7 @@ export function startTwinSimLab(app: HTMLElement): void {
     run: (o: TwinProbeOpts = {}) => runTwinProbe({ onProgress: say, ...o }),
     assault: (o: { seed?: string } = {}) => runAssaultProbe({ onProgress: say, ...o }),
     verdicts: () => runVerdictProbe({ onProgress: say }),
+    balance: (n = 50) => runBalanceLab(n, { onProgress: say }),
   }
   ;(window as unknown as { __twinsim: typeof api }).__twinsim = api
 

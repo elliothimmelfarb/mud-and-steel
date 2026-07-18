@@ -107,6 +107,11 @@ function main(): void {
         game.endless = false
         game.startRun(seed, difficulty)
       },
+      onBigPush: ({ length, persona, seed }) => {
+        audio.unlock()
+        hideTitle()
+        game.startRun(seed, 'front', null, 'bigpush', { matchLen: length, persona })
+      },
       onContinue: () => {
         audio.unlock()
         const s = loadRun()

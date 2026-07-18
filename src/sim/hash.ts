@@ -45,7 +45,7 @@ const PHASE_IDX = { build: 0, assault: 1, debrief: 2 } as const
 const OUTCOME_IDX = { ongoing: 0, victory: 1, defeat: 2, draw: 3 } as const
 const STANCE_IDX = { stand: 0, crouch: 1, prone: 2, dead: 3 } as const
 const BEHAVIOR_IDX = {
-  advance: 0, rush: 1, takecover: 2, setup: 3, firing: 4, cutting: 5, melee: 6, rout: 7, mopup: 8,
+  advance: 0, rush: 1, takecover: 2, setup: 3, firing: 4, cutting: 5, melee: 6, rout: 7, mopup: 8, garrison: 9,
 } as const
 const TARGETING_IDX = { nearest: 0, strongest: 1, officers: 2, armour: 3 } as const
 
