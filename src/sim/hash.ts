@@ -93,6 +93,12 @@ export function hashSim(s: SimState): number {
     h.f64(u.xp); h.byte(u.vet); h.u32(u.deeds); h.u32(u.wavesServed)
     h.byte(TARGETING_IDX[u.targeting])
     h.bool(u.fallenBack); h.bool(u.disbanded)
+    if (u.march) {
+      h.bool(true)
+      h.u32(u.march.path.length)
+      for (const p of u.march.path) { h.f64(p.x); h.f64(p.z) }
+      for (const wi of u.march.idx) h.u32(wi)
+    } else h.bool(false)
     for (const c of u.crew) {
       h.u32(c.id)
       h.f64(c.pos.x); h.f64(c.pos.z); h.f64(c.facing)

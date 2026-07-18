@@ -159,6 +159,15 @@ function main(): void {
     return
   }
 
+  // Dev entry for The Big Push until the M4 title-screen card lands:
+  // ?play=bigpush drops straight into a two-trench match (classic HUD for now).
+  const playMode = new URLSearchParams(location.search).get('play')
+  if (playMode === 'bigpush') {
+    document.getElementById('boot')?.classList.add('done')
+    game.startRun(new URLSearchParams(location.search).get('seed') ?? 'the-big-push', 'front', null, 'bigpush')
+    return
+  }
+
   setTimeout(() => document.getElementById('boot')?.classList.add('done'), 250)
   showTitle()
 }

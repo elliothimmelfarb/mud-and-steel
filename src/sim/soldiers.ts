@@ -5,7 +5,7 @@
  * flare posts).
  */
 import type { Enemy, Soldier, TargetPriority, Unit, Vehicle } from '../core/types'
-import { COMBAT, NCO_AURA_LEVEL, NCO_AURA_RANGE, UNIT_DEFS, VET_ROF_BONUS, WORLD } from '../core/config'
+import { COMBAT, MARCH_SPEED, NCO_AURA_LEVEL, NCO_AURA_RANGE, UNIT_DEFS, VET_ROF_BONUS, WORLD } from '../core/config'
 import { dist2, fx, snd, type Ctx } from './sim'
 import {
   combatStance, coverFor, damageSoldier, fireSmallArms, soldierUpkeep, litAt,
@@ -91,6 +91,14 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
     recordDeed(ctx, u, 'lastman')
   }
   const avgMorale = moraleSum / alive
+
+  // -- Big Push: the column is still marching up from the rear ---------------
+  // No posting, no firing, no morale-break-to-the-rear — they walk, they hit
+  // the dirt under fire, and they can absolutely be killed on the way up.
+  if (u.march) {
+    marchTick(ctx, u, dt)
+    return
+  }
 
   // -- morale: break & rally --------------------------------------------------
   if (!u.fallenBack && avgMorale < COMBAT.moraleBreak && !charging) {
@@ -263,6 +271,46 @@ function updateUnit(ctx: Ctx, u: Unit, dt: number, aura: AuraSources): void {
 
 function isChargeKind(kind: Unit['kind']): boolean {
   return kind === 'rifleman' || kind === 'grenadier' || kind === 'officer'
+}
+
+/**
+ * Big Push: file the crew along the march path. Each man walks the shared
+ * waypoint list at his own cursor; the staggered spawn keeps the column shape.
+ * Suppression pins a man prone where he stands (a shelled column scatters by
+ * stopping and dropping); he resumes when the fire slackens. The unit forms
+ * up (march = null) once every living man has walked off the end of the path.
+ */
+function marchTick(ctx: Ctx, u: Unit, dt: number): void {
+  const m = u.march
+  if (!m) return
+  let stillMarching = false
+  for (let i = 0; i < u.crew.length; i++) {
+    const c = u.crew[i]
+    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+    if (m.idx[i] >= m.path.length) continue
+    stillMarching = true
+    // Under fire: hit the dirt; the render's prone stance IS the scatter read.
+    if (c.suppression > 0.45) {
+      c.stance = 'prone'
+      continue
+    }
+    const wp = m.path[m.idx[i]]
+    const dx = wp.x - c.pos.x, dz = wp.z - c.pos.z
+    const d = Math.hypot(dx, dz)
+    if (d < 0.9) {
+      m.idx[i]++
+      continue
+    }
+    const mud = 1 - ctx.terrain.mudAt(c.pos.x, c.pos.z) * 0.45
+    const sp = Math.min(d, MARCH_SPEED * mud * dt)
+    c.pos.x += (dx / d) * sp
+    c.pos.z += (dz / d) * sp
+    c.facing = Math.atan2(dx, -dz)
+  }
+  if (!stillMarching) {
+    u.march = null
+    ctx.events.emit('toast', { text: `${UNIT_DEFS[u.kind].name} formed up at the post.`, kind: 'good' })
+  }
 }
 
 function formUp(ctx: Ctx, u: Unit, homeX: number, homeZ: number, dt: number): void {

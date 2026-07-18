@@ -92,6 +92,13 @@ export interface Unit {
   /** True while the crew has abandoned the position (routed / taking cover). */
   fallenBack: boolean
   disbanded: boolean
+  /**
+   * Big Push: a reinforcement column still marching up from the rear edge.
+   * `path` runs rear → comm-trench → post (the last point IS the post);
+   * `idx[i]` is crew member i's next waypoint. null once the unit has formed
+   * up (or always, in classic mode where crews appear at their post).
+   */
+  march: { path: Vec2[]; idx: number[] } | null
 }
 
 export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
