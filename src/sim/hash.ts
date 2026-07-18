@@ -164,7 +164,7 @@ export function hashSim(s: SimState): number {
   // Defences.
   h.u32(s.defences.length)
   for (const d of s.defences) {
-    h.u32(d.id); h.str(d.kind)
+    h.u32(d.id); h.str(d.kind); h.byte(d.side === 'brit' ? 0 : 1)
     h.f64(d.pos.x); h.f64(d.pos.z)
     h.f64(d.hp); h.f64(d.wear); h.bool(d.active); h.f64(d.angle)
   }
@@ -174,6 +174,8 @@ export function hashSim(s: SimState): number {
     h.u32(sec.id)
     h.f64(sec.parapetHp); h.f64(sec.parapetMax)
     h.bool(sec.captured); h.f64(sec.captureT)
+    h.byte(sec.owner === 'brit' ? 0 : 1); h.byte(sec.home === 'brit' ? 0 : 1)
+    h.byte(sec.facing === 1 ? 0 : 1)
   }
 
   // Barrages.

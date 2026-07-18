@@ -113,7 +113,7 @@ export function resolvePlacement(ctx: Ctx, id: BuildableId, x: number, z: number
 
   if (id === 'sandbags') {
     const sec = sectionAt(s.sections, x, z)
-    if (!sec || sec.captured) return null
+    if (!sec || sec.owner !== 'brit' || sec.home !== 'brit') return null
     const gx = sec.mid.x, gz = sec.mid.z
     if (s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)) return null
     return { x: gx, z: gz }
@@ -246,12 +246,12 @@ export function createUnit(
   return u
 }
 
-export function createDefence(ctx: Ctx, kind: DefenceKindId, x: number, z: number, angle: number): void {
+export function createDefence(ctx: Ctx, kind: DefenceKindId, x: number, z: number, angle: number, side: Team = 'brit'): void {
   const s = ctx.s
   const def = DEFENCE_DEFS[kind]
   const hp = kind === 'flarepost' ? 40 : def.hp
   s.defences.push({
-    id: s.nextId++, kind, pos: { x, z }, hp: Math.max(1, hp), maxHp: Math.max(1, hp),
+    id: s.nextId++, kind, side, pos: { x, z }, hp: Math.max(1, hp), maxHp: Math.max(1, hp),
     wear: 0, active: false, angle: kind === 'wire' ? angle : 0,
   })
   if (kind === 'sandbags') {
@@ -281,11 +281,29 @@ export function placeStartingWire(s: SimState): void {
       if (gaps.some((g) => Math.abs(wx - g) < 4.5)) continue
       const hp = Math.round(DEFENCE_DEFS.wire.hp * (0.35 + rand() * 0.2))
       s.defences.push({
-        id: s.nextId++, kind: 'wire',
+        id: s.nextId++, kind: 'wire', side: 'brit',
         pos: { x: wx, z: z0 + (rand() - 0.5) * 1.6 },
         hp, maxHp: hp, wear: 0.35 + rand() * 0.35, active: false,
         angle: (rand() - 0.5) * 0.15,
       })
+    }
+  }
+  // Big Push: the German belt is REAL sim wire (side 'german') — it snags the
+  // British assault the way ours snags theirs. Classic keeps it scenery-only.
+  if (s.mode === 'bigpush') {
+    for (const row of [0, 1]) {
+      const z0 = -(WORLD.frontTrenchZ - 10.5 - row * 3.5)
+      for (let x = -TRENCH.frontSpanX + 4; x <= TRENCH.frontSpanX - 4; x += WIRE_SEGMENT_LEN) {
+        const wx = x + (row ? WIRE_SEGMENT_LEN / 2 : 0)
+        if (gaps.some((g) => Math.abs(wx - g) < 4.5)) continue
+        const hp = Math.round(DEFENCE_DEFS.wire.hp * (0.35 + rand() * 0.2))
+        s.defences.push({
+          id: s.nextId++, kind: 'wire', side: 'german',
+          pos: { x: wx, z: z0 + (rand() - 0.5) * 1.6 },
+          hp, maxHp: hp, wear: 0.35 + rand() * 0.35, active: false,
+          angle: (rand() - 0.5) * 0.15,
+        })
+      }
     }
   }
 }

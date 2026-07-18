@@ -314,7 +314,7 @@ export class Game {
     const idx: number[] = []
     const HALF = 0.55
     for (const sec of this.ctx.s.sections) {
-      if (sec.captured) continue
+      if (sec.owner !== 'brit') continue
       const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
       const segLen = Math.hypot(abx, abz) || 1
       let nx = -abz / segLen, nz = abx / segLen
@@ -781,7 +781,7 @@ export class Game {
 
     if (id === 'sandbags') {
       const sec = sectionAt(s.sections, x, z)
-      if (sec && !sec.captured) {
+      if (sec && sec.owner === 'brit' && sec.home === 'brit') {
         gx = sec.mid.x; gz = sec.mid.z
         valid = !s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)
       }

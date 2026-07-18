@@ -106,6 +106,8 @@ export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
 export interface Defence {
   id: number
   kind: DefenceKindId
+  /** Whose works these are — wire only snags the OTHER side's infantry. */
+  side: Team
   pos: Vec2
   /** Wire/sandbags degrade; mines are hp=1 until triggered. */
   hp: number
@@ -334,9 +336,14 @@ export interface TrenchSection {
   /**
    * Which way this section fights: +1 = British (enemy toward -z),
    * -1 = German (enemy toward +z). Decides the fire-step side for
-   * projection, dressing and (Big Push) captured-trench cover.
+   * projection, dressing and (Big Push) captured-trench cover. Flipped by
+   * consolidation after a capture.
    */
   facing: 1 | -1
+  /** Who dug it. Fixed for the match. */
+  home: Team
+  /** Who holds it now. `captured` is always `owner !== home`. */
+  owner: Team
   a: Vec2
   b: Vec2
   mid: Vec2

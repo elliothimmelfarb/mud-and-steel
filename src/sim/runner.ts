@@ -154,6 +154,7 @@ export class SimRunner implements CmdHost {
           s.sections[i].parapetHp = st.parapetHp
           s.sections[i].parapetMax = st.parapetMax
           s.sections[i].captured = st.captured
+          s.sections[i].owner = st.captured ? 'german' : 'brit'
         }
       })
       this.weather.state.tod = resume.weather.tod
@@ -407,7 +408,7 @@ export class SimRunner implements CmdHost {
     s.phase = 'debrief'
     s.outcome = victory ? 'victory' : 'defeat'
     let score = s.stats.kills * SCORE.perKill + (s.wave - 1) * SCORE.perWave + Math.round(s.req * SCORE.perReqRemaining)
-    for (const sec of s.sections) if (!sec.captured) score += SCORE.perSectionHeld
+    for (const sec of s.sections) if (sec.owner === 'brit') score += SCORE.perSectionHeld
     s.stats.score = score
     this.ctx.events.emit('gameOver', { victory })
   }

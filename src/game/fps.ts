@@ -738,7 +738,7 @@ export class FpsMode {
     } else {
       // Engineer: parapet first, then torn wire — same priorities as the AI.
       const sec = sectionAt(g.ctx.s.sections, s.pos.x, s.pos.z)
-      if (sec && !sec.captured && sec.parapetHp < sec.parapetMax) {
+      if (sec && sec.owner === 'brit' && sec.parapetHp < sec.parapetMax) {
         sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 18 * g.ctx.mods.repairRate * dt)
         this.toolProgress = sec.parapetHp / sec.parapetMax
         if (Math.random() < dt * 0.6) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.35 })

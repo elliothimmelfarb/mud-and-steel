@@ -466,7 +466,7 @@ function engineerTick(ctx: Ctx, u: Unit, dt: number): void {
   if (!sap || sap.hp <= 0) return
   // Priority: broken parapet nearby, then torn wire.
   const sec = sectionAt(ctx.s.sections, sap.pos.x, sap.pos.z)
-  if (sec && !sec.captured && sec.parapetHp < sec.parapetMax) {
+  if (sec && sec.owner === 'brit' && sec.parapetHp < sec.parapetMax) {
     sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 8 * ctx.mods.repairRate * dt)
     if (ctx.rand() < dt * 0.4) snd(ctx.s, { name: 'build', x: sap.pos.x, y: 1, z: sap.pos.z, gain: 0.4 })
     sapperCitation(ctx, u, sap)

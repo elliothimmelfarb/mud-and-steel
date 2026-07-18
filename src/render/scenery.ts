@@ -341,9 +341,12 @@ export class Scenery {
     const gWire = makeInstanced(wireCoilGeometry(), 140, this.scene)
     const gPosts = makeInstanced(wirePostGeometry(), 220, this.scene)
     let gw = 0, gp = 0
-    // Belt sits in front of wherever their fire trench actually is.
-    const gz0 = t.layout === 'bigpush' ? -(WORLD.frontTrenchZ - 0.5) : WORLD.enemySpawnZ - 13
-    for (const rowOff of [5.5, 8.5]) {
+    // Belt sits in front of wherever their fire trench actually is. In the
+    // Big Push the belt is REAL sim wire (rendered by the live defence sync),
+    // so the cosmetic rows here are classic-only.
+    const gz0 = WORLD.enemySpawnZ - 13
+    const skipCosmeticBelt = t.layout === 'bigpush'
+    for (const rowOff of skipCosmeticBelt ? [] : [5.5, 8.5]) {
       for (let x = -TRENCH.frontSpanX + 3; x < TRENCH.frontSpanX - 3 && gw < 140; x += 6) {
         const lanePhase = (x + (rowOff > 7 ? 19 : 0) + 1000) % 38
         if (lanePhase < 7) continue // assault lane
