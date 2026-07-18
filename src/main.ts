@@ -6,11 +6,12 @@ import { AudioEngine } from './audio/audio'
 import { loadSettings, loadRun, highScore, clearRun } from './core/save'
 import { Game } from './game/game'
 import { Hud, helpSections, settingsSchema } from './ui/hud'
-import { createHelpOverlay, createSettingsPanel, createTitleScreen } from './ui/screens'
+import { createChangelogOverlay, createHelpOverlay, createSettingsPanel, createTitleScreen } from './ui/screens'
 import { defaultSettings, saveSettings } from './core/save'
 import { keyLabel } from './render/controls'
+import { APP_VERSION, CHANGELOG } from './ui/changelog'
 
-const VERSION = '1.0.0'
+const VERSION = APP_VERSION
 
 function bootProgress(p: number): void {
   const bar = document.getElementById('boot-bar')
@@ -93,6 +94,12 @@ function main(): void {
     document.body.appendChild(scr.el)
   }
 
+  const openTitleChangelog = () => {
+    const scr = createChangelogOverlay({ entries: CHANGELOG, onClose: () => closeStack(scr) })
+    stack.push(scr)
+    document.body.appendChild(scr.el)
+  }
+
   const showTitle = () => {
     // Leaving a live MP match: send the bye so the peer's AI takes over (or
     // the walkover fires) instead of gate-freezing them forever.
@@ -139,6 +146,7 @@ function main(): void {
       },
       onSettings: openTitleSettings,
       onHelp: openTitleHelp,
+      onChangelog: openTitleChangelog,
     })
     document.body.appendChild(title.el)
   }

@@ -303,6 +303,7 @@ export function createTitleScreen(o: {
   onContinue: () => void;
   onSettings: () => void;
   onHelp: () => void;
+  onChangelog: () => void;
 }): ScreenHandle {
   let page: 'main' | 'new' | 'bigpush' = 'main';
 
@@ -344,6 +345,7 @@ export function createTitleScreen(o: {
     menu.appendChild(chit('Continue', 'ms-btn', o.onContinue));
   }
   menu.appendChild(chit('Field Manual', 'ms-btn', o.onHelp));
+  menu.appendChild(chit('Despatches', 'ms-btn', o.onChangelog));
   menu.appendChild(chit('Settings', 'ms-btn', o.onSettings));
   content.appendChild(menu);
 
@@ -1091,6 +1093,51 @@ export function createHelpOverlay(o: {
 
   const foot = div('help-foot');
   foot.appendChild(chit('Close Manual', 'ms-btn ms-btn--primary', o.onClose));
+  book.appendChild(foot);
+
+  return { el, dispose: shell.dispose };
+}
+
+// ---------------------------------------------------------------------------
+// CHANGELOG / DESPATCHES
+// ---------------------------------------------------------------------------
+
+export function createChangelogOverlay(o: {
+  entries: Array<{ version: string; date: string; title: string; items: string[] }>;
+  onClose: () => void;
+}): ScreenHandle {
+  const shell = screenShell('help-screen changelog-screen', 'Despatches — war record', o.onClose);
+  const { el } = shell;
+
+  const book = div('ms-panel help-book');
+  el.appendChild(book);
+
+  const head = div('help-head');
+  head.appendChild(make('h2', 'help-title', 'DESPATCHES'));
+  head.appendChild(stamp('WAR RECORD', true));
+  book.appendChild(head);
+
+  const body = div('help-body ms-scroll changelog-body');
+  body.tabIndex = 0; // scrollable region must be keyboard-reachable
+  book.appendChild(body);
+
+  for (const e of o.entries) {
+    const entry = div('changelog-entry');
+    const ehead = div('changelog-entry__head');
+    ehead.appendChild(make('span', 'changelog-entry__version', 'v' + e.version));
+    ehead.appendChild(make('span', 'changelog-entry__title', e.title));
+    ehead.appendChild(make('span', 'changelog-entry__date', e.date));
+    entry.appendChild(ehead);
+    const list = make('ul', 'changelog-entry__items');
+    for (const item of e.items) {
+      list.appendChild(make('li', undefined, item));
+    }
+    entry.appendChild(list);
+    body.appendChild(entry);
+  }
+
+  const foot = div('help-foot');
+  foot.appendChild(chit('Close Record', 'ms-btn ms-btn--primary', o.onClose));
   book.appendChild(foot);
 
   return { el, dispose: shell.dispose };

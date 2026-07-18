@@ -1781,6 +1781,54 @@ button.ms-kbd:active {
   margin-top: 1em;
 }
 
+/* --- Despatches / changelog ------------------------------------------------ */
+
+.changelog-entry {
+  padding: 0.8em 0 0.9em;
+  border-bottom: 1px dashed rgba(43, 38, 32, 0.35);
+}
+
+.changelog-entry:last-child { border-bottom: none; }
+
+.changelog-entry__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7em;
+  margin-bottom: 0.35em;
+}
+
+.changelog-entry__version {
+  font-family: var(--font-type);
+  font-weight: 700;
+  font-size: 0.85em;
+  padding: 0.1em 0.45em;
+  border: 1px solid rgba(43, 38, 32, 0.5);
+  background: rgba(91, 91, 63, 0.14);
+  white-space: nowrap;
+}
+
+.changelog-entry__title {
+  flex: 1;
+  font-family: var(--font-stencil);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.98em;
+}
+
+.changelog-entry__date {
+  font-family: var(--font-type);
+  font-size: 0.78em;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
+.changelog-entry__items {
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.changelog-entry__items li { margin-bottom: 0.3em; }
+
 /* ==========================================================================
    HUD (built by the game, styled here)
    ========================================================================== */
