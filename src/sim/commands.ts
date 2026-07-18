@@ -10,9 +10,9 @@
  * it has changed) and drops invalid ones silently and identically on all
  * clients.
  */
-import type { BuildableId, DefenceKindId, Team, TargetPriority, Unit, UnitKindId } from '../core/types'
+import type { BuildableId, DefenceKindId, EnemyKindId, Team, TargetPriority, Unit, UnitKindId } from '../core/types'
 import {
-  DEFENCE_DEFS, ECONOMY, ORDER_DEFS, PLACEMENT, TRENCH, UNIT_DEFS, UPGRADE_DEFS,
+  DEFENCE_DEFS, ECONOMY, ENEMY_DEFS, ORDER_DEFS, PLACEMENT, TRENCH, UNIT_DEFS, UPGRADE_DEFS,
   UPGRADE_TIER_WAVE, WIRE_SEGMENT_LEN, WORLD,
 } from '../core/config'
 import { forkRand } from '../core/rng'
@@ -23,6 +23,7 @@ import { spawnFlare } from './projectiles'
 import { spawnVehicle } from './vehicles'
 import { startCreepingBarrage } from './barrage'
 import { issueAssault, issueConsolidate, issueCovering, issueRecall } from './assault'
+import { makeSquad } from './enemies'
 
 export type OrderId = keyof typeof ORDER_DEFS
 
@@ -44,12 +45,21 @@ export type Cmd =
   | { t: 'covering'; sections: number[]; targetSection: number }
   | { t: 'recall'; groupId: number }
   | { t: 'consolidate'; section: number }
+  // German-side commands (the AI commander today; a human via lockstep in M5).
+  | { t: 'spawnsquad'; kinds: EnemyKindId[]; x: number; role: 'garrison' | 'assault'; targetSection: number }
+  | { t: 'gbarrage'; x: number; z: number; shells: number; gas: boolean }
 
 export interface Envelope {
   tick: number
   side: Team
   seq: number
   cmds: Cmd[]
+  /**
+   * Emitted by the deterministic in-sim AI commander. NOT recorded in the
+   * replay log — every client (and every replay) re-derives these from the
+   * seed, so logging them would apply them twice.
+   */
+  ai?: boolean
 }
 
 /** What a command needs from its host besides the sim context. */
@@ -455,5 +465,35 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
     case 'consolidate':
       if (s.mode === 'bigpush') issueConsolidate(ctx, side, cmd.section)
       break
+
+    case 'spawnsquad': {
+      // The German commander's buy: a squad marches in from their rear.
+      if (s.mode !== 'bigpush' || side !== 'german') return
+      let cost = 0
+      for (const k of cmd.kinds) cost += ENEMY_DEFS[k].cost
+      if (s.germanReq < cost) return
+      const target = s.sections.find((c) => c.id === cmd.targetSection)
+      if (!target) return
+      if (cmd.role === 'garrison' && target.home !== 'german') return
+      if (cmd.role === 'assault' && target.owner !== 'brit') return
+      s.germanReq -= cost
+      makeSquad(ctx, cmd.kinds, cmd.x, cmd.targetSection, {
+        spawnZ: -(WORLD.depth / 2 - 12),
+        role: cmd.role,
+      })
+      ctx.flowDirty = true
+      break
+    }
+
+    case 'gbarrage': {
+      // German off-map guns: a registered shoot, paid from their purse.
+      if (s.mode !== 'bigpush' || side !== 'german') return
+      const cost = Math.round(cmd.shells * 3)
+      if (s.germanReq < cost) return
+      s.germanReq -= cost
+      s.barrages.push({ x: cmd.x, z: cmd.z, shellsLeft: cmd.shells, gas: cmd.gas, t: -6.5, interval: 0.75 })
+      ctx.events.emit('barrageWarning', { x: cmd.x, z: cmd.z, seconds: 6.5 })
+      break
+    }
   }
 }

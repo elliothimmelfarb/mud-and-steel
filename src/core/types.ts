@@ -166,6 +166,7 @@ export type EnemyBehavior =
   | 'melee'       // in the trench, close combat
   | 'rout'        // broken, fleeing north
   | 'mopup'       // pushing along a captured trench
+  | 'garrison'    // Big Push: walk to coverTarget (his post) and HOLD it
 
 export interface Enemy extends Soldier {
   kind: EnemyKindId

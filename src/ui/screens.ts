@@ -285,14 +285,15 @@ export function createTitleScreen(o: {
   highScore: number | null;
   version: string;
   onNewGame: (x: { difficulty: 'quiet' | 'front' | 'push'; seed: string }) => void;
+  onBigPush?: (x: { length: 'raid' | 'battle' | 'grand' | 'attrition'; persona: 'methodical' | 'stosstrupp' | 'opportunist'; seed: string }) => void;
   onContinue: () => void;
   onSettings: () => void;
   onHelp: () => void;
 }): ScreenHandle {
-  let page: 'main' | 'new' = 'main';
+  let page: 'main' | 'new' | 'bigpush' = 'main';
 
   const shell = screenShell('title-screen', 'Mud & Steel — title', () => {
-    if (page === 'new') showMain();
+    if (page !== 'main') showMain();
   });
   const { el } = shell;
 
@@ -322,6 +323,9 @@ export function createTitleScreen(o: {
 
   const newBattleBtn = chit('New Battle', 'ms-btn ms-btn--primary', () => showNew());
   menu.appendChild(newBattleBtn);
+  if (o.onBigPush) {
+    menu.appendChild(chit('The Big Push', 'ms-btn ms-btn--primary', () => showBigPush()));
+  }
   if (o.hasSave) {
     menu.appendChild(chit('Continue', 'ms-btn', o.onContinue));
   }
@@ -415,6 +419,106 @@ export function createTitleScreen(o: {
 
   content.appendChild(wrap);
 
+  // --- The Big Push panel: match length + opposing commander + seed ---
+  const bpWrap = div('torn-wrap title-new');
+  bpWrap.hidden = true;
+  const bpPanel = div('ms-panel torn');
+  bpWrap.appendChild(bpPanel);
+  {
+    const bpHead = div('title-new__head');
+    bpHead.appendChild(make('h2', 'title-new__title', 'THE BIG PUSH — TWO ARMIES, ONE FIELD'));
+    bpHead.appendChild(stamp('OFFENSIVE'));
+    bpPanel.appendChild(bpHead);
+  }
+
+  const LENGTHS: Array<{ id: 'raid' | 'battle' | 'grand' | 'attrition'; name: string; flavor: string }> = [
+    { id: 'raid', name: 'RAID', flavor: '“ten minutes”' },
+    { id: 'battle', name: 'BATTLE', flavor: '“twenty minutes”' },
+    { id: 'grand', name: 'GRAND ASSAULT', flavor: '“thirty-five minutes”' },
+    { id: 'attrition', name: 'ATTRITION', flavor: '“to the last battalion”' },
+  ];
+  let bpLength: 'raid' | 'battle' | 'grand' | 'attrition' = 'battle';
+  const lenCards: HTMLDivElement[] = [];
+  {
+    const lenGroup = div('diff-cards');
+    lenGroup.setAttribute('role', 'radiogroup');
+    lenGroup.setAttribute('aria-label', 'Match length');
+    bpPanel.appendChild(lenGroup);
+    for (const L of LENGTHS) {
+      const c = div('ms-card diff-card');
+      c.setAttribute('role', 'radio');
+      c.appendChild(div('diff-card__name', L.name));
+      c.appendChild(div('diff-card__flavor', L.flavor));
+      c.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); c.click(); }
+      });
+      lenGroup.appendChild(c);
+      lenCards.push(c);
+    }
+    rovingGroup(lenCards, 1, 'aria-checked', (i) => {
+      bpLength = LENGTHS[i]!.id;
+      for (let j = 0; j < lenCards.length; j++) lenCards[j]!.classList.toggle('ms-card--selected', j === i);
+    });
+  }
+
+  const PERSONAS: Array<{ id: 'methodical' | 'stosstrupp' | 'opportunist'; name: string; flavor: string }> = [
+    { id: 'methodical', name: 'GEN. VON HALTEN', flavor: '“methodical — digs in, probes, answers”' },
+    { id: 'stosstrupp', name: 'OBST. STURMFELD', flavor: '“stosstrupp — hoards, then hammers”' },
+    { id: 'opportunist', name: 'MAJ. FUCHS', flavor: '“opportunist — finds the thin stretch”' },
+  ];
+  let bpPersona: 'methodical' | 'stosstrupp' | 'opportunist' = 'methodical';
+  const perCards: HTMLDivElement[] = [];
+  {
+    const perGroup = div('diff-cards');
+    perGroup.setAttribute('role', 'radiogroup');
+    perGroup.setAttribute('aria-label', 'Opposing commander');
+    bpPanel.appendChild(perGroup);
+    for (const P of PERSONAS) {
+      const c = div('ms-card diff-card');
+      c.setAttribute('role', 'radio');
+      c.appendChild(div('diff-card__name', P.name));
+      c.appendChild(div('diff-card__flavor', P.flavor));
+      c.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); c.click(); }
+      });
+      perGroup.appendChild(c);
+      perCards.push(c);
+    }
+    rovingGroup(perCards, 0, 'aria-checked', (i) => {
+      bpPersona = PERSONAS[i]!.id;
+      for (let j = 0; j < perCards.length; j++) perCards[j]!.classList.toggle('ms-card--selected', j === i);
+    });
+  }
+
+  const bpSeedRow = div('seed-row');
+  const bpSeedLabel = make('label', 'seed-row__label', 'SECTOR MAP (SEED)');
+  bpSeedLabel.htmlFor = 'ms-bp-seed-input';
+  const bpSeedInput = make('input', 'seed-input');
+  bpSeedInput.id = 'ms-bp-seed-input';
+  bpSeedInput.type = 'text';
+  bpSeedInput.maxLength = 24;
+  bpSeedInput.autocomplete = 'off';
+  bpSeedInput.spellcheck = false;
+  bpSeedInput.placeholder = 'blank for random draw';
+  bpSeedRow.appendChild(bpSeedLabel);
+  bpSeedRow.appendChild(bpSeedInput);
+  bpPanel.appendChild(bpSeedRow);
+
+  const bpBegin = (): void => {
+    const seed = bpSeedInput.value.trim().toUpperCase() || randomSeed();
+    o.onBigPush?.({ length: bpLength, persona: bpPersona, seed });
+  };
+  bpSeedInput.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); bpBegin(); }
+  });
+  {
+    const bpActions = div('title-new__actions');
+    bpActions.appendChild(chit('Back', 'ms-btn ms-btn--ghost', () => showMain()));
+    bpActions.appendChild(chit('Over the Top', 'ms-btn ms-btn--primary', bpBegin));
+    bpPanel.appendChild(bpActions);
+  }
+  content.appendChild(bpWrap);
+
   const version = div('title-version', o.version);
   el.appendChild(version);
 
@@ -422,11 +526,20 @@ export function createTitleScreen(o: {
     page = 'new';
     menu.hidden = true;
     wrap.hidden = false;
+    bpWrap.hidden = true;
     cardEls[1]!.focus();
+  }
+  function showBigPush(): void {
+    page = 'bigpush';
+    menu.hidden = true;
+    wrap.hidden = true;
+    bpWrap.hidden = false;
+    lenCards[1]!.focus();
   }
   function showMain(): void {
     page = 'main';
     wrap.hidden = true;
+    bpWrap.hidden = true;
     menu.hidden = false;
     newBattleBtn.focus();
   }

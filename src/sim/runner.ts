@@ -36,6 +36,7 @@ import { updateCapture } from './trench'
 import { planWave, updateWaveSpawns, noteWireDensity } from './waves'
 import { updateBarrages } from './barrage'
 import { rebuildFlow } from './flow'
+import { AiCommander, type AiPersona } from './ai'
 import {
   applyEnvelope, createDefence, createUnit, placeStartingWire,
   type CmdHost, type Envelope,
@@ -55,6 +56,8 @@ export interface RunnerOpts {
   startReq?: number
   /** Big Push match length (default 'battle'). Ignored in classic. */
   matchLen?: MatchLength
+  /** Big Push: the German AI commander persona (null = no AI, e.g. MP human). */
+  aiPersona?: AiPersona | null
 }
 
 export class SimRunner implements CmdHost {
@@ -69,7 +72,10 @@ export class SimRunner implements CmdHost {
   private waveRand: Rand
   private pending: Envelope[] = []
   private seqCounter = 0
+  private aiSeq = 0
   private draining = false
+  /** The German AI commander (Big Push SP; also the MP disconnect fallback). */
+  readonly ai: AiCommander | null
 
   constructor(opts: RunnerOpts) {
     const seed = hashString(opts.seedStr)
@@ -173,6 +179,10 @@ export class SimRunner implements CmdHost {
     }
 
     rebuildFlow(this.ctx)
+
+    this.ai = mode === 'bigpush' && opts.aiPersona !== null
+      ? new AiCommander(opts.aiPersona ?? 'methodical', forkRand(seed, 'ai'))
+      : null
   }
 
   /** Start the match. Call AFTER subscribing to events. */
@@ -229,7 +239,8 @@ export class SimRunner implements CmdHost {
       applyEnvelope(this, env)
       // The log records the tick the envelope was APPLIED at, not the stamp —
       // a late arrival (lockstep jitter) must replay at its real boundary.
-      this.log.push(env.tick === s.tick ? env : { ...env, tick: s.tick })
+      // AI envelopes are never logged: replays re-derive them from the seed.
+      if (!env.ai) this.log.push(env.tick === s.tick ? env : { ...env, tick: s.tick })
     }
     this.draining = false
   }
@@ -241,6 +252,13 @@ export class SimRunner implements CmdHost {
   step(dt: number = SIM_DT): void {
     const ctx = this.ctx
     const s = ctx.s
+
+    // The AI commander speaks first — same deterministic envelopes on every
+    // client that runs the same seed, so lockstep peers never disagree on it.
+    if (this.ai && s.outcome === 'ongoing' && s.phase !== 'debrief') {
+      const cmds = this.ai.think(ctx)
+      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: 'german', seq: this.aiSeq++, cmds, ai: true })
+    }
 
     // Commands apply only at the tick boundary — before anything moves.
     this.drainQueue()
