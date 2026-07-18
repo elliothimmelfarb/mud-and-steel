@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — The Line Rebuilt: A Realism Overhaul · 18 Jul 1916 (2026)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:920px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.3rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:66ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{
+    background:var(--card);border:1px solid var(--rule);border-radius:4px;
+    padding:.55rem 1rem;text-align:center;min-width:7.5rem;
+  }
+  .tally b{display:block;font-size:1.5rem;color:var(--brass)}
+  .tally span{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.field{border-left-color:var(--khaki)}
+  section.item.enemy{border-left-color:var(--blood)}
+  section.item.works{border-left-color:var(--steel)}
+  .kicker{font-size:.66rem;letter-spacing:.32em;text-transform:uppercase;color:var(--khaki);margin-bottom:.25rem}
+  h2{font-size:1.28rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.55rem}
+  .item p{margin:.5rem 0;color:var(--ink-soft)}
+  .item p strong{color:var(--ink)}
+  .before-after{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;margin:.9rem 0 .2rem}
+  @media (max-width:640px){.before-after{grid-template-columns:1fr}}
+  .ba{background:var(--paper);border:1px dashed var(--rule);border-radius:4px;padding:.7rem .9rem;font-size:.92rem}
+  .ba .tag{font-size:.62rem;letter-spacing:.28em;text-transform:uppercase;color:var(--khaki);display:block;margin-bottom:.3rem}
+  .ba.bad .tag{color:var(--blood)}
+  .ba.good .tag{color:var(--brass)}
+  ul.plain{margin:.5rem 0 .2rem 1.1rem;color:var(--ink-soft)}
+  ul.plain li{margin:.3rem 0}
+  ul.plain b{color:var(--ink)}
+  .verify{
+    border:1px solid var(--rule);border-radius:4px;background:var(--paper);
+    padding:1.1rem 1.4rem;margin:2rem 0 1.2rem;
+  }
+  .verify h3{font-variant:small-caps;letter-spacing:.05em;margin-bottom:.4rem;font-size:1.05rem}
+  .verify li{margin:.3rem 0 .3rem 1.1rem;color:var(--ink-soft)}
+  footer{
+    margin-top:2.6rem;text-align:center;color:var(--khaki);
+    font-size:.8rem;font-style:italic;border-top:3px double var(--rule);padding-top:1.2rem;
+  }
+  code{font-family:'Courier New',monospace;font-size:.88em;background:var(--paper-2);padding:.05em .3em;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="crest">Second Army · Flanders · Field Despatch</div>
+    <h1>The Line Rebuilt</h1>
+    <div class="sub">A realism overhaul of the trench system, end to end — 18th July, 1916 (2026)</div>
+    <div class="stamp">Secret</div>
+  </header>
+
+  <p class="lede">
+    The trenches had been through several rounds of polish and still read as
+    <strong>grassy gullies with beads on top</strong>. This round rebuilt them
+    against the photographic record: the crenellated trace from the air, the
+    bare trodden earth around every dig, sandbags that sag under their own
+    weight, revetment that lies against the wall it holds, wire in front of
+    every parapet — and a German line on the horizon where until now there
+    was only empty grass.
+  </p>
+
+  <div class="tally">
+    <div><b>8</b><span>defects fixed</span></div>
+    <div><b>2</b><span>from Elliot's eye</span></div>
+    <div><b>3</b><span>new prop kinds</span></div>
+    <div><b>1</b><span>German line raised</span></div>
+    <div><b>0</b><span>gameplay slow-zones added</span></div>
+  </div>
+
+  <section class="item">
+    <div class="kicker">The Trace · terrain.ts</div>
+    <h2>Crenellation — the aerial signature</h2>
+    <p>
+      The front and support lines were smooth triangle-wave zigzags; from the
+      commander's view they read as wavy ditches. Every aerial photograph of a
+      British fire trench shows the same thing instead: straight <strong>fire
+      bays</strong> broken by square <strong>traverse teeth</strong>, so no
+      shell burst or enfilading burst can sweep more than one bay.
+    </p>
+    <div class="before-after">
+      <div class="ba bad"><span class="tag">Before</span>A ~14 m sawtooth; slots and parapet ran continuously around every corner.</div>
+      <div class="ba good"><span class="tag">After</span>Per 14 m period: a ~9.5 m bay forward, a square jog back, a 4.5 m link behind the tooth, a jog forward. Fighting sections, fire-step benches and slots live on the bays only; traverses stay bare earth.</div>
+    </div>
+    <p>
+      The carve is now <strong>two-pass</strong>: every line's floor first, then
+      the parapet/parados banks, with a guard that skips any cell another
+      corridor has already cut (or a bench has claimed). Banks can no longer
+      wall off a crossing corridor — which is also what used to spill spoil
+      into the zigzag corners. Communication trenches now zigzag properly
+      every ~8.5 m instead of one long dogleg.
+    </p>
+  </section>
+
+  <section class="item field">
+    <div class="kicker">The Ground · terrain.ts + terrainMesh + clutter</div>
+    <h2>Bare earth where men dig and walk</h2>
+    <p>
+      The single biggest lie in the old picture: grass ran unbroken down the
+      walls, across the floor and over both banks. Trenchworks kill turf for
+      metres around — digging, spoil, and ten thousand boots.
+    </p>
+    <p>
+      A ragged <strong>trodden-earth halo</strong> now runs along every line —
+      walls, floor, parapet and parados — painted into <code>churnVis</code>
+      only, the render-side churn channel, so the shader dresses the works in
+      mud <strong>without adding a single point of movement cost</strong>
+      (gameplay <code>churn</code> stays shell-driven). Grass tufts read the
+      same channel and no longer sprout from the parapet crest.
+    </p>
+  </section>
+
+  <section class="item field">
+    <div class="kicker">Elliot's Eye · groundcover.ts</div>
+    <h2>Sandbags that have settled</h2>
+    <p>
+      <em>“Too perky and tall. They should be flatter and feel like they are
+      sagging on top of each other.”</em> — quite right. The bags were scaled
+      spheres perched in a bead-string.
+    </p>
+    <ul class="plain">
+      <li><b>Every bag reshaped:</b> wider and 30% lower, crown flattened and faintly saddled, skirt bulged outward — a sack that has taken the weight of the course above.</li>
+      <li><b>Courses nest:</b> three rows now interlock (each row's base sits below the crown of the last) and upper bags roll a few degrees into the valleys beneath them.</li>
+      <li><b>The wall nests into the crest</b> (dropped 7 cm into the bank) instead of perching on it; the dugout's flanking stacks compressed to match the new bag height.</li>
+    </ul>
+  </section>
+
+  <section class="item field">
+    <div class="kicker">Elliot's Eye · scenery.ts</div>
+    <h2>Revetment that touches the wall</h2>
+    <p>
+      <em>“The wood slats aren't against the walls — there are gaps between the
+      slats and the wall which is very jarring.”</em> The panels stood plumb
+      vertical against a wall that slopes; daylight showed behind every board.
+    </p>
+    <ul class="plain">
+      <li><b>Raked to the measured slope:</b> each panel samples the wall it faces and leans back to lie on the earth, base pushed into the wall foot.</li>
+      <li><b>Corner-guarded:</b> every piece probes both of its ends before placing — if a crossing corridor cut the wall away (the 90° turns), the piece skips itself rather than jut into the path.</li>
+      <li><b>Fire-step face lowered</b> from a 1.5 m centreline fence to a 1.0 m boarded lower riser under an earth lip — the two-tier step of the manuals, and no more planks poking over the skyline from behind.</li>
+    </ul>
+  </section>
+
+  <section class="item enemy">
+    <div class="kicker">The Enemy · terrain.ts + scenery.ts + waves.ts</div>
+    <h2>A German line on the horizon</h2>
+    <p>
+      No-man's land used to fade into empty pasture — no man ever held a front
+      opposite nobody. A <strong>south-facing German fire trench</strong> (same
+      crenellated trace, mirrored banks) now stands at the north edge behind
+      the enemy spawn, sandbagged along its parapet, with a
+      <strong>scenery wire belt</strong> in front of it, cut by the assault
+      lanes the field-grey columns pour through. Enemy vehicles now spawn
+      abreast instead of in a deep column, so nothing materialises inside the
+      German works.
+    </p>
+  </section>
+
+  <section class="item enemy">
+    <div class="kicker">The Wire · game.ts</div>
+    <h2>No line ever stood behind bare grass</h2>
+    <p>
+      Fresh runs now begin behind <strong>two staggered rows of worn wire</strong>
+      (reduced hp, high wear — rusty and sagging, not a free fortress), with
+      sally-port gaps on the communication-trench axes and a couple of random
+      blast gaps. The gaps are the funnels; the wire is the reason wave one
+      doesn't walk in shoulder to shoulder. Resumed saves restore exactly the
+      wire they had.
+    </p>
+  </section>
+
+  <section class="item works">
+    <div class="kicker">Furniture · groundcover.ts + scenery.ts</div>
+    <h2>Ladders, iron, periscopes, honest duckboards</h2>
+    <ul class="plain">
+      <li><b>Scaling ladders</b> lean mid-bay against the enemy wall, heads over the parapet — placed only where the bench truly exists.</li>
+      <li><b>Corrugated-iron sheets</b> (sine-rippled, rust-bloomed, one dog-eared corner) lean on the parados here and there as scrounged revetment.</li>
+      <li><b>Trench periscopes</b> peek over the parapet on a handful of bays.</li>
+      <li><b>Duckboards</b> finally behave: they skip benches, junction steps and any ground steep enough that a board would climb a wall — the ladder-up-the-wall artefact is gone.</li>
+    </ul>
+  </section>
+
+  <div class="verify">
+    <h3>Verification</h3>
+    <ul>
+      <li>Gallery presets screenshotted: overview (crenellated line + German works + bare-earth band), front-trench close (settled bags, tucked revetment, clean skyline), no-man's-land wet (German horizon holds).</li>
+      <li>FPS lab: fire-step view over the parapet — wire pickets and the far line read; in-trench view — bags sag along the crest, planks lie on the walls.</li>
+      <li>Corner probe script re-ran the exact placement math against the live terrain: <b>zero</b> wall pieces protrude above grade.</li>
+      <li>Live wave smoke test (sim pumped headless): 20 Germans spawned clear of their own works, crossed the lanes and the British belt, entered the bays, captured sections; wire, capture and flow all behave. <code>tsc --noEmit</code> clean.</li>
+      <li>One field note for future sessions: the game auto-pauses when its tab is hidden (<code>main.ts</code> visibilitychange) — drive the sim via <code>__game.frame()</code> when testing headless.</li>
+    </ul>
+  </div>
+
+  <footer>
+    Issue #32 · branch <code>claude/trenches-realism-accuracy-3622b0</code> ·
+    despatch filed 18 Jul 2026 — the line now looks like the one they held.
+  </footer>
+</div>
+</body>
+</html>

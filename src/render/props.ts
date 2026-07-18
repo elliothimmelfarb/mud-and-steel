@@ -30,6 +30,7 @@ export {
   deadTreeGeometry, wirePostGeometry, wireCoilGeometry, sandbagGeometry,
   tankTrapGeometry, duckboardGeometry, crossGraveGeometry, rubbleGeometry,
   stakeGeometry, sandbagCourseGeometry, revetmentPanelGeometry,
+  scalingLadderGeometry, corrugatedSheetGeometry,
 } from './props/groundcover'
 export { buildRuin, buildChurchRuin, buildDugout, buildAmmoBoxes } from './props/structures'
 export {

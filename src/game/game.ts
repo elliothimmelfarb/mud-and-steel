@@ -526,6 +526,10 @@ export class Game {
       this.weather.state.tod = resume.weather.tod
       this.weather.state.wetness = resume.weather.wetness
       this.terrain.setWetness(resume.weather.wetness)
+    } else {
+      // Fresh sector: two years of occupation means the line starts wired.
+      // (Resumed runs restore whatever wire survived from the save instead.)
+      this.placeStartingWire(s)
     }
 
     rebuildFlow(this.ctx)
@@ -1014,6 +1018,35 @@ export class Game {
     s.units.push(u)
     if (announce) this.events.emit('unitPlaced', { unitId: u.id })
     return u
+  }
+
+  /**
+   * The sector has been fought over for two years — no front line ever stood
+   * behind bare grass. Two staggered rows of WORN wire (reduced hp, high wear)
+   * front the fire trench, with sally-port gaps on the communication-trench
+   * axes plus a couple of random blast gaps. The wear keeps the opening waves
+   * biting and the player's own fresh wire worth building; the gaps are the
+   * funnels the attack pours through.
+   */
+  private placeStartingWire(s: SimState): void {
+    const rand = forkRand(s.seed, 'wire0')
+    const gaps: number[] = [...TRENCH.commTrenchXs]
+    const nExtra = 2 + (rand() < 0.5 ? 1 : 0)
+    for (let i = 0; i < nExtra; i++) gaps.push((rand() - 0.5) * 2 * (TRENCH.frontSpanX - 20))
+    for (const row of [0, 1]) {
+      const z0 = WORLD.frontTrenchZ - 10.5 - row * 3.5
+      for (let x = -TRENCH.frontSpanX + 4; x <= TRENCH.frontSpanX - 4; x += WIRE_SEGMENT_LEN) {
+        const wx = x + (row ? WIRE_SEGMENT_LEN / 2 : 0)
+        if (gaps.some((g) => Math.abs(wx - g) < 4.5)) continue
+        const hp = Math.round(DEFENCE_DEFS.wire.hp * (0.35 + rand() * 0.2))
+        s.defences.push({
+          id: s.nextId++, kind: 'wire',
+          pos: { x: wx, z: z0 + (rand() - 0.5) * 1.6 },
+          hp, maxHp: hp, wear: 0.35 + rand() * 0.35, active: false,
+          angle: (rand() - 0.5) * 0.15,
+        })
+      }
+    }
   }
 
   private createDefence(kind: DefenceKindId, x: number, z: number, angle: number, announce: boolean): void {

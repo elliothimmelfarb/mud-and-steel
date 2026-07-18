@@ -205,8 +205,11 @@ export function updateWaveSpawns(ctx: Ctx, elapsed: number): boolean {
   while (s.planCursor < plan.spawns.length && plan.spawns[s.planCursor].at <= elapsed) {
     const sp = plan.spawns[s.planCursor++]
     if (sp.kind === 'ecar' || sp.kind === 'etank') {
+      // Spread abreast, not in a deep column: the old z = spawn - i*12 put the
+      // second vehicle inside the German trench corridor at spawn.
       for (let i = 0; i < sp.count; i++) {
-        spawnVehicle(ctx, sp.kind, sp.x + (ctx.rand() - 0.5) * 20, WORLD.enemySpawnZ - i * 12)
+        const vx = sp.x + (i - (sp.count - 1) / 2) * 16 + (ctx.rand() - 0.5) * 8
+        spawnVehicle(ctx, sp.kind, vx, WORLD.enemySpawnZ - (i % 2) * 6)
       }
     } else {
       const kind = sp.kind as EnemyKindId

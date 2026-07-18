@@ -92,6 +92,9 @@ export class Terrain implements TerrainLike {
   readonly frontLine: Vec2[] = []
   readonly supportLine: Vec2[] = []
   readonly commLines: Vec2[][] = []
+  /** The German fire trench on the north horizon — scenery + spawn backdrop,
+   *  never sectioned or slotted (the sim only reads front/support). */
+  readonly germanLine: Vec2[] = []
   /** Flattened emplacement pads (behind the lines). */
   readonly pads: Vec2[] = []
 
@@ -154,6 +157,10 @@ export class Terrain implements TerrainLike {
 
   trenchAt(x: number, z: number): number { return this.sample(this.trench, x, z) }
   churnAt(x: number, z: number): number { return this.sample(this.churn, x, z) }
+  /** Render churn (⊇ churn): adds the trodden-earth trench halo + ejecta rays.
+   *  For VISUAL placement decisions (grass must not grow on bare earth); never
+   *  for movement cost — that's churnAt. */
+  churnVisAt(x: number, z: number): number { return this.sample(this.churnVis, x, z) }
 
   mudAt(x: number, z: number): number {
     // Churned ground holds water; trenches are duckboarded (drier going).
@@ -517,9 +524,21 @@ export class Terrain implements TerrainLike {
     //    junction is a clean min/union at one depth instead of additive digging.
     this.buildTrenchPolylines(rand)
     const preTrench = this.heights.slice()
-    this.carveTrench(this.frontLine, true, preTrench)
-    this.carveTrench(this.supportLine, true, preTrench)
-    for (const line of this.commLines) this.carveTrench(line, false, preTrench)
+    this.carveTrenchFloor(this.frontLine, true, 1, preTrench)
+    this.carveTrenchFloor(this.supportLine, true, 1, preTrench)
+    this.carveTrenchFloor(this.germanLine, true, -1, preTrench)
+    for (const line of this.commLines) this.carveTrenchFloor(line, false, 1, preTrench)
+    // Banks go up only after EVERY floor is down — the guard inside needs the
+    // full trench mask so no bank can wall a corridor it hasn't heard of.
+    this.raiseTrenchBanks(this.frontLine, 1)
+    this.raiseTrenchBanks(this.supportLine, 1)
+    this.raiseTrenchBanks(this.germanLine, -1)
+    // Digging, spoil and boot traffic kill the turf: a ragged trodden-earth
+    // band along every line, banks included. churnVis ONLY — the render mud
+    // band adds zero gameplay slow-zone (churn proper stays shell-driven).
+    for (const line of [this.frontLine, this.supportLine, this.germanLine, ...this.commLines]) {
+      this.stampEarthHalo(line)
+    }
 
     // 3b) Spoil heaps flanking each communication trench — dug-out earth thrown
     //     to the sides. Small mounds + churn, kept low so they never wall the
@@ -579,12 +598,13 @@ export class Terrain implements TerrainLike {
         this.crater(cx + (rand() - 0.5) * 9, z, rad, 0.35 + rand() * 0.55)
       }
     }
-    // A few overs behind the front line (clear of the communication trenches).
+    // A few overs behind the front line (clear of the communication trenches
+    // and of the set-back links, which now live at frontZ + ~4).
     for (let i = 0; i < 7; i++) {
       const rad = 1.1 + rand() * 0.9
       let x = (rand() - 0.5) * (this.width - 40)
       for (const cx of TRENCH.commTrenchXs) if (Math.abs(x - cx) < 10) x += x > cx ? 10 : -10
-      this.crater(x, frontZ + 7 + rand() * 4, rad, 0.3 + rand() * 0.35)
+      this.crater(x, frontZ + 10 + rand() * 4, rad, 0.3 + rand() * 0.35)
     }
     this.craterOps.length = 0 // pre-war holes are part of the base map, not history
 
@@ -598,59 +618,165 @@ export class Terrain implements TerrainLike {
     this.refreshWater(0, 0, this.cols, this.rows)
   }
 
+  /**
+   * A crenellated fire-trench trace — the aerial signature of the Western
+   * Front. Per 14 m period: a straight fire BAY on the forward line, a square
+   * TRAVERSE jog back, a short LINK behind the traverse island, and a jog
+   * forward into the next bay. `backOff` is signed: +4.5 sets the links 4.5 m
+   * toward +z (a south-facing British line), negative mirrors it for the
+   * Germans. Bays carry small per-period jitter so the trace reads dug, not
+   * drafted; only bay segments (x-running, ≥8 m) get sections/slots/benches.
+   */
+  private makeCrenellated(span: number, baseZ: number, backOff: number, bayLen: number, rand: Rand): Vec2[] {
+    const line: Vec2[] = []
+    const period = TRENCH.sectionLen
+    for (let x0 = -span; x0 + period <= span + 0.01; x0 += period) {
+      const zF = baseZ + (rand() - 0.5) * 1.2
+      const zB = zF + backOff + (rand() - 0.5) * 0.8
+      const L = bayLen + (rand() - 0.5) * 1.4
+      line.push({ x: x0, z: zF })
+      line.push({ x: x0 + L, z: zF })
+      line.push({ x: x0 + L, z: zB })
+      line.push({ x: x0 + period, z: zB })
+    }
+    // Close with a final forward bay so the trace ends fighting, not hiding.
+    line.push({ x: span, z: baseZ + (rand() - 0.5) * 1.2 })
+    return line
+  }
+
   private buildTrenchPolylines(rand: Rand): void {
-    // Front line: classic zigzag with fire bays and traverses.
-    const span = TRENCH.frontSpanX
-    let flip = 1
-    for (let x = -span; x <= span + 0.01; x += TRENCH.sectionLen) {
-      this.frontLine.push({ x, z: WORLD.frontTrenchZ + flip * 3 + (rand() - 0.5) * 1.5 })
-      flip *= -1
-    }
-    // Support line: shallower zigzag.
-    flip = 1
-    for (let x = -TRENCH.supportSpanX; x <= TRENCH.supportSpanX + 0.01; x += TRENCH.sectionLen) {
-      this.supportLine.push({ x, z: WORLD.supportTrenchZ + flip * 2 })
-      flip *= -1
-    }
-    // Communication trenches: front → support with a dogleg (never straight — enfilade).
+    // Front line: crenellated — fire bays forward, traverse islands, links behind.
+    this.frontLine.push(...this.makeCrenellated(TRENCH.frontSpanX, WORLD.frontTrenchZ - 0.5, 4.5, 9.5, rand))
+    // Support line: same pattern, slightly longer bays and a shallower set-back.
+    this.supportLine.push(...this.makeCrenellated(TRENCH.supportSpanX, WORLD.supportTrenchZ - 0.5, 3.8, 10.5, rand))
+    // German fire trench on the north horizon, mirrored to face the British.
+    this.germanLine.push(...this.makeCrenellated(TRENCH.frontSpanX, WORLD.enemySpawnZ - 13, -4.5, 9.5, rand))
+    // Communication trenches: front → support, zigzagging every ~8.5 m against
+    // enfilade, with a per-line drift so no two look alike. They enter the
+    // front system mid-LINK (the links sit at x ≡ cx - 2.25 mod 14) and stop a
+    // touch short of the support bays — the bench guard keeps the fire step.
     for (const cx of TRENCH.commTrenchXs) {
-      const jitter = (rand() - 0.5) * 8
-      this.commLines.push([
-        { x: cx, z: WORLD.frontTrenchZ + 2 },
-        { x: cx + 6 + jitter, z: (WORLD.frontTrenchZ + WORLD.supportTrenchZ) / 2 },
-        { x: cx, z: WORLD.supportTrenchZ - 2 },
-      ])
+      const zStart = WORLD.frontTrenchZ + 4.4
+      const zEnd = WORLD.supportTrenchZ - 1.8
+      const n = Math.max(3, Math.round((zEnd - zStart) / 8.5))
+      const drift = (rand() - 0.5) * 9
+      const line: Vec2[] = [{ x: cx - 2.25, z: zStart }]
+      for (let i = 1; i < n; i++) {
+        const t = i / n
+        const z = zStart + (zEnd - zStart) * t
+        const x = cx - 2.25 * (1 - t) + Math.sin(t * Math.PI) * drift
+          + (i % 2 ? 2.2 : -2.2) + (rand() - 0.5) * 0.8
+        line.push({ x, z })
+      }
+      line.push({ x: cx, z: zEnd })
+      this.commLines.push(line)
     }
   }
 
-  private carveTrench(line: Vec2[], parapet: boolean, pre: Float32Array): void {
+  /**
+   * Pass 1 of trench construction: carve the corridor floor (and fire-step
+   * benches on bay segments of parapet lines). `pre` is a SHARED snapshot of
+   * the pre-trench surface: adjacent segments overlap near every joint, and
+   * cutting from live heights made those cuts cumulative — measured 5-6 m pits
+   * at traverses and junctions. Carving every line from one pristine snapshot
+   * makes overlaps agree (target the same absolute floor) instead of adding.
+   *
+   * `facing` is +1 for the British lines (enemy toward -z) and -1 for the
+   * German line (enemy toward +z); it flips which wall carries the bench.
+   */
+  private carveTrenchFloor(line: Vec2[], parapet: boolean, facing: 1 | -1, pre: Float32Array): void {
     const halfW = TRENCH.width / 2
     const dn = this.detailNoise
     // Full-depth floor reaches this far out before the wall ramps up.
     const inner = halfW - 0.35
-    // `pre` is a SHARED snapshot of the pre-trench surface (see generate()):
-    // adjacent zigzag segments overlap near every joint, and cutting from the
-    // live heights made those cuts cumulative — measured 5-6 m pits at traverses
-    // AND at every junction where a communication trench met the front/support
-    // floor. Carving all lines from one pristine snapshot makes overlaps agree
-    // (target the same absolute floor) instead of adding.
-
-    // Fire step: a raised bench carved into the ENEMY wall of the parapet
-    // trenches. Its top sits `fireStepLift` above the floor (= grade - stepDrop),
+    // Fire step: a raised bench carved into the ENEMY wall of the fire bays.
+    // Its top sits `fireStepLift` above the floor (= grade - stepDrop),
     // exactly the height a manning soldier reads at. We clear the trench mask on
     // the bench so standSurface returns the real benchTop (no synthetic lift) and
     // the man's feet plant on ground. The deep floor + duckboards stay on the
     // parados side for the trench silhouette and for men moving under cover.
     const stepDrop = TRENCH.depth - TRENCH.fireStepLift  // benchTop = grade - stepDrop
     const stepInset = TRENCH.fireStepInset               // deep floor reaches this far past centre toward the parados
-    // Slats of the deep floor: everything from the parados wall to `stepInset`
-    // on the enemy side. Beyond that (toward the enemy wall) rises the bench.
 
-    // Raise one earth bank (parapet lip / parados) at cell `i`. The parapet and
-    // parados branches were copy-paste bar a dozen constants; drive both from a
-    // BankSpec. The final += keeps each branch's exact multiply chain so the
-    // result is bit-identical to the pre-refactor code (parapet floors lump*gap
-    // and has heightScale 1; parados has no floor and heightScale 0.5).
+    for (let s = 0; s < line.length - 1; s++) {
+      const a = line[s], b = line[s + 1]
+      const minCol = Math.max(0, Math.floor(this.colAt(Math.min(a.x, b.x) - 5)))
+      const maxCol = Math.min(this.cols, Math.ceil(this.colAt(Math.max(a.x, b.x) + 5)))
+      const minRow = Math.max(0, Math.floor(this.rowAt(Math.min(a.z, b.z) - 5)))
+      const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(Math.max(a.z, b.z) + 5)))
+      const abx = b.x - a.x, abz = b.z - a.z
+      const abLen2 = abx * abx + abz * abz
+      // Unit perpendicular pointing toward the enemy, so we can tell which
+      // side of the centreline a cell is on for the fire step.
+      const segLen = Math.sqrt(abLen2) || 1
+      let nx = -abz / segLen, nz = abx / segLen
+      if (nz * facing > 0) { nx = -nx; nz = -nz }
+      // Benches belong to fire BAYS only — the x-running forward segments.
+      // Traverses and the short links behind the islands keep a plain floor.
+      const isBay = parapet && Math.abs(abx) >= 8 && Math.abs(abx) > 2 * Math.abs(abz)
+      for (let r = minRow; r <= maxRow; r++) {
+        const wz = this.worldZ(r)
+        for (let c = minCol; c <= maxCol; c++) {
+          const wx = this.worldX(c)
+          let t = abLen2 > 0 ? ((wx - a.x) * abx + (wz - a.z) * abz) / abLen2 : 0
+          t = Math.max(0, Math.min(1, t))
+          const px = a.x + abx * t, pz = a.z + abz * t
+          const d = Math.hypot(wx - px, wz - pz)
+          if (d >= halfW + 0.6) continue
+          const i = this.vi(c, r)
+          // Steeper, cut wall: full depth to `inner`, then a short 0.7 m
+          // ramp raised to a convex power so the wall stays deep and the lip
+          // stays crisp (revetted, not eroded).
+          const kraw = d < inner ? 1 : 1 - (d - inner) / 0.7
+          const kk = Math.pow(Math.max(0, Math.min(1, kraw)), 0.72)
+          // Floor gets a little trodden unevenness so duckboards don't sit on
+          // glass (kept on the fire-step too).
+          const rut = (dn.at(wx * 0.7 + 3.1, wz * 0.7 + 8.7) - 0.5) * 0.12 * kk
+          const cut = TRENCH.depth * kk - rut
+          let target = pre[i] - cut
+          // A communication trench meeting a parapet line stops at the fire
+          // step: it must not dig the bench back out, nor re-mask it (the
+          // cleared mask is what plants a manning soldier's feet on it).
+          const guard = parapet ? undefined : this.benchGuard.get(i)
+          if (guard !== undefined && target < guard) target = guard
+          if (target < this.heights[i]) this.heights[i] = target
+          if (guard === undefined) this.trench[i] = Math.max(this.trench[i], kk)
+          // Physical fire step on the enemy wall of the fire bays.
+          // `signed` > 0 means the cell is on the enemy side of the centreline;
+          // past `stepInset` the deep floor gives way to a bench rising to
+          // `benchTop` (= grade - stepDrop = floor + fireStepLift). We lerp the
+          // rise and FADE the trench mask to 0 over a 0.6 m riser so
+          // standSurface reads real geometry there (feet planted, no float)
+          // while transitioning smoothly to the synthetic-lift deep floor.
+          if (isBay) {
+            const signed = (wx - px) * nx + (wz - pz) * nz
+            let bench = (signed - stepInset) / 0.6 + 0.5
+            bench = bench <= 0 ? 0 : bench >= 1 ? 1 : bench * bench * (3 - 2 * bench)
+            if (bench > 0) {
+              const benchTop = pre[i] - stepDrop + rut * 0.5
+              if (benchTop > this.heights[i]) {
+                this.heights[i] += (benchTop - this.heights[i]) * bench
+              }
+              this.trench[i] *= 1 - bench
+              if (bench > 0.5) this.benchGuard.set(i, this.heights[i])
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Pass 2: throw up the parapet (enemy side) and parados (home side) banks.
+   * Runs AFTER every line's floor is carved so a bank can never wall another
+   * corridor: any cell already carved (trench mask) or claimed by a bench
+   * (benchGuard) is skipped. Only x-running segments bank — the square
+   * traverse jogs stay bare and their islands collect the neighbouring bays'
+   * parados + links' parapet spoil, standing up as proper earth traverses.
+   */
+  private raiseTrenchBanks(line: Vec2[], facing: 1 | -1): void {
+    const halfW = TRENCH.width / 2
+    const dn = this.detailNoise
     const addBank = (wx: number, wz: number, d: number, i: number, s: BankSpec): void => {
       const setback = s.setbackBase + (dn.at(wx * 0.20 + s.setbackOx, wz * 0.20 + s.setbackOz) - 0.5) * s.setbackAmp
       const k = 1 - (d - (halfW + setback)) / s.kDiv
@@ -667,71 +793,31 @@ export class Terrain implements TerrainLike {
 
     for (let s = 0; s < line.length - 1; s++) {
       const a = line[s], b = line[s + 1]
+      const abx = b.x - a.x, abz = b.z - a.z
+      if (Math.abs(abx) <= 2 * Math.abs(abz)) continue // traverse jogs: no banks
       const minCol = Math.max(0, Math.floor(this.colAt(Math.min(a.x, b.x) - 5)))
       const maxCol = Math.min(this.cols, Math.ceil(this.colAt(Math.max(a.x, b.x) + 5)))
       const minRow = Math.max(0, Math.floor(this.rowAt(Math.min(a.z, b.z) - 5)))
       const maxRow = Math.min(this.rows, Math.ceil(this.rowAt(Math.max(a.z, b.z) + 5)))
-      const abx = b.x - a.x, abz = b.z - a.z
       const abLen2 = abx * abx + abz * abz
-      // Unit perpendicular pointing toward the enemy (global -z), so we can
-      // tell which side of the centreline a cell is on for the fire step.
-      const segLen = Math.sqrt(abLen2) || 1
-      let nx = -abz / segLen, nz = abx / segLen
-      if (nz > 0) { nx = -nx; nz = -nz }
       for (let r = minRow; r <= maxRow; r++) {
         const wz = this.worldZ(r)
         for (let c = minCol; c <= maxCol; c++) {
           const wx = this.worldX(c)
-          // Distance to segment + signed side (north = enemy side gets the parapet).
           let t = abLen2 > 0 ? ((wx - a.x) * abx + (wz - a.z) * abz) / abLen2 : 0
           t = Math.max(0, Math.min(1, t))
           const px = a.x + abx * t, pz = a.z + abz * t
           const d = Math.hypot(wx - px, wz - pz)
+          if (d < halfW + 0.6) continue // own corridor
           const i = this.vi(c, r)
-          if (d < halfW + 0.6) {
-            // Steeper, cut wall: full depth to `inner`, then a short 0.7 m
-            // ramp raised to a convex power so the wall stays deep and the lip
-            // stays crisp (revetted, not eroded).
-            const kraw = d < inner ? 1 : 1 - (d - inner) / 0.7
-            const kk = Math.pow(Math.max(0, Math.min(1, kraw)), 0.72)
-            // Floor gets a little trodden unevenness so duckboards don't sit on
-            // glass (kept on the fire-step too).
-            const rut = (dn.at(wx * 0.7 + 3.1, wz * 0.7 + 8.7) - 0.5) * 0.12 * kk
-            const cut = TRENCH.depth * kk - rut
-            let target = pre[i] - cut
-            // A communication trench meeting a parapet line stops at the fire
-            // step: it must not dig the bench back out, nor re-mask it (the
-            // cleared mask is what plants a manning soldier's feet on it).
-            const guard = parapet ? undefined : this.benchGuard.get(i)
-            if (guard !== undefined && target < guard) target = guard
-            if (target < this.heights[i]) this.heights[i] = target
-            if (guard === undefined) this.trench[i] = Math.max(this.trench[i], kk)
-            // Physical fire step on the enemy wall of the parapet trenches.
-            // `signed` > 0 means the cell is on the enemy side of the centreline;
-            // past `stepInset` the deep floor gives way to a bench rising to
-            // `benchTop` (= grade - stepDrop = floor + fireStepLift). We lerp the
-            // rise and FADE the trench mask to 0 over a 0.6 m riser so
-            // standSurface reads real geometry there (feet planted, no float)
-            // while transitioning smoothly to the synthetic-lift deep floor.
-            if (parapet) {
-              const signed = (wx - px) * nx + (wz - pz) * nz
-              let bench = (signed - stepInset) / 0.6 + 0.5
-              bench = bench <= 0 ? 0 : bench >= 1 ? 1 : bench * bench * (3 - 2 * bench)
-              if (bench > 0) {
-                const benchTop = pre[i] - stepDrop + rut * 0.5
-                if (benchTop > this.heights[i]) {
-                  this.heights[i] += (benchTop - this.heights[i]) * bench
-                }
-                this.trench[i] *= 1 - bench
-                if (bench > 0.5) this.benchGuard.set(i, this.heights[i])
-              }
-            }
-          } else if (parapet && wz < pz && d < halfW + 2.4) {
+          if (this.trench[i] > 0.12 || this.benchGuard.has(i)) continue // someone's corridor or bench
+          const enemySide = (pz - wz) * facing > 0
+          if (enemySide && d < halfW + 2.4) {
             // Sandbag parapet lip on the enemy side (the ACTUAL small-arms
             // cover): two octaves of bag lumpiness, a wandering setback, and
             // the odd noise-thresholded gap reading as blast damage.
             addBank(wx, wz, d, i, PARAPET_BANK)
-          } else if (parapet && wz > pz && d < halfW + 1.9) {
+          } else if (!enemySide && d < halfW + 1.9) {
             // Lower parados behind, same treatment at half height.
             addBank(wx, wz, d, i, PARADOS_BANK)
           }
@@ -760,6 +846,35 @@ export class Terrain implements TerrainLike {
       const wz = this.worldZ(r)
       for (let c = minCol; c <= maxCol; c++) {
         cb(c, r, this.worldX(c), wz, this.vi(c, r))
+      }
+    }
+  }
+
+  /**
+   * A ragged band of dead, trodden earth along a trench line — churnVis only,
+   * so the shader paints bare mud over the works (walls, floor, both banks)
+   * without adding a single point of gameplay slow-zone. The edge is gnawed by
+   * noise so grass survives in bites, not along a drafted boundary.
+   */
+  private stampEarthHalo(line: Vec2[]): void {
+    const dn = this.detailNoise
+    const reach = TRENCH.width / 2 + 3.4
+    for (let s = 0; s < line.length - 1; s++) {
+      const a = line[s], b = line[s + 1]
+      const len = Math.hypot(b.x - a.x, b.z - a.z)
+      const steps = Math.max(1, Math.ceil(len / 1.1))
+      for (let j = 0; j <= steps; j++) {
+        const x = a.x + (b.x - a.x) * (j / steps)
+        const z = a.z + (b.z - a.z) * (j / steps)
+        this.forEachCellInDisc(x, z, reach, (_c, _r, wx, wz, i) => {
+          const d = Math.hypot(wx - x, wz - z)
+          if (d > reach) return
+          const edge = (dn.at(wx * 0.33 + 77.7, wz * 0.33 + 15.5) - 0.5) * 2.2
+          const k = 1 - (d + edge) / reach
+          if (k <= 0) return
+          const v = Math.min(0.62, (0.26 + k * 0.5) * (0.72 + 0.5 * dn.at(wx * 0.9 + 5.5, wz * 0.9 + 66.1)))
+          if (v > this.churnVis[i]) this.churnVis[i] = v
+        })
       }
     }
   }
