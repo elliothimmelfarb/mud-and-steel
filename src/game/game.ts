@@ -30,6 +30,7 @@ import { EffectsSystem, type EmitterHandle } from '../render/effects'
 import { RoundRenderer } from '../render/roundRenderer'
 import type { AudioEngine, SfxName } from '../audio/audio'
 import type { Ctx } from '../sim/sim'
+import { Mods } from '../sim/mods'
 import { projectToFireStep, sectionAt } from '../sim/trench'
 import { leadCrew } from '../sim/veterancy'
 import { spawnEnemy } from '../sim/enemies'
@@ -735,11 +736,17 @@ export class Game {
   // Placement / economy
   // -------------------------------------------------------------------------
 
-  costOf(id: BuildableId): number { return cmdCostOf(this.ctx, id) }
+  // The HUD builds its panels before the first run exists — every UI-facing
+  // query below must tolerate a null runner (the old fields did implicitly).
+  private preRunMods = new Mods()
+
+  costOf(id: BuildableId): number {
+    return this.runner ? cmdCostOf(this.ctx, id) : cmdCostOf({ mods: this.preRunMods } as Ctx, id)
+  }
 
   isUnitKind(id: BuildableId): id is UnitKindId { return simIsUnitKind(id) }
 
-  fieldBuildAllowed(): boolean { return simFieldBuildAllowed(this.ctx.s) }
+  fieldBuildAllowed(): boolean { return this.runner ? simFieldBuildAllowed(this.ctx.s) : true }
 
   setBuildSelection(id: BuildableId | null): void {
     this.buildSelection = id
@@ -896,7 +903,7 @@ export class Game {
   // -------------------------------------------------------------------------
 
   orderReady(id: OrderId): boolean {
-    return simOrderReady(this.ctx.s, id)
+    return this.runner ? simOrderReady(this.ctx.s, id) : false
   }
 
   issueOrder(id: OrderId): void {
@@ -909,7 +916,7 @@ export class Game {
   }
 
   upgradeAvailable(id: string): 'owned' | 'locked' | 'unaffordable' | 'buyable' {
-    return simUpgradeAvailable(this.ctx.s, id)
+    return this.runner ? simUpgradeAvailable(this.ctx.s, id) : 'locked'
   }
 
   buyUpgrade(id: string): void {

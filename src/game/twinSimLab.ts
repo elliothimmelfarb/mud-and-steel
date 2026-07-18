@@ -111,6 +111,17 @@ class ProbeCommander {
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
+/**
+ * Yield to the event loop WITHOUT setTimeout: hidden/occluded pages get their
+ * timers clamped to once a minute ("intensive throttling"), which turned a
+ * 3-minute probe into an hour. MessageChannel posts are exempt.
+ */
+const nextTick = (): Promise<void> => new Promise((resolve) => {
+  const ch = new MessageChannel()
+  ch.port1.onmessage = () => resolve()
+  ch.port2.postMessage(null)
+})
+
 export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeResult> {
   const seed = opts.seed ?? 'bigpush-m0'
   const waves = opts.waves ?? 20
@@ -138,7 +149,7 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
     if (s.wave !== lastWaveSeen) {
       lastWaveSeen = s.wave
       say(`wave ${s.wave} — tick ${s.tick}, req £${s.req}, hash ${(hashSim(s) >>> 0).toString(16)}`)
-      await new Promise((r) => setTimeout(r, 0)) // let the page breathe
+      await nextTick() // let the page breathe
     }
 
     const cmds = bot.think(s)
@@ -169,7 +180,7 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
 
   // Replay check: a fresh runner fed the recorded log must land on the same hash.
   say(`replaying ${a.log.length} envelopes over ${ticks} ticks into a fresh sim… (live outcome: ${a.ctx.s.outcome}, wave ${a.ctx.s.wave})`)
-  await new Promise((r) => setTimeout(r, 0))
+  await nextTick()
   const c = mk()
   c.begin()
   for (const env of a.log) c.enqueue(clone(env))
@@ -178,7 +189,7 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
     if (i % 4000 === 3999) {
       const cs = c.ctx.s
       say(`  replay ${i + 1}/${ticks} — wave ${cs.wave} ${cs.phase} ${cs.outcome}, ${cs.enemies.length} enemies, ${cs.units.length} units, ${cs.bullets.length} bullets, ${cs.projectiles.length} proj`)
-      await new Promise((r) => setTimeout(r, 0))
+      await nextTick()
     }
   }
   const replayOk = hashSim(c.ctx.s) === finalHash

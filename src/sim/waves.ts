@@ -234,7 +234,11 @@ export function updateWaveSpawns(ctx: Ctx, elapsed: number): boolean {
   if (spawnsDone && elapsed > 240) {
     const live = s.enemies.filter((e) => e.hp > 0 && e.behavior !== 'rout')
     const armour = s.vehicles.some((v) => v.team === 'german' && !v.dead)
-    if (live.length > 0 && live.length <= 6 && !armour) {
+    // Men in the trench fighting hand-to-hand, cutting wire or rolling up the
+    // line are still ATTACKING — only a stalled remnant (cowering / sniping
+    // from extreme range) withdraws.
+    const engaged = live.some((e) => e.behavior === 'melee' || e.behavior === 'cutting' || e.behavior === 'mopup')
+    if (live.length > 0 && live.length <= 6 && !armour && !engaged) {
       for (const e of live) {
         e.behavior = 'rout'
         e.coverTarget = null

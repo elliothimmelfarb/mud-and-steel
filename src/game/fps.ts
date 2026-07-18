@@ -585,7 +585,7 @@ export class FpsMode {
     const c = this.profile.control
     if (c !== 'bolt' && c !== 'semi' && c !== 'auto' && c !== 'directgun') return
     const base = c === 'directgun' ? 0.34 : this.profile.id === 'vickers' ? 0.2 : 0.15
-    this.flashSize = base * (this.profile.flashScale ?? 1) * (0.85 + this.game.ctx.rand() * 0.3)
+    this.flashSize = base * (this.profile.flashScale ?? 1) * (0.85 + Math.random() * 0.3)
     this.flashT = this.flashDur
     // Seed this burn's silhouette/orientation. Purely cosmetic — the sim never
     // sees it — so Math.random(), not the seeded stream: a sprite's rotation
@@ -733,7 +733,7 @@ export class FpsMode {
       if (worst) {
         worst.hp = Math.min(worst.maxHp, worst.hp + 14 * g.ctx.mods.healRate * dt)
         this.toolProgress = worst.hp / worst.maxHp
-        if (g.ctx.rand() < dt * 1.5) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.25 })
+        if (Math.random() < dt * 1.5) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.25 })
       } else this.toolProgress = 0
     } else {
       // Engineer: parapet first, then torn wire — same priorities as the AI.
@@ -741,7 +741,7 @@ export class FpsMode {
       if (sec && !sec.captured && sec.parapetHp < sec.parapetMax) {
         sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 18 * g.ctx.mods.repairRate * dt)
         this.toolProgress = sec.parapetHp / sec.parapetMax
-        if (g.ctx.rand() < dt * 0.6) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.35 })
+        if (Math.random() < dt * 0.6) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.35 })
         return
       }
       let mended = false
@@ -751,7 +751,7 @@ export class FpsMode {
         d.hp = Math.min(d.maxHp, d.hp + 14 * g.ctx.mods.repairRate * dt)
         d.wear = Math.max(0, d.wear - 0.2 * dt)
         this.toolProgress = d.hp / d.maxHp
-        if (g.ctx.rand() < dt * 0.6) g.audio.play('wire_snip', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.3 })
+        if (Math.random() < dt * 0.6) g.audio.play('wire_snip', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.3 })
         mended = true
         break
       }
@@ -861,7 +861,7 @@ export class FpsMode {
         u.venting = true
         u.heat -= dt / COMBAT.vickersVentTime
         if (u.heat <= 0.35) { u.heat = 0.35; u.venting = false }
-        if (g.ctx.rand() < dt * 2) {
+        if (Math.random() < dt * 2) {
           const y = g.ctx.terrain.heightAt(u.pos.x, u.pos.z) + 1.1
           g.effects?.steam(u.pos.x, y, u.pos.z)
         }

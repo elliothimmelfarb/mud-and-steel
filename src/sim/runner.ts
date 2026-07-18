@@ -65,6 +65,7 @@ export class SimRunner implements CmdHost {
   private waveRand: Rand
   private pending: Envelope[] = []
   private seqCounter = 0
+  private draining = false
 
   constructor(opts: RunnerOpts) {
     const seed = hashString(opts.seedStr)
@@ -175,10 +176,17 @@ export class SimRunner implements CmdHost {
     this.pending.push(env)
   }
 
-  /** Local convenience: stamp with the current tick (applies next boundary). */
+  /**
+   * Local convenience: stamp with the current tick (applies next boundary).
+   * A submit made WHILE the queue is draining (i.e. from an event handler
+   * reacting to another command) stamps tick+1 — live it would miss the
+   * current drain, so the log must say so or a replay would apply it a
+   * boundary early.
+   */
   submit(side: 'brit' | 'german', cmds: Envelope['cmds']): void {
     if (cmds.length === 0) return
-    this.enqueue({ tick: this.ctx.s.tick, side, seq: this.seqCounter++, cmds })
+    const tick = this.ctx.s.tick + (this.draining ? 1 : 0)
+    this.enqueue({ tick, side, seq: this.seqCounter++, cmds })
   }
 
   private drainQueue(): void {
@@ -196,10 +204,14 @@ export class SimRunner implements CmdHost {
       a.tick - b.tick ||
       (a.side < b.side ? -1 : a.side > b.side ? 1 : 0) ||
       a.seq - b.seq)
+    this.draining = true
     for (const env of due) {
       applyEnvelope(this, env)
-      this.log.push(env)
+      // The log records the tick the envelope was APPLIED at, not the stamp —
+      // a late arrival (lockstep jitter) must replay at its real boundary.
+      this.log.push(env.tick === s.tick ? env : { ...env, tick: s.tick })
     }
+    this.draining = false
   }
 
   // -------------------------------------------------------------------------
