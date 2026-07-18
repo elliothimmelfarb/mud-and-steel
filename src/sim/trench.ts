@@ -1,17 +1,15 @@
 /**
  * The trench network as a game system: sections with parapet integrity,
- * placement slots, capture/recapture, and sapper repairs.
+ * fighting-post projection, capture/recapture, and sapper repairs.
  */
-import type { TrenchSection, TrenchSlot, Vec2 } from '../core/types'
+import type { TrenchSection, Vec2 } from '../core/types'
 import { COMBAT, TRENCH } from '../core/config'
 import type { Terrain } from '../world/terrain'
 import { dist2, type Ctx } from './sim'
 
-export function buildSections(terrain: Terrain, parapetMult: number): { sections: TrenchSection[]; slots: TrenchSlot[] } {
+export function buildSections(terrain: Terrain, parapetMult: number): TrenchSection[] {
   const sections: TrenchSection[] = []
-  const slots: TrenchSlot[] = []
   let sectionId = 0
-  let slotId = 0
 
   const addLine = (line: Vec2[], kind: 'front' | 'support') => {
     for (let i = 0; i < line.length - 1; i++) {
@@ -22,41 +20,51 @@ export function buildSections(terrain: Terrain, parapetMult: number): { sections
       // the bays carry a carved bench for the slots to stand on).
       if (Math.abs(b.x - a.x) < 8 || Math.abs(b.x - a.x) <= 2 * Math.abs(b.z - a.z)) continue
       const mid = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }
-      const sec: TrenchSection = {
+      sections.push({
         id: sectionId++, line: kind, a, b, mid,
         parapetHp: TRENCH.parapetHp * parapetMult,
         parapetMax: TRENCH.parapetHp * parapetMult,
         captured: false, captureT: 0,
-      }
-      sections.push(sec)
-      // Enemy-facing normal (toward global -z), so slots can be pushed onto the
-      // fire step carved into the enemy wall — the man plants his feet on that
-      // real bench instead of floating over the deep floor.
-      const abx = b.x - a.x, abz = b.z - a.z
-      const segLen = Math.hypot(abx, abz) || 1
-      let nx = -abz / segLen, nz = abx / segLen
-      if (nz > 0) { nx = -nx; nz = -nz }
-      // Two fighting slots per front section, one per support section.
-      const fracs = kind === 'front' ? [0.32, 0.68] : [0.5]
-      for (const f of fracs) {
-        slots.push({
-          id: slotId++, sectionId: sec.id, kind: 'trench',
-          pos: {
-            x: a.x + abx * f + nx * TRENCH.fireStepSlot,
-            z: a.z + abz * f + nz * TRENCH.fireStepSlot,
-          },
-          unitId: null,
-        })
-      }
+      })
     }
   }
   addLine(terrain.frontLine, 'front')
   addLine(terrain.supportLine, 'support')
+  return sections
+}
 
-  for (const p of terrain.pads) {
-    slots.push({ id: slotId++, sectionId: -1, kind: 'pad', pos: { x: p.x, z: p.z }, unitId: null })
+/**
+ * Project a cursor point onto the nearest fighting post: any point along an
+ * uncaptured front/support section, pushed onto the fire step carved into the
+ * enemy wall — the man plants his feet on that real bench instead of floating
+ * over the deep floor. Placement is continuous along the line, not a handful
+ * of pre-dug slots. Returns null when the cursor is farther than `maxDist`
+ * from every candidate.
+ */
+export function projectToFireStep(
+  sections: TrenchSection[], x: number, z: number, maxDist: number,
+): { x: number; z: number; sectionId: number } | null {
+  let best: { x: number; z: number; sectionId: number } | null = null
+  let bestD = maxDist * maxDist
+  for (const sec of sections) {
+    if (sec.captured) continue
+    const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
+    const len2 = abx * abx + abz * abz
+    if (len2 <= 0) continue
+    const segLen = Math.sqrt(len2)
+    // Stay a metre clear of the traverse corners so a man never straddles two bays.
+    const margin = Math.min(0.45, 1.0 / segLen)
+    let t = ((x - sec.a.x) * abx + (z - sec.a.z) * abz) / len2
+    t = Math.max(margin, Math.min(1 - margin, t))
+    // Enemy-facing normal (toward global -z) pushes the post onto the bench.
+    let nx = -abz / segLen, nz = abx / segLen
+    if (nz > 0) { nx = -nx; nz = -nz }
+    const px = sec.a.x + abx * t + nx * TRENCH.fireStepSlot
+    const pz = sec.a.z + abz * t + nz * TRENCH.fireStepSlot
+    const d = dist2(x, z, px, pz)
+    if (d < bestD) { bestD = d; best = { x: px, z: pz, sectionId: sec.id } }
   }
-  return { sections, slots }
+  return best
 }
 
 export function sectionAt(sections: TrenchSection[], x: number, z: number): TrenchSection | null {

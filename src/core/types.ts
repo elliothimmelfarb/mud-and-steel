@@ -25,10 +25,10 @@ export type DefenceKindId =
 
 export type BuildableId = UnitKindId | DefenceKindId
 
-/** Where a buildable may be placed. */
+/** Which zone a buildable may be planted in — anywhere within it. */
 export type PlacementKind =
-  | 'trench'   // inside a trench section (infantry)
-  | 'pad'      // emplacement pads dug behind/into the line (crewed weapons)
+  | 'trench'   // anywhere along a fighting trench line, on the fire step (infantry)
+  | 'pad'      // anywhere on open ground behind the front line (crewed weapons)
   | 'field'    // open ground in no-man's land / approaches (wire, mines...)
 
 export type Stance = 'stand' | 'crouch' | 'prone' | 'dead'
@@ -72,7 +72,7 @@ export type DeedMask = number
 export interface Unit {
   id: number
   kind: UnitKindId
-  slotId: number
+  /** The unit's post: where it was placed and where the crew forms up. */
   pos: Vec2
   crew: Soldier[]
   /** Weapon heat 0..1 (vickers overheats; venting steam at ~1). */
@@ -291,14 +291,6 @@ export interface GasCloud {
 // ---------------------------------------------------------------------------
 // The trench system
 // ---------------------------------------------------------------------------
-
-export interface TrenchSlot {
-  id: number
-  sectionId: number
-  kind: PlacementKind
-  pos: Vec2
-  unitId: number | null
-}
 
 export interface TrenchSection {
   id: number

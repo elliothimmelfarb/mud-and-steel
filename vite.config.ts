@@ -3,10 +3,10 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   base: './',
   server: {
-    // Parallel sessions each run their own dev server; take the harness-assigned
-    // PORT when present and fall back gracefully instead of fighting over 5173.
+    // Parallel sessions each run their own dev server: take the harness's
+    // assigned port when given one, otherwise the usual vite default.
     port: Number(process.env.PORT) || 5173,
-    strictPort: false,
+    strictPort: true,
   },
   build: {
     target: 'es2022',

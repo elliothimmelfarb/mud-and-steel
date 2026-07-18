@@ -5,7 +5,7 @@
  */
 import type {
   Bullet, CasualtyRecord, Defence, DirectorMemory, Enemy, FpsFeedbackEvent, FxEvent, GamePhase, GasCloud,
-  Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection, TrenchSlot,
+  Projectile, RunStats, SoundEvent, Squad, Team, TrenchSection,
   Unit, Vehicle, WavePlan,
 } from '../core/types'
 import type { EventBus } from '../core/events'
@@ -53,7 +53,6 @@ export interface SimState {
   defences: Defence[]
   corpses: Corpse[]
   sections: TrenchSection[]
-  slots: TrenchSlot[]
 
   /** Presentation queues, drained each render frame. */
   fx: FxEvent[]
