@@ -375,7 +375,10 @@ export function applyEnvelope(host: CmdHost, env: Envelope): void {
 export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
   const ctx = host.ctx
   const s = ctx.s
-  if (s.outcome !== 'ongoing' && cmd.t !== 'continueendless') return
+  // release must survive the outcome gate: the game-over modal forces the
+  // FPS exit, and eating its release would leave a zombie possession into
+  // an endless continue (unit never fires, soldier never posed).
+  if (s.outcome !== 'ongoing' && cmd.t !== 'continueendless' && cmd.t !== 'release') return
 
   // The classic command surface belongs to the BRITISH commander (v1: the
   // host side). A german envelope carrying these is dropped identically on

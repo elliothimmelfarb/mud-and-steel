@@ -1223,6 +1223,7 @@ export class Game {
 
   /** Step into the boots of the selected unit's senior surviving man. */
   possessSelected(): void {
+    if (this.replayMode) return // you can watch the war, not refight it
     if (this.net) {
       // Embodiment now rides the command stream (fpspose/fpsfire/fpstool), so
       // MP possession is determinism-SAFE — it stays off only until someone
