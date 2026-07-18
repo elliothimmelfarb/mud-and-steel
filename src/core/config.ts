@@ -25,6 +25,9 @@ export const WORLD = {
 
 export const SIM_DT = 1 / WORLD.simHz
 
+/** Big Push reinforcement column walking pace (m/s); mud slows it locally. */
+export const MARCH_SPEED = 2.0
+
 /** Front trench span and zigzag geometry (traverses every ~12 m). */
 export const TRENCH = {
   frontSpanX: 112,      // front line x ∈ [-112, 112]

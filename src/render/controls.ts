@@ -283,6 +283,9 @@ export class CameraRig {
   }
 
   update(dt: number, input: Input, pointerEdge: { x: number; y: number; inside: boolean }, uiHasFocus: boolean): void {
+    // The leash boundary moves on its own (men advance, men die) — re-clamp
+    // every frame so a receding boundary GLIDES the camera back, input or not.
+    if (this.leashMinZ !== null) this.clampTarget()
     const panSpeed = this.curDist * 0.85 * this.speedMul
     let mx = 0, mz = 0
     if (!uiHasFocus) {
@@ -339,9 +342,19 @@ export class CameraRig {
     this.camera.lookAt(this.curTarget.x, groundY + 1, this.curTarget.z)
   }
 
+  /**
+   * The Big Push camera leash: the commander's orbit TARGET may not travel
+   * past his farthest-forward living soldier (minus a grace). Looking across
+   * is free — pitch/yaw/zoom untouched — travel is earned by advancing men.
+   * null = no leash (classic mode, FPS, game over). The Game eases this value
+   * (fast on advances, slow on recessions) so the clamp glides, never snaps.
+   */
+  leashMinZ: number | null = null
+
   private clampTarget(): void {
     this.target.x = clamp(this.target.x, -WORLD.width / 2 - 10, WORLD.width / 2 + 10)
-    this.target.z = clamp(this.target.z, -WORLD.depth / 2 - 10, WORLD.depth / 2 + 30)
+    const minZ = this.leashMinZ ?? -WORLD.depth / 2 - 10
+    this.target.z = clamp(this.target.z, Math.max(minZ, -WORLD.depth / 2 - 10), WORLD.depth / 2 + 30)
   }
 
   /** Camera pos + facing for the audio listener. */

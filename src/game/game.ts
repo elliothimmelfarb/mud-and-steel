@@ -39,7 +39,8 @@ import { collectGasBlobs } from '../sim/gas'
 import { SimRunner } from '../sim/runner'
 import {
   costOf as cmdCostOf, createUnit as simCreateUnit, fieldBuildAllowed as simFieldBuildAllowed,
-  isUnitKind as simIsUnitKind, orderReady as simOrderReady, padSpotValid as simPadSpotValid,
+  isUnitKind as simIsUnitKind, marchPathLength, MARCH_SPEED, orderReady as simOrderReady,
+  padSpotValid as simPadSpotValid,
   unitClearance as simUnitClearance, upgradeAvailable as simUpgradeAvailable,
   type Cmd, type OrderId,
 } from '../sim/commands'
@@ -399,7 +400,7 @@ export class Game {
   // Run lifecycle
   // -------------------------------------------------------------------------
 
-  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null): void {
+  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic'): void {
     this.seedStr = seedStr
     this.difficulty = difficulty
     // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
@@ -444,7 +445,8 @@ export class Game {
     this.events.clear()
     // The runner builds the whole battle headlessly (terrain, weather, state,
     // starting wire / save restore); the game wires rendering onto it.
-    this.runner = new SimRunner({ seedStr, difficulty, resume, events: this.events })
+    this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events })
+    this.leashZ = WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
     this.terrainMesh = new TerrainMesh(this.terrain)
@@ -507,6 +509,14 @@ export class Game {
     ev.on('unitLost', (p) => {
       // Record every man of the lost unit.
       void p
+    })
+    ev.on('unitPlaced', (p) => {
+      // Big Push: the buy despatches a column — tell the commander when it lands.
+      const u = this.ctx.s.units.find((x) => x.id === p.unitId)
+      if (u?.march) {
+        const eta = Math.round(marchPathLength(u.march.path) / MARCH_SPEED)
+        this.hud?.toast(`${UNIT_DEFS[u.kind].name} column despatched — ETA ~${eta}s`, 'info')
+      }
     })
     ev.on('tankSighted', () => {
       this.sawTank = true
@@ -1081,6 +1091,8 @@ export class Game {
   // -------------------------------------------------------------------------
 
   private acc = 0
+  /** Eased Big Push camera-leash boundary (render-side smoothing of advanceZ-12). */
+  private leashZ = WORLD.frontTrenchZ - 12
   frame(dt: number): void {
     if (!this.ctx) return
     this.fps = this.fps * 0.95 + (1 / Math.max(dt, 0.001)) * 0.05
@@ -1116,6 +1128,17 @@ export class Game {
       steps++
     }
     if (steps === 8) this.acc = 0
+
+    // The Big Push camera leash: follow your men forward within ~0.5 s;
+    // ease back over ~3 s when the forward men die (never yank the view).
+    if (s.mode === 'bigpush' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
+      const want = s.advance.brit - 12
+      const tau = want < this.leashZ ? 0.15 : 1.0
+      this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
+      this.rig.leashMinZ = this.leashZ
+    } else {
+      this.rig.leashMinZ = null
+    }
 
     this.render(dt)
   }
@@ -1244,9 +1267,9 @@ export class Game {
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
         pose.stance = c.stance
-        pose.moveAmount = u.fallenBack || charging ? 1 : 0
+        pose.moveAmount = u.fallenBack || charging || u.march !== null ? 1 : 0
         pose.animPhase = c.animPhase
-        pose.aiming = s.phase === 'assault' && !u.fallenBack
+        pose.aiming = s.phase === 'assault' && !u.fallenBack && u.march === null
         pose.recoil = Math.max(0, 1 - c.cooldown * 4)
         pose.deadT = 0
         pose.deadSeed = c.id * 0.37

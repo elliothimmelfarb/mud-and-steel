@@ -159,7 +159,59 @@ export function upgradeAvailable(s: SimState, id: string): 'owned' | 'locked' | 
 // Spawning (command-driven; all randomness from ctx.rand)
 // ---------------------------------------------------------------------------
 
-export function createUnit(ctx: Ctx, kind: UnitKindId, x: number, z: number, announce: boolean): Unit {
+export { MARCH_SPEED } from '../core/config'
+
+/**
+ * Build a reinforcement column's route: own rear edge → the nearest
+ * communication trench (entered at its rear mouth, walked toward the front)
+ * → leave at the point nearest the post → the post itself. Deterministic
+ * pure function of terrain + post. `side` picks which trench system.
+ */
+export function buildMarchPath(ctx: Ctx, side: Team, post: { x: number; z: number }): { x: number; z: number }[] {
+  const rearZ = side === 'brit' ? WORLD.depth / 2 - 6 : -(WORLD.depth / 2 - 6)
+  const comms = side === 'brit' ? ctx.terrain.commLines : ctx.terrain.germanCommLines
+
+  // Nearest comm trench by mouth x (they run parallel; x distance decides).
+  let bestLine: { x: number; z: number }[] | null = null
+  let bestDx = Infinity
+  for (const line of comms) {
+    const dx = Math.abs(line[0].x - post.x)
+    if (dx < bestDx) { bestDx = dx; bestLine = line }
+  }
+
+  const path: { x: number; z: number }[] = []
+  if (bestLine && bestLine.length > 0) {
+    // Order the polyline rear-first (largest |z| toward own rear edge first).
+    const rearFirst = Math.abs(bestLine[0].z - rearZ) <= Math.abs(bestLine[bestLine.length - 1].z - rearZ)
+      ? bestLine
+      : [...bestLine].reverse()
+    // March down the boyau only while it still brings us closer to the post.
+    let cut = rearFirst.length
+    let bestD = Infinity
+    for (let i = 0; i < rearFirst.length; i++) {
+      const d = (rearFirst[i].x - post.x) ** 2 + (rearFirst[i].z - post.z) ** 2
+      if (d < bestD) { bestD = d; cut = i + 1 }
+    }
+    path.push({ x: rearFirst[0].x, z: rearZ })
+    for (let i = 0; i < cut; i++) path.push({ x: rearFirst[i].x, z: rearFirst[i].z })
+  } else {
+    path.push({ x: post.x, z: rearZ })
+  }
+  path.push({ x: post.x, z: post.z })
+  return path
+}
+
+/** Length of a march route (m) — the purchase ghost's ETA is len / MARCH_SPEED. */
+export function marchPathLength(path: { x: number; z: number }[]): number {
+  let len = 0
+  for (let i = 1; i < path.length; i++) len += Math.hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z)
+  return len
+}
+
+export function createUnit(
+  ctx: Ctx, kind: UnitKindId, x: number, z: number, announce: boolean,
+  opts?: { marchIn?: boolean },
+): Unit {
   const s = ctx.s
   const def = UNIT_DEFS[kind]
   const u: Unit = {
@@ -167,18 +219,28 @@ export function createUnit(ctx: Ctx, kind: UnitKindId, x: number, z: number, ann
     crew: [], heat: 0, venting: false, ammo: kind === 'lewis' ? 6 : -1,
     xp: 0, vet: 0, deeds: 0, wavesServed: 0,
     targeting: def.targeting, fallenBack: false, disbanded: false,
+    march: null,
   }
   const hpMult = def.placement === 'pad' ? ctx.mods.emplacementHp : 1
+
+  // Big Push: men ARRIVE, they do not appear. The crew spawns in single file
+  // at the rear edge and walks the communication trench up to its post.
+  const march = opts?.marchIn ? buildMarchPath(ctx, 'brit', { x, z }) : null
+
   for (let i = 0; i < def.crew; i++) {
+    const spawn = march
+      ? { x: march[0].x + (ctx.rand() - 0.5) * 0.6, z: march[0].z + i * 1.7 }
+      : { x: x + (i % 2) * 1.1 - 0.5, z: z + Math.floor(i / 2) }
     u.crew.push({
       id: s.nextId++, team: 'brit',
-      pos: { x: x + (i % 2) * 1.1 - 0.5, z: z + Math.floor(i / 2) },
-      facing: 0, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
+      pos: spawn,
+      facing: march ? Math.PI : 0, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
       stance: 'stand', suppression: 0, morale: 1, masked: s.masksOn, gasExposure: 0,
       animPhase: ctx.rand() * 10, cooldown: ctx.rand(),
       name: makeSoldierName(ctx.rand), kills: 0,
     })
   }
+  if (march) u.march = { path: march, idx: u.crew.map(() => 0) }
   s.units.push(u)
   if (announce) ctx.events.emit('unitPlaced', { unitId: u.id })
   return u
@@ -253,7 +315,7 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
         if (UNIT_DEFS[cmd.kind].placement === 'pad') {
           ctx.terrain.digPad(spot.x, spot.z, PLACEMENT.padRadius)
         }
-        createUnit(ctx, cmd.kind, spot.x, spot.z, true)
+        createUnit(ctx, cmd.kind, spot.x, spot.z, true, { marchIn: s.mode === 'bigpush' })
       } else {
         createDefence(ctx, cmd.kind as DefenceKindId, spot.x, spot.z, cmd.angle ?? 0)
       }
