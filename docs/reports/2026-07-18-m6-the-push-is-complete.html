@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — The Push Is Complete: M6 &amp; the Live Wire · 18 Jul 1916 (2026)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:920px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.3rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:66ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .lede a{color:var(--brass)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:.55rem 1rem;text-align:center;min-width:7.5rem}
+  .tally b{display:block;font-size:1.5rem;color:var(--brass)}
+  .tally span{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.enemy{border-left-color:var(--blood)}
+  section.item.works{border-left-color:var(--steel)}
+  section.item.live{border-left-color:var(--wire)}
+  .kicker{font-size:.66rem;letter-spacing:.32em;text-transform:uppercase;color:var(--khaki);margin-bottom:.25rem}
+  h2{font-size:1.28rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.55rem}
+  .item p{margin:.5rem 0;color:var(--ink-soft)}
+  .item p strong{color:var(--ink)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem;color:var(--ink-soft)}
+  li strong{color:var(--ink)}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.83em;background:color-mix(in srgb, var(--rule) 26%, transparent);padding:.06em .32em;border-radius:3px}
+  a{color:var(--brass)}
+  .verdict{border:2px solid var(--brass);border-radius:6px;padding:1.2rem 1.5rem;margin:1.6rem 0;background:color-mix(in srgb, var(--brass) 7%, transparent)}
+  .verdict h2{color:var(--brass)}
+  footer{text-align:center;margin-top:2.6rem;color:var(--khaki);font-size:.8rem;letter-spacing:.15em;text-transform:uppercase}
+  footer .sig{font-family:'Snell Roundhand','Segoe Script',cursive;font-size:1.5rem;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-top:.4rem}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="crest">Despatch · Battalion Workshops</div>
+  <h1>The Push Is Complete</h1>
+  <div class="sub">M6 ships and the wire goes live — every milestone of the Big Push plan is in production · 18 July 1916</div>
+  <div class="stamp">Campaign Closed</div>
+</header>
+
+<p class="lede">Seven milestones, seven merged PRs, one afternoon of quartermastering: <strong>The Big Push is done.</strong> M6 (<a href="https://github.com/elliothimmelfarb/mud-and-steel/pull/56">PR #56</a>) rode the freshly-connected GitHub→Vercel wire straight to production — the project's first push-to-deploy — and the final field gate passed on the deployed site itself: <strong>two browsers, one four-letter room code, a live WebRTC battle through the real signaling, hash-clean throughout.</strong></p>
+
+<div class="tally">
+  <div><b>7</b><span>milestones shipped</span></div>
+  <div><b>4,300+</b><span>live prod ticks, 0 desyncs</span></div>
+  <div><b>3</b><span>#41 debts retired</span></div>
+  <div><b>5</b><span>skeptics this cycle</span></div>
+  <div><b>1</b><span>battle in every diary</span></div>
+</div>
+
+<section class="item live">
+  <div class="kicker">The live gate</div>
+  <h2>Room XXGP: the first battle on the production wire</h2>
+  <p>Host a Match on <a href="https://mud-and-steel.vercel.app">mud-and-steel.vercel.app</a> minted a room through <code>/api/rooms</code> (Vercel edge + the newly-installed Upstash Redis mailbox); Join with Code answered from a second browser; the DataChannel opened and the server bowed out. A German rifle squad ordered on one machine marched in both worlds. <strong>143 seconds, 4,300+ ticks, every 30-tick hash agreed, zero desyncs — on production infrastructure, not the lab.</strong> The signaling account is Upstash's free tier: 500,000 commands a month against a lobby that polls once a second and then gets out of the way.</p>
+</section>
+
+<section class="item works">
+  <div class="kicker">M6 — the last debts paid</div>
+  <h2>Embodiment joins the command spine</h2>
+  <ul>
+    <li><strong>possess / release / fpspose / fpsfire / fpstool</strong> — stepping into a man's boots, walking him, firing his rifle, dressing a mate's wounds: all tick-stamped commands now. Muzzle flash, report and recoil stay on the click-frame; the bullet spawns at the next boundary (≤33 ms). An embodied battle run through twin sims <em>and</em> a cold replay lands on one identical hash.</li>
+    <li><strong>The War Diary:</strong> every finished Big Push battle records itself — seed, commander, and the full envelope log, which <em>is</em> the battle. A title-screen button (or <code>?replay</code>) refights it in the real renderer: speed keys work, the leash is off, and your orders are politely refused. History does not take amendments.</li>
+    <li><strong>Rejoin, for real:</strong> drop mid-match and the survivor quietly holds the room open (the AI minds your trench); come back with the same code and the hello's tick tells your client to fetch the war diary and fast-forward — the same rebuild the desync-recovery probe proved bit-exact.</li>
+    <li><strong>Small mercies:</strong> the German commander's camera leash now mirrors properly, verdicts read from the seat you actually occupy, a heartbeat catches hard-killed tabs, and the casualty roster is written by the sim itself — the memorial no longer depends on who was watching.</li>
+  </ul>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">Adversarial verification</div>
+  <h2>Two more skeptics, four more scalps</h2>
+  <p>The embodiment refactor got its own panel. The sealed findings — a <code>release</code> command eaten by the game-over gate (leaving a zombie possession haunting endless mode), embodiment reachable inside a replay (a ghost body firing blanks over recorded history), the lab's invincibility pin unguarded in net matches, and a medic who could dress his own wounds — were all fixed before merge. The full suite then re-ran green: classic 20-wave twin+replay tick-identical to the M0 gate, bigpush twin clean, kill-and-rejoin lockstep at zero desyncs.</p>
+  <p><strong>Held back deliberately:</strong> MP embodiment stays off. It is determinism-safe now, but <code>fpsfire</code>/<code>fpspose</code> trust the sending client — a cheat surface that wants sim-side rate and position gating, and the six-tick input delay wants a human feel playtest, before a stranger gets a rifle (<a href="https://github.com/elliothimmelfarb/mud-and-steel/issues/55">#55</a>).</p>
+</section>
+
+<div class="verdict">
+  <h2>The campaign ledger</h2>
+  <ul>
+    <li><strong>M0–M4</strong> command spine → mirrored world → march-in → over the top → AI commander (PRs #42–#50) — singleplayer shipped.</li>
+    <li><strong>M5</strong> sealed-frame lockstep, signaling, lobby, AI takeover, resync (PR #53) — multiplayer shipped.</li>
+    <li><strong>M6</strong> embodiment intents, war diary, production rejoin, hardening (PR #56) — polish shipped, live gate passed.</li>
+    <li><strong>Infrastructure</strong> (today, by Elliot's hand and Claude-in-Chrome): GitHub↔Vercel push-to-deploy, Upstash Redis signaling. One chore remains on Elliot's desk: the stray Vercel project's delete dialog, one typed phrase from done.</li>
+  </ul>
+</div>
+
+<footer>
+  Issues #40–#55 closed · seven PRs merged · prod: mud-and-steel.vercel.app · the line held, then it advanced
+  <div class="sig">— Claude, Battalion Workshops</div>
+</footer>
+
+</div>
+</body>
+</html>
