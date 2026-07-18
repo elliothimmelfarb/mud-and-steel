@@ -9,13 +9,13 @@ import type {
   TargetPriority, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
-  BUILD_ORDER, COMBAT, DEEDS, DEFENCE_DEFS, ECONOMY, DIRECTOR, ORDER_DEFS, PLACEMENT, RANKS, SCORE,
-  SIM_DT, TRENCH, UNIT_DEFS, UPGRADE_DEFS, UPGRADE_TIER_WAVE, VET_XP, WIRE_SEGMENT_LEN, WORLD, XP_PER_WAVE,
+  BUILD_ORDER, DEEDS, DEFENCE_DEFS, ECONOMY, PLACEMENT, RANKS,
+  SIM_DT, TRENCH, UNIT_DEFS, UPGRADE_DEFS, VET_XP, WORLD,
 } from '../core/config'
 import { EventBus } from '../core/events'
 import { forkRand, hashString, type Rand } from '../core/rng'
 import {
-  fieldDate, intelFlavor, makeEpitaph, makeRegiment, makeSoldierName, waveName, writeLetterHome,
+  fieldDate, intelFlavor, makeEpitaph, makeRegiment, writeLetterHome,
 } from '../core/flavor'
 import { clearRun, saveRun, submitScore, type RunSave } from '../core/save'
 import { Terrain } from '../world/terrain'
@@ -29,27 +29,24 @@ import { Scenery } from '../render/scenery'
 import { EffectsSystem, type EmitterHandle } from '../render/effects'
 import { RoundRenderer } from '../render/roundRenderer'
 import type { AudioEngine, SfxName } from '../audio/audio'
-import { FlowField } from '../sim/pathfind'
+import type { Ctx } from '../sim/sim'
 import { Mods } from '../sim/mods'
+import { projectToFireStep, sectionAt } from '../sim/trench'
+import { leadCrew } from '../sim/veterancy'
+import { spawnEnemy } from '../sim/enemies'
+import { standSurface } from '../sim/ballistics'
+import { collectGasBlobs } from '../sim/gas'
+import { SimRunner } from '../sim/runner'
 import {
-  makeDirector, makeOrders, makeStats, type Ctx, type SimState,
-} from '../sim/sim'
-import { buildSections, projectToFireStep, sectionAt } from '../sim/trench'
-import { awardXp, leadCrew } from '../sim/veterancy'
-import { updateUnits } from '../sim/soldiers'
-import { updateEnemies, spawnEnemy } from '../sim/enemies'
-import { updateVehicles, spawnVehicle } from '../sim/vehicles'
-import { updateProjectiles, spawnFlare } from '../sim/projectiles'
-import { updateBullets, standSurface } from '../sim/ballistics'
-import { updateGas, collectGasBlobs, resetGas } from '../sim/gas'
-import { updateCapture } from '../sim/trench'
-import { planWave, updateWaveSpawns, noteWireDensity } from '../sim/waves'
-import { updateBarrages, startCreepingBarrage, resetBarrages } from '../sim/barrage'
-import { rebuildFlow } from '../sim/flow'
+  costOf as cmdCostOf, createUnit as simCreateUnit, fieldBuildAllowed as simFieldBuildAllowed,
+  isUnitKind as simIsUnitKind, orderReady as simOrderReady, padSpotValid as simPadSpotValid,
+  unitClearance as simUnitClearance, upgradeAvailable as simUpgradeAvailable,
+  type Cmd, type OrderId,
+} from '../sim/commands'
 import { FpsMode } from './fps'
 import { setViewmodelEmissive } from './weapons'
 
-export type OrderId = keyof typeof ORDER_DEFS
+export type { OrderId } from '../sim/commands'
 
 export interface IntelData {
   wave: number
@@ -149,13 +146,23 @@ export class Game {
   soldiers!: SoldierRenderer
   rounds!: RoundRenderer
 
-  // sim
-  ctx!: Ctx
+  // sim — the runner owns the battle; the game renders it and submits commands.
+  runner: SimRunner | null = null
   seedStr = ''
   difficulty: Difficulty = 'front'
-  mods = new Mods()
-  private waveRand: Rand = Math.random
   private runRand: Rand = Math.random
+  /** Local command sink. All player actions route through here. */
+  private submit(cmds: Cmd[]): void {
+    this.runner?.submit('brit', cmds)
+  }
+
+  /** Sim context (undefined before the first startRun, like the old field). */
+  get ctx(): Ctx {
+    return this.runner?.ctx as unknown as Ctx
+  }
+
+  get endless(): boolean { return this.ctx?.s.endless ?? false }
+  set endless(v: boolean) { if (this.ctx) this.ctx.s.endless = v }
 
   // run/UI state
   running = false
@@ -163,7 +170,6 @@ export class Game {
   speed: 0.5 | 1 | 2 | 4 = 1
   modalOpen = false
   hud: HudBridge | null = null
-  endless = false
   regiment = ''
 
   // placement & selection
@@ -179,10 +185,7 @@ export class Game {
   private waveCasualties: CasualtyRecord[] = []
   private sawTank = false
   private sawGas = false
-  private earlyCallBonus = 0
   private battleNoise = 0
-  private lastFlowRebuild = 0
-  private wetnessTimer = 0
   private burnEmitters = new Map<number, EmitterHandle>()
   private ghost: THREE.Group
   private ghostRing: THREE.Mesh
@@ -397,11 +400,11 @@ export class Game {
   // -------------------------------------------------------------------------
 
   startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null): void {
-    const seed = hashString(seedStr)
     this.seedStr = seedStr
     this.difficulty = difficulty
-    this.runRand = forkRand(seed, 'run')
-    this.waveRand = forkRand(seed, 'waves')
+    // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
+    // Kept OFF the sim streams so flavour can never move a battle.
+    this.runRand = forkRand(hashString(seedStr), 'run')
     this.regiment = makeRegiment(this.runRand)
 
     // Tear down the previous battlefield properly: dispose GPU resources
@@ -439,107 +442,32 @@ export class Game {
     this.zoneBand = null
     this.zoneBandKey = ''
     this.events.clear()
-    this.terrain = new Terrain(seed)
+    // The runner builds the whole battle headlessly (terrain, weather, state,
+    // starting wire / save restore); the game wires rendering onto it.
+    this.runner = new SimRunner({ seedStr, difficulty, resume, events: this.events })
+    this.terrain = this.runner.terrain
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
     this.terrainMesh = new TerrainMesh(this.terrain)
     oldScene.add(this.terrainMesh.mesh)
     this.sky = new Sky(oldScene)
-    this.weather = new Weather(seed)
+    this.weather = this.runner.weather
     this.effects = new EffectsSystem(oldScene)
     this.effects.setQuality(this.settings.quality)
     this.effects.setParticleScale(this.settings.particleDensity)
     this.effects.setReduceFlashes(this.settings.reduceFlashes)
     this.soldiers = new SoldierRenderer(oldScene)
     this.rounds = new RoundRenderer(oldScene, this.effects, this.settings.quality)
-    this.scenery = new Scenery(oldScene, this.terrain, seed)
+    this.scenery = new Scenery(oldScene, this.terrain, hashString(seedStr))
     oldScene.add(this.ghost)
     oldScene.add(this.renderer.camera)
     if (this.chevrons) oldScene.add(this.chevrons)
     if (this.rankMarkers) oldScene.add(this.rankMarkers)
     for (const sp of this.flareSprites) oldScene.add(sp)
 
-    this.mods = new Mods()
-    const upgrades = new Set<string>(resume?.upgrades ?? [])
-    this.mods.recompute(upgrades)
-
-    const sections = buildSections(this.terrain, this.mods.parapetMult)
-    const s: SimState = {
-      seed,
-      time: 0,
-      wave: resume?.wave ?? 1,
-      phase: 'debrief',
-      buildTimer: 0,
-      req: resume?.req ?? Math.round(ECONOMY.startReq[difficulty]),
-      breach: resume?.breach ?? COMBAT.breachMax,
-      masksOn: resume?.masksOn ?? false,
-      units: [], enemies: [], squads: [], vehicles: [], projectiles: [], bullets: [],
-      clouds: [], defences: [], corpses: [],
-      sections,
-      fx: [], sounds: [],
-      orders: makeOrders(),
-      upgrades,
-      director: makeDirector(),
-      stats: resume?.stats ?? makeStats(),
-      casualties: resume?.casualties ?? [],
-      plan: null, planCursor: 0, planBarrageCursor: 0, waveStartTime: 0,
-      nextId: 1,
-    }
-
-    const flowInf = new FlowField({
-      cols: Math.floor(WORLD.width / (WORLD.cell * 2)),
-      rows: Math.floor(WORLD.depth / (WORLD.cell * 2)),
-      originX: -WORLD.width / 2, originZ: -WORLD.depth / 2, cellSize: WORLD.cell * 2,
-    })
-    const flowVeh = new FlowField({
-      cols: flowInf.cols, rows: flowInf.rows,
-      originX: -WORLD.width / 2, originZ: -WORLD.depth / 2, cellSize: WORLD.cell * 2,
-    })
-
-    this.ctx = {
-      s, terrain: this.terrain, weather: this.weather,
-      flowInf, flowVeh,
-      events: this.events, rand: forkRand(seed, 'combat'),
-      mods: this.mods, flowDirty: true, night: false,
-      possessedSoldierId: -1, possessedUnitId: -1,
-      fpsInvincible: false,
-      fpsFeedback: [],
-    }
-
-    // Restore a saved position. Order matters: defences first (sandbags bump
-    // parapetMax as a side effect), THEN the authoritative saved section state
-    // overwrites — otherwise the sandbag bonus compounds on every load.
-    if (resume) {
-      this.terrain.replayCraterOps(resume.craterOps)
-      for (const su of resume.units) this.restoreUnit(su)
-      for (const sd of resume.defences) {
-        this.createDefence(sd.kind as DefenceKindId, sd.x, sd.z, 0, false)
-        const d = s.defences[s.defences.length - 1]
-        if (d) { d.hp = sd.hp; d.maxHp = sd.maxHp; d.wear = sd.wear }
-      }
-      resume.sectionState.forEach((st, i) => {
-        if (s.sections[i]) {
-          s.sections[i].parapetHp = st.parapetHp
-          s.sections[i].parapetMax = st.parapetMax
-          s.sections[i].captured = st.captured
-        }
-      })
-      this.weather.state.tod = resume.weather.tod
-      this.weather.state.wetness = resume.weather.wetness
-      this.terrain.setWetness(resume.weather.wetness)
-    } else {
-      // Fresh sector: two years of occupation means the line starts wired.
-      // (Resumed runs restore whatever wire survived from the save instead.)
-      this.placeStartingWire(s)
-    }
-
-    rebuildFlow(this.ctx)
-    resetGas()
     this.subscribeEvents()
     this.running = true
     this.paused = false
     this.speed = 1
-    this.endless = resume ? resume.wave > DIRECTOR.victoryWave : false
-    this.earlyCallBonus = 0
     this.selectedUnitId = -1
     this.buildSelection = null
     this.ghost.visible = false
@@ -547,35 +475,14 @@ export class Game {
     this.chevrons.count = 0
     this.rankMarkers.count = 0
     this.embodyHintShown = false
-    this.audio.setMuffled(s.masksOn ? 0.4 : 0)
+    this.audio.setMuffled(this.ctx.s.masksOn ? 0.4 : 0)
     this.rig.target.set(0, 0, WORLD.frontTrenchZ + 30)
     this.rig.yaw = 0
     this.rig.pitch = 0.88
     this.rig.dist = 85
     this.applySettings(this.settings)
-    this.prepareNextWave()
-  }
-
-  private restoreUnit(su: RunSave['units'][number]): void {
-    const kind = su.kind as UnitKindId
-    if (!UNIT_DEFS[kind]) return
-    // Pads dug for emplacements were already re-carved by the craterOps replay.
-    const u = this.createUnit(kind, su.x, su.z, false)
-    u.xp = su.xp
-    u.vet = su.vet as Unit['vet']
-    u.deeds = su.deeds ?? 0
-    u.wavesServed = su.wavesServed ?? 0
-    u.targeting = su.targeting
-    u.heat = su.heat
-    u.ammo = su.ammo
-    su.crew.forEach((c, i) => {
-      if (u.crew[i]) {
-        u.crew[i].name = { first: c.first, last: c.last }
-        u.crew[i].hp = c.hp
-        u.crew[i].kills = c.kills ?? 0
-        if (c.hp <= 0) u.crew[i].stance = 'dead'
-      }
-    })
+    // Plan the first wave (fires wavePrepared → intel paper via the handlers above).
+    this.runner!.begin()
   }
 
   private subscribeEvents(): void {
@@ -640,39 +547,114 @@ export class Game {
         this.audio.play('upgrade', { gain: 0.35 })
       }
     })
-  }
 
-  // -------------------------------------------------------------------------
-  // Wave lifecycle
-  // -------------------------------------------------------------------------
-
-  private prepareNextWave(): void {
-    const s = this.ctx.s
-    s.phase = 'debrief'
-    resetBarrages()
-    noteWireDensity(this.ctx)
-    const plan = planWave(this.ctx, s.wave, this.difficulty, this.waveRand)
-    plan.name = waveName(s.wave, plan.name || 'probe', this.waveRand)
-    s.plan = plan
-    s.planCursor = 0
-    s.planBarrageCursor = 0
-    this.weather.advanceWave(plan.night, plan.weatherBias)
-    this.autosave()
-    this.hud?.refreshShop()
-    this.hud?.showIntel(this.intelFor(plan), s.wave === 1 ? 'STAND TO' : 'CARRY ON', () => {
-      this.modalOpen = false
-      s.phase = 'build'
-      s.buildTimer = ECONOMY.buildPhaseSeconds
+    // -- wave lifecycle (the runner drives the sim; we present it) ----------
+    ev.on('wavePrepared', () => {
+      const s = this.ctx.s
+      this.autosave()
+      this.hud?.refreshShop()
+      this.hud?.showIntel(this.intelFor(s.plan!), s.wave === 1 ? 'STAND TO' : 'CARRY ON', () => {
+        this.modalOpen = false
+        this.submit([{ t: 'beginwave' }])
+      })
+      this.modalOpen = true
     })
-    this.modalOpen = true
+    ev.on('waveStart', (p) => {
+      const s = this.ctx.s
+      this.waveKills = s.stats.kills
+      this.waveCasualties = []
+      this.sawTank = false
+      this.sawGas = false
+      this.hud?.banner(`WAVE ${p.wave} — ${p.name}`)
+      this.audio.play('whistle_attack', { gain: 0.6 })
+    })
+    ev.on('waveEnd', (p) => {
+      this.hud?.toast(`Wave held. Requisition +${p.bonus}`, 'good')
+      if (p.hospitalReturned > 0) this.hud?.toast(`${p.hospitalReturned} wounded returned from the CCS`, 'good')
+      this.maybeWriteLetter(p.wave)
+    })
+    ev.on('gameOver', (p) => {
+      const s = this.ctx.s
+      this.modalOpen = true
+      this.running = false
+      submitScore(s.stats.score)
+      clearRun()
+      this.audio.play(p.victory ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
+      this.hud?.gameOver(p.victory, p.victory)
+    })
+    ev.on('thunder', () => this.audio.play('thunder', { gain: 0.7 }))
+    ev.on('orderIssued', (p) => this.onOrderIssued(p.id as OrderId))
+    ev.on('upgradeBought', (p) => {
+      const def = UPGRADE_DEFS.find((u) => u.id === p.id)
+      this.audio.play('upgrade', { gain: 0.7 })
+      if (def) this.hud?.toast(`${def.name} — issued to all ranks`, 'good')
+      this.hud?.refreshShop()
+    })
   }
+
+  /** Local acknowledgement of an applied order — sounds and toasts only. */
+  private onOrderIssued(id: OrderId): void {
+    const s = this.ctx.s
+    switch (id) {
+      case 'takecover': this.hud?.toast('Heads down!', 'info'); break
+      case 'rapidfire': this.hud?.toast('Rapid fire! Give them the mad minute!', 'info'); break
+      case 'bayonets':
+        this.audio.play('whistle_attack', { gain: 0.9 })
+        this.hud?.toast('OVER THE TOP!', 'danger')
+        break
+      case 'masks':
+        this.audio.setMuffled(s.masksOn ? 0.4 : 0)
+        this.hud?.toast(s.masksOn ? 'Masks on.' : 'Masks off.', 'info')
+        break
+      case 'marktank':
+        this.hud?.toast('Mark IV moving up — it will crush wire in its path', 'warn')
+        break
+      case 'flare':
+      case 'barrage':
+        break // their own systems announce them
+    }
+  }
+
+  /** Port of the old endWave letter block; runs game-side off waveEnd. */
+  private maybeWriteLetter(wave: number): void {
+    const s = this.ctx.s
+    const author = s.units.filter((u) => !u.disbanded && u.crew.some((c) => c.hp > 0))
+    if (author.length === 0 || (this.waveCasualties.length === 0 && wave % 3 !== 0)) return
+    const u = author[Math.floor(this.runRand() * author.length)]
+    const sol = leadCrew(u)
+    if (!sol) return
+    const w = this.weather.state
+    // If the letter-writer has himself been mentioned in despatches, he may
+    // (modestly) note it home. A lost mate who was decorated is honoured too.
+    const cites = deedCitations(u.deeds)
+    const lostRec = this.waveCasualties[0] ?? null
+    const letter = writeLetterHome({
+      authorFirst: sol.name.first, authorLast: sol.name.last,
+      rank: RANKS[u.vet], regiment: this.regiment,
+      wave, dateStr: fieldDate(wave),
+      weather: w.night ? 'night' : w.rain > 0.4 ? 'rain' : w.fog > 0.4 ? 'fog' : 'clear',
+      kills: s.stats.kills - this.waveKills,
+      lostMate: lostRec ? `${lostRec.name.first} ${lostRec.name.last}` : null,
+      sawTank: this.sawTank, sawGas: this.sawGas,
+      mud: this.weather.state.wetness > 0.5,
+      morale: this.waveCasualties.length > 2 ? 'shaken' : this.waveCasualties.length > 0 ? 'steady' : 'high',
+      citedDeed: cites.length ? cites[Math.floor(this.runRand() * cites.length)] : null,
+      wavesServed: u.wavesServed,
+      lostMateDeed: lostRec && lostRec.deeds ? deedCitations(lostRec.deeds)[0] ?? null : null,
+    }, this.runRand)
+    this.hud?.showLetter(letter, `${RANKS[u.vet]} ${sol.name.first} ${sol.name.last}`)
+  }
+
+  // -------------------------------------------------------------------------
+  // Wave presentation (the lifecycle itself lives in SimRunner)
+  // -------------------------------------------------------------------------
 
   private intelFor(plan: WavePlan): IntelData {
     const s = this.ctx.s
     const rows: Array<{ icon: string; label: string; detail: string }> = []
     const counts = new Map<string, number>()
     for (const sp of plan.spawns) counts.set(sp.kind, (counts.get(sp.kind) ?? 0) + sp.count)
-    if (this.mods.reconIntel) {
+    if (this.ctx.mods.reconIntel) {
       for (const [kind, n] of counts) {
         const lbl = ENEMY_LABELS[kind]
         if (lbl) rows.push({ icon: lbl.icon, label: lbl.label, detail: `× ${n}` })
@@ -686,7 +668,7 @@ export class Game {
         if (kind === 'ecar' || kind === 'etank') machines += n
         else men += n
       }
-      const fudge = 0.75 + this.waveRand() * 0.5
+      const fudge = 0.75 + this.runRand() * 0.5
       rows.push({ icon: 'INF', label: 'Enemy strength (est.)', detail: `~${Math.max(5, Math.round(men * fudge / 5) * 5)} men` })
       if (machines > 0) rows.push({ icon: '???', label: 'Engine noise reported', detail: 'behind their line' })
       if (plan.barrages.length > 0) rows.push({ icon: 'ART', label: 'Their guns are registering', detail: 'expect shellfire' })
@@ -710,134 +692,15 @@ export class Game {
       title: s.plan?.name ?? `Wave ${s.wave}`,
       rows,
       weatherLine: w.join('; '),
-      adviceLine: intelFlavor(plan.intent, this.waveRand),
+      adviceLine: intelFlavor(plan.intent, this.runRand),
     }
-  }
-
-  private startAssault(): void {
-    const s = this.ctx.s
-    s.phase = 'assault'
-    s.waveStartTime = s.time
-    this.waveKills = s.stats.kills
-    this.waveCasualties = []
-    this.sawTank = false
-    this.sawGas = false
-    rebuildFlow(this.ctx)
-    this.events.emit('waveStart', { wave: s.wave, name: s.plan?.name ?? '' })
-    this.hud?.banner(`WAVE ${s.wave} — ${s.plan?.name ?? ''}`)
-    this.audio.play('whistle_attack', { gain: 0.6 })
-  }
-
-  private endWave(): void {
-    const s = this.ctx.s
-    const bonus = ECONOMY.waveBonusBase + ECONOMY.waveBonusPerWave * s.wave +
-      this.mods.waveIncome + Math.round(this.earlyCallBonus)
-    this.earlyCallBonus = 0
-    s.req += bonus
-    s.stats.reqEarned += bonus
-    this.events.emit('waveEnd', { wave: s.wave, bonus })
-    this.hud?.toast(`Wave held. Requisition +${bonus}`, 'good')
-
-    // Field hospital: some of the fallen come back.
-    if (this.mods.hospitalReturn > 0) {
-      let returned = 0
-      for (const u of s.units) {
-        if (u.disbanded) continue
-        for (const c of u.crew) {
-          if (c.hp <= 0 && this.runRand() < this.mods.hospitalReturn) {
-            c.hp = c.maxHp * 0.5
-            c.stance = 'stand'
-            c.morale = 0.6
-            returned++
-            const idx = s.casualties.findIndex((r) => r.name.last === c.name.last && r.name.first === c.name.first)
-            if (idx >= 0) s.casualties.splice(idx, 1)
-          }
-        }
-      }
-      if (returned > 0) this.hud?.toast(`${returned} wounded returned from the CCS`, 'good')
-    }
-
-    // Weapons cool, morale settles, orders reset between waves. Every position
-    // that came through the assault with a living man earns a wave's experience
-    // and a notch on its service — longevity, not just kills, makes veterans.
-    for (const u of s.units) {
-      u.heat = 0
-      u.fallenBack = false
-      const survived = u.crew.some((c) => c.hp > 0)
-      for (const c of u.crew) {
-        if (c.hp > 0) { c.suppression = 0; c.morale = Math.max(c.morale, 0.75) }
-      }
-      if (survived && !u.disbanded) {
-        u.wavesServed++
-        awardXp(this.ctx, u, XP_PER_WAVE)
-      }
-    }
-    s.clouds.length = 0
-    s.projectiles.length = 0
-    s.bullets.length = 0
-
-    // The director broods on recent lessons more than old ones.
-    for (const k of Object.keys(s.director.dmgByCategory)) {
-      s.director.dmgByCategory[k] *= 0.55
-    }
-
-    // A letter home.
-    const author = s.units.filter((u) => !u.disbanded && u.crew.some((c) => c.hp > 0))
-    if (author.length > 0 && (this.waveCasualties.length > 0 || s.wave % 3 === 0)) {
-      const u = author[Math.floor(this.runRand() * author.length)]
-      const sol = leadCrew(u)
-      if (sol) {
-        const w = this.weather.state
-        // If the letter-writer has himself been mentioned in despatches, he may
-        // (modestly) note it home. A lost mate who was decorated is honoured too.
-        const cites = deedCitations(u.deeds)
-        const lostRec = this.waveCasualties[0] ?? null
-        const letter = writeLetterHome({
-          authorFirst: sol.name.first, authorLast: sol.name.last,
-          rank: RANKS[u.vet], regiment: this.regiment,
-          wave: s.wave, dateStr: fieldDate(s.wave),
-          weather: w.night ? 'night' : w.rain > 0.4 ? 'rain' : w.fog > 0.4 ? 'fog' : 'clear',
-          kills: s.stats.kills - this.waveKills,
-          lostMate: lostRec ? `${lostRec.name.first} ${lostRec.name.last}` : null,
-          sawTank: this.sawTank, sawGas: this.sawGas,
-          mud: this.weather.state.wetness > 0.5,
-          morale: this.waveCasualties.length > 2 ? 'shaken' : this.waveCasualties.length > 0 ? 'steady' : 'high',
-          citedDeed: cites.length ? cites[Math.floor(this.runRand() * cites.length)] : null,
-          wavesServed: u.wavesServed,
-          lostMateDeed: lostRec && lostRec.deeds ? deedCitations(lostRec.deeds)[0] ?? null : null,
-        }, this.runRand)
-        this.hud?.showLetter(letter, `${RANKS[u.vet]} ${sol.name.first} ${sol.name.last}`)
-      }
-    }
-
-    s.wave++
-    if (s.wave > DIRECTOR.victoryWave && !this.endless) {
-      this.gameOver(true)
-      return
-    }
-    this.prepareNextWave()
-  }
-
-  private gameOver(victory: boolean): void {
-    const s = this.ctx.s
-    s.phase = 'debrief'
-    this.modalOpen = true
-    this.running = false
-    let score = s.stats.kills * SCORE.perKill + (s.wave - 1) * SCORE.perWave + Math.round(s.req * SCORE.perReqRemaining)
-    for (const sec of s.sections) if (!sec.captured) score += SCORE.perSectionHeld
-    s.stats.score = score
-    submitScore(score)
-    clearRun()
-    this.audio.play(victory ? 'bugle_victory' : 'drone_defeat', { gain: 0.8 })
-    this.hud?.gameOver(victory, victory)
   }
 
   /** Victory screen "keep fighting" path. */
   continueEndless(): void {
-    this.endless = true
     this.running = true
     this.modalOpen = false
-    this.prepareNextWave()
+    this.submit([{ t: 'continueendless' }])
   }
 
   private autosave(): void {
@@ -873,14 +736,17 @@ export class Game {
   // Placement / economy
   // -------------------------------------------------------------------------
 
+  // The HUD builds its panels before the first run exists — every UI-facing
+  // query below must tolerate a null runner (the old fields did implicitly).
+  private preRunMods = new Mods()
+
   costOf(id: BuildableId): number {
-    const base = (UNIT_DEFS as Record<string, { cost: number }>)[id]?.cost ?? DEFENCE_DEFS[id as DefenceKindId].cost
-    return Math.round(base * this.mods.costMult)
+    return this.runner ? cmdCostOf(this.ctx, id) : cmdCostOf({ mods: this.preRunMods } as Ctx, id)
   }
 
-  isUnitKind(id: BuildableId): id is UnitKindId { return id in UNIT_DEFS }
+  isUnitKind(id: BuildableId): id is UnitKindId { return simIsUnitKind(id) }
 
-  fieldBuildAllowed(): boolean { return this.ctx.s.phase !== 'assault' }
+  fieldBuildAllowed(): boolean { return this.runner ? simFieldBuildAllowed(this.ctx.s) : true }
 
   setBuildSelection(id: BuildableId | null): void {
     this.buildSelection = id
@@ -890,34 +756,11 @@ export class Game {
     if (id) this.audio.play('ui_click', { gain: 0.5 })
   }
 
-  /** Distance from (x,z) to the nearest live unit's post (Infinity when none). */
-  private unitClearance(x: number, z: number): number {
-    let best = Infinity
-    for (const u of this.ctx.s.units) {
-      if (u.disbanded) continue
-      const d = (u.pos.x - x) ** 2 + (u.pos.z - z) ** 2
-      if (d < best) best = d
-    }
-    return Math.sqrt(best)
-  }
-
-  /** Open ground behind the front line, off the trenches, clear of other units. */
-  private padSpotValid(x: number, z: number): boolean {
-    if (Math.abs(x) > WORLD.width / 2 - 6) return false
-    if (z < WORLD.frontTrenchZ + PLACEMENT.padMarginZ || z > WORLD.depth / 2 - 10) return false
-    if (this.unitClearance(x, z) < PLACEMENT.padSpacing) return false
-    // The whole pad must be open ground — the dig skips trench cells, so a
-    // gun straddling a corridor would hang over the void.
-    if (this.terrain.trenchAt(x, z) > PLACEMENT.padMaxTrench) return false
-    const r = PLACEMENT.padRadius * 0.8
-    for (let k = 0; k < 6; k++) {
-      const a = (k / 6) * Math.PI * 2
-      if (this.terrain.trenchAt(x + Math.cos(a) * r, z + Math.sin(a) * r) > PLACEMENT.padMaxTrench) return false
-    }
-    return true
-  }
-
-  /** Recompute ghost snap/validity for a world position. */
+  /**
+   * Recompute ghost snap/validity for a world position. Mirrors the
+   * authoritative `resolvePlacement` in sim/commands.ts (which re-validates at
+   * apply time) but keeps the snapped-even-when-invalid red-ghost behaviour.
+   */
   updateGhost(x: number, z: number): void {
     const id = this.buildSelection
     if (!id) return
@@ -938,11 +781,11 @@ export class Game {
       const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist)
       if (post) {
         gx = post.x; gz = post.z
-        valid = this.unitClearance(gx, gz) >= PLACEMENT.trenchSpacing
+        valid = simUnitClearance(s, gx, gz) >= PLACEMENT.trenchSpacing
       }
     } else if (placement === 'pad') {
       // Anywhere on open ground behind the front line.
-      valid = this.padSpotValid(x, z)
+      valid = simPadSpotValid(this.ctx, x, z)
     } else {
       // Field placement: forward of the front line, not in a trench, build phase only.
       const zMin = id === 'flarepost' ? 20 : -60
@@ -971,100 +814,16 @@ export class Game {
       if (id) this.audio.play('ui_error', { gain: 0.5 })
       return false
     }
-    const s = this.ctx.s
-    const cost = this.costOf(id)
-    if (s.req < cost) return false
+    if (this.ctx.s.req < this.costOf(id)) return false
 
-    if (this.isUnitKind(id)) {
-      // An emplacement crew digs in: level a pad under the gun first so it
-      // sits true (recorded in the ops history — saves replay the dig).
-      if (UNIT_DEFS[id].placement === 'pad') {
-        this.terrain.digPad(this.ghostPos.x, this.ghostPos.z, PLACEMENT.padRadius)
-      }
-      this.createUnit(id, this.ghostPos.x, this.ghostPos.z, true)
-    } else {
-      this.createDefence(id as DefenceKindId, this.ghostPos.x, this.ghostPos.z, this.wireAngle, true)
-    }
-    s.req -= cost
-    this.events.emit('reqChanged', { req: s.req })
+    // The buy is a command — the sim re-validates and spends at the next tick
+    // boundary. Local sound is the instant acknowledgement.
+    this.submit([{ t: 'buy', kind: id, x: this.ghostPos.x, z: this.ghostPos.z, angle: this.wireAngle }])
     this.audio.play('build', { x: this.ghostPos.x, y: this.ghostPos.y, z: this.ghostPos.z })
-    this.ctx.flowDirty = true
     // Keep selection for rapid wire-laying; drop it for expensive one-offs.
     if (id !== 'wire' && id !== 'mine') this.setBuildSelection(null)
     else this.updateGhost(this.ghostPos.x, this.ghostPos.z)
     return true
-  }
-
-  private createUnit(kind: UnitKindId, x: number, z: number, announce: boolean): Unit {
-    const s = this.ctx.s
-    const def = UNIT_DEFS[kind]
-    const u: Unit = {
-      id: s.nextId++, kind, pos: { x, z },
-      crew: [], heat: 0, venting: false, ammo: kind === 'lewis' ? 6 : -1,
-      xp: 0, vet: 0, deeds: 0, wavesServed: 0,
-      targeting: def.targeting, fallenBack: false, disbanded: false,
-    }
-    const hpMult = def.placement === 'pad' ? this.mods.emplacementHp : 1
-    for (let i = 0; i < def.crew; i++) {
-      u.crew.push({
-        id: s.nextId++, team: 'brit',
-        pos: { x: x + (i % 2) * 1.1 - 0.5, z: z + Math.floor(i / 2) },
-        facing: 0, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
-        stance: 'stand', suppression: 0, morale: 1, masked: s.masksOn, gasExposure: 0,
-        animPhase: this.runRand() * 10, cooldown: this.runRand(),
-        name: makeSoldierName(this.runRand), kills: 0,
-      })
-    }
-    s.units.push(u)
-    if (announce) this.events.emit('unitPlaced', { unitId: u.id })
-    return u
-  }
-
-  /**
-   * The sector has been fought over for two years — no front line ever stood
-   * behind bare grass. Two staggered rows of WORN wire (reduced hp, high wear)
-   * front the fire trench, with sally-port gaps on the communication-trench
-   * axes plus a couple of random blast gaps. The wear keeps the opening waves
-   * biting and the player's own fresh wire worth building; the gaps are the
-   * funnels the attack pours through.
-   */
-  private placeStartingWire(s: SimState): void {
-    const rand = forkRand(s.seed, 'wire0')
-    const gaps: number[] = [...TRENCH.commTrenchXs]
-    const nExtra = 2 + (rand() < 0.5 ? 1 : 0)
-    for (let i = 0; i < nExtra; i++) gaps.push((rand() - 0.5) * 2 * (TRENCH.frontSpanX - 20))
-    for (const row of [0, 1]) {
-      const z0 = WORLD.frontTrenchZ - 10.5 - row * 3.5
-      for (let x = -TRENCH.frontSpanX + 4; x <= TRENCH.frontSpanX - 4; x += WIRE_SEGMENT_LEN) {
-        const wx = x + (row ? WIRE_SEGMENT_LEN / 2 : 0)
-        if (gaps.some((g) => Math.abs(wx - g) < 4.5)) continue
-        const hp = Math.round(DEFENCE_DEFS.wire.hp * (0.35 + rand() * 0.2))
-        s.defences.push({
-          id: s.nextId++, kind: 'wire',
-          pos: { x: wx, z: z0 + (rand() - 0.5) * 1.6 },
-          hp, maxHp: hp, wear: 0.35 + rand() * 0.35, active: false,
-          angle: (rand() - 0.5) * 0.15,
-        })
-      }
-    }
-  }
-
-  private createDefence(kind: DefenceKindId, x: number, z: number, angle: number, announce: boolean): void {
-    const s = this.ctx.s
-    const def = DEFENCE_DEFS[kind]
-    const hp = kind === 'flarepost' ? 40 : def.hp
-    s.defences.push({
-      id: s.nextId++, kind, pos: { x, z }, hp: Math.max(1, hp), maxHp: Math.max(1, hp),
-      wear: 0, active: false, angle: kind === 'wire' ? angle : 0,
-    })
-    if (kind === 'sandbags') {
-      const sec = sectionAt(s.sections, x, z)
-      if (sec) {
-        sec.parapetMax += 80 * this.mods.parapetMult
-        sec.parapetHp += 80 * this.mods.parapetMult
-      }
-    }
-    if (announce) void 0
   }
 
   selectAt(x: number, z: number): void {
@@ -1119,19 +878,15 @@ export class Game {
   }
 
   sellSelected(): void {
-    const s = this.ctx.s
-    const u = s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
+    const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
     if (!u) return
-    u.disbanded = true
-    s.req += Math.round(this.costOf(u.kind) * ECONOMY.sellRefund)
-    this.events.emit('reqChanged', { req: s.req })
+    this.submit([{ t: 'sell', unitId: u.id }])
     this.audio.play('sell', { gain: 0.6 })
     this.selectedUnitId = -1
   }
 
   setTargeting(p: TargetPriority): void {
-    const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId)
-    if (u) u.targeting = p
+    if (this.selectedUnitId >= 0) this.submit([{ t: 'targeting', unitId: this.selectedUnitId, p }])
   }
 
   cycleSelection(): void {
@@ -1148,100 +903,30 @@ export class Game {
   // -------------------------------------------------------------------------
 
   orderReady(id: OrderId): boolean {
-    const s = this.ctx.s
-    const def = ORDER_DEFS[id]
-    if (def.needsUpgrade && !s.upgrades.has(def.needsUpgrade)) return false
-    if (id === 'masks') return true
-    const cd = s.orders.cooldowns[id as keyof typeof s.orders.cooldowns]
-    return cd <= 0 && s.req >= def.cost
+    return this.runner ? simOrderReady(this.ctx.s, id) : false
   }
 
   issueOrder(id: OrderId): void {
-    const s = this.ctx.s
     if (!this.orderReady(id)) { this.audio.play('ui_error', { gain: 0.4 }); return }
-    const def = ORDER_DEFS[id]
-    s.req -= def.cost
-    switch (id) {
-      case 'takecover':
-        s.orders.coverT = def.duration
-        s.orders.cooldowns.takecover = def.cooldown
-        this.hud?.toast('Heads down!', 'info')
-        break
-      case 'rapidfire':
-        s.orders.rapidT = def.duration
-        s.orders.cooldowns.rapidfire = def.cooldown
-        this.hud?.toast('Rapid fire! Give them the mad minute!', 'info')
-        break
-      case 'bayonets':
-        s.orders.bayonetT = def.duration
-        s.orders.cooldowns.bayonets = def.cooldown
-        this.audio.play('whistle_attack', { gain: 0.9 })
-        this.hud?.toast('OVER THE TOP!', 'danger')
-        break
-      case 'masks':
-        s.masksOn = !s.masksOn
-        this.audio.setMuffled(s.masksOn ? 0.4 : 0)
-        this.hud?.toast(s.masksOn ? 'Masks on.' : 'Masks off.', 'info')
-        break
-      case 'flare': {
-        s.orders.cooldowns.flare = def.cooldown
-        const x = this.rig.target.x
-        const z = Math.min(60, Math.max(-40, this.rig.target.z - 60))
-        spawnFlare(this.ctx, x, z)
-        break
-      }
-      case 'barrage':
-        s.orders.cooldowns.barrage = def.cooldown
-        startCreepingBarrage(this.ctx)
-        break
-      case 'marktank': {
-        s.orders.cooldowns.marktank = def.cooldown
-        spawnVehicle(this.ctx, 'friendlytank', (this.runRand() - 0.5) * 60, WORLD.supportTrenchZ + 25)
-        this.hud?.toast('Mark IV moving up — it will crush wire in its path', 'warn')
-        break
-      }
-    }
-    this.events.emit('reqChanged', { req: s.req })
+    // Flare aims where the commander is looking; the sim clamps the throw.
+    const cmd: Cmd = id === 'flare'
+      ? { t: 'order', id, x: this.rig.target.x, z: this.rig.target.z }
+      : { t: 'order', id }
+    this.submit([cmd])
   }
 
   upgradeAvailable(id: string): 'owned' | 'locked' | 'unaffordable' | 'buyable' {
-    const s = this.ctx.s
-    const def = UPGRADE_DEFS.find((u) => u.id === id)
-    if (!def) return 'locked'
-    if (s.upgrades.has(id)) return 'owned'
-    if (s.wave < UPGRADE_TIER_WAVE[def.tier]) return 'locked'
-    if (def.requires && !s.upgrades.has(def.requires)) return 'locked'
-    if (s.req < def.cost) return 'unaffordable'
-    return 'buyable'
+    return this.runner ? simUpgradeAvailable(this.ctx.s, id) : 'locked'
   }
 
   buyUpgrade(id: string): void {
     if (this.upgradeAvailable(id) !== 'buyable') { this.audio.play('ui_error', { gain: 0.4 }); return }
-    const s = this.ctx.s
-    const def = UPGRADE_DEFS.find((u) => u.id === id)
-    if (!def) return
-    s.req -= def.cost
-    s.upgrades.add(id)
-    const oldParapet = this.mods.parapetMult
-    this.mods.recompute(s.upgrades)
-    if (this.mods.parapetMult !== oldParapet) {
-      const scale = this.mods.parapetMult / oldParapet
-      for (const sec of s.sections) {
-        sec.parapetMax *= scale
-        sec.parapetHp *= scale
-      }
-    }
-    this.events.emit('reqChanged', { req: s.req })
-    this.audio.play('upgrade', { gain: 0.7 })
-    this.hud?.toast(`${def.name} — issued to all ranks`, 'good')
-    this.hud?.refreshShop()
+    this.submit([{ t: 'upgrade', id }])
   }
 
   callWaveEarly(): void {
-    const s = this.ctx.s
-    if (s.phase !== 'build') return
-    this.earlyCallBonus = s.buildTimer * ECONOMY.earlyCallBonusPerSecond
-    s.buildTimer = 0
+    if (this.ctx.s.phase !== 'build') return
+    this.submit([{ t: 'callwave' }])
   }
 
   // -------------------------------------------------------------------------
@@ -1326,11 +1011,11 @@ export class Game {
       for (let k = 0; k < 24 && !spot; k++) {
         const x = (k % 2 === 0 ? 1 : -1) * Math.ceil(k / 2) * 4
         const z = WORLD.frontTrenchZ + PLACEMENT.padMarginZ + 8
-        if (this.padSpotValid(x, z)) spot = { x, z }
+        if (simPadSpotValid(this.ctx, x, z)) spot = { x, z }
       }
     }
     if (!spot) return false
-    const u = this.createUnit(kind, spot.x, spot.z, false)
+    const u = simCreateUnit(this.ctx, kind, spot.x, spot.z, false)
     const c = u.crew.find((cr) => cr.hp > 0)
     if (!c) return false
     this.fpsMode.debugUnlocked = true
@@ -1344,7 +1029,7 @@ export class Game {
     const z = WORLD.frontTrenchZ - range
     for (let i = 0; i < count; i++) {
       const x = (i - (count - 1) / 2) * 6
-      spawnEnemy(this.ctx, 'einf', x, z + (this.runRand() - 0.5) * 8, -1)
+      spawnEnemy(this.ctx, 'einf', x, z + (this.ctx.rand() - 0.5) * 8, -1)
     }
   }
 
@@ -1417,12 +1102,16 @@ export class Game {
       }, this.modalOpen)
     }
 
-    // Fixed-step sim.
+    // Fixed-step sim (the runner owns the tick; we own the accumulator).
     const effSpeed = this.paused || this.modalOpen || !this.running ? 0 : this.speed
     this.acc += dt * effSpeed
     let steps = 0
+    const s = this.ctx.s
     while (this.acc >= SIM_DT && steps < 8) {
-      this.step(SIM_DT)
+      this.runner!.step()
+      // Battle intensity for the ambience bed (presentation, tick-paced).
+      this.battleNoise = Math.max(0, this.battleNoise - SIM_DT * 0.2)
+      if (s.enemies.length > 0) this.battleNoise = Math.min(1, this.battleNoise + s.enemies.length * 0.001)
       this.acc -= SIM_DT
       steps++
     }
@@ -1474,61 +1163,6 @@ export class Game {
         this.setBuildSelection(this.buildSelection === BUILD_ORDER[i] ? null : BUILD_ORDER[i])
       }
     }
-  }
-
-  private step(dt: number): void {
-    const s = this.ctx.s
-    s.time += dt
-
-    // Weather & terrain wetness.
-    const { thunder } = this.weather.update(dt)
-    if (thunder) this.audio.play('thunder', { gain: 0.7 })
-    this.wetnessTimer += dt
-    if (this.wetnessTimer > 4) {
-      this.wetnessTimer = 0
-      this.terrain.setWetness(this.weather.state.wetness)
-    }
-
-    // Orders tick.
-    const o = s.orders
-    o.coverT = Math.max(0, o.coverT - dt)
-    o.rapidT = Math.max(0, o.rapidT - dt)
-    o.bayonetT = Math.max(0, o.bayonetT - dt)
-    for (const k of Object.keys(o.cooldowns) as Array<keyof typeof o.cooldowns>) {
-      o.cooldowns[k] = Math.max(0, o.cooldowns[k] - dt)
-    }
-
-    if (s.phase === 'build') {
-      s.buildTimer -= dt
-      if (s.buildTimer <= 0) this.startAssault()
-    } else if (s.phase === 'assault') {
-      const elapsed = s.time - s.waveStartTime
-      const active = updateWaveSpawns(this.ctx, elapsed)
-      updateBarrages(this.ctx, dt, elapsed)
-      if (!active) { this.endWave(); return }
-    }
-
-    updateUnits(this.ctx, dt)
-    updateEnemies(this.ctx, dt)
-    updateVehicles(this.ctx, dt)
-    updateProjectiles(this.ctx, dt)
-    updateBullets(this.ctx, dt)
-    updateGas(this.ctx, dt)
-    updateCapture(this.ctx, dt)
-
-    for (const c of s.corpses) c.deadT += dt
-
-    // Battle intensity for the ambience bed.
-    this.battleNoise = Math.max(0, this.battleNoise - dt * 0.2)
-    if (s.enemies.length > 0) this.battleNoise = Math.min(1, this.battleNoise + s.enemies.length * 0.001)
-
-    // Flow rebuild cadence.
-    if (this.ctx.flowDirty && s.time - this.lastFlowRebuild > 2.5) {
-      this.lastFlowRebuild = s.time
-      rebuildFlow(this.ctx)
-    }
-
-    if (s.breach <= 0 && this.running) this.gameOver(false)
   }
 
   // -------------------------------------------------------------------------

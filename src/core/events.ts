@@ -1,8 +1,15 @@
 /** Minimal typed event bus for cross-cutting notifications (UI ← sim). */
+import type { Team } from './types'
 
 export interface GameEvents {
   waveStart: { wave: number; name: string }
-  waveEnd: { wave: number; bonus: number }
+  waveEnd: { wave: number; bonus: number; hospitalReturned: number }
+  /** A new wave plan is ready; classic mode shows the intel paper on this. */
+  wavePrepared: { wave: number }
+  thunder: Record<string, never>
+  /** A command of kind 'order' was applied by the sim (toast/sfx hooks). */
+  orderIssued: { id: string; side: Team }
+  upgradeBought: { id: string; side: Team }
   sectionLost: { sectionId: number }
   sectionRetaken: { sectionId: number }
   unitPlaced: { unitId: number }
