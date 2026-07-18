@@ -76,6 +76,12 @@ export interface WeaponProfile {
    * sniper's `scope`. The 18-pounder lays over its dial-sight telescope.
    */
   gunsight?: boolean
+  /**
+   * Field glasses carried alongside the weapon (the officer's binoculars):
+   * B raises them for a strong hands-free zoom — pure observation, no lay,
+   * no discharge. Client-side camera only; never enters the command stream.
+   */
+  binoculars?: boolean
   /** Vickers: sustained fire boils the jacket; player watches the heat gauge. */
   heat: boolean
   spreadHip: number
@@ -1273,8 +1279,8 @@ export const WEAPON_PROFILES: Record<UnitKindId, WeaponProfile> = {
     magSize: 6, fireInterval: 0.34, reloadTime: 2.6, recoil: 0.7,
     hipFov: 56, adsFov: 42, emplaced: false, scope: false, heat: false,
     spreadHip: 0.03, spreadAds: 0.012, category: 'rifle', sound: 'pistol', tracerChance: 0,
-    ammoName: 'Webley .455', controlsHint: 'LMB fire · RMB aim · R reload · C stance',
-    minRange: 0, maxRange: 0, flashScale: 0.6,
+    ammoName: 'Webley .455', controlsHint: 'LMB fire · RMB aim · B binoculars · R reload · C stance',
+    minRange: 0, maxRange: 0, flashScale: 0.6, binoculars: true,
     // A light service revolver: a snappy little flick of the wrist, not a punch.
     recoilKickMul: 0.55,
     hip: { x: 0.18, y: -0.2, z: -0.4, rx: 0.05, ry: 0.04 },

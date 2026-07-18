@@ -91,6 +91,11 @@ export class FpsMode {
   private toolProgress = 0    // medic/sapper action feedback 0..1
   private ads = 0
   private adsHeld = false
+  // Field glasses (officer): B raises them; `binos` is the smoothed 0..1 blend
+  // driving FOV, mask fade, sensitivity damping and viewmodel-away. Rendering
+  // only — the glasses never enter the command stream (see WeaponProfile).
+  private binosUp = false
+  private binos = 0
   private triggerDown = false
   // Recoil model: four independent accumulators, all rendered-only offsets on
   // top of the player's actual aimed yaw/pitch. Each springs back toward zero
@@ -203,6 +208,7 @@ export class FpsMode {
   private crosshair!: HTMLDivElement
   private scopeEl!: HTMLDivElement
   private gunsightEl!: HTMLDivElement
+  private binoEl!: HTMLDivElement
   private ammoEl!: HTMLDivElement
   private ammoLabelEl!: HTMLDivElement
   private controlsEl!: HTMLDivElement
@@ -309,6 +315,8 @@ export class FpsMode {
     this.toolProgress = 0
     this.ads = 0
     this.adsHeld = false
+    this.binosUp = false
+    this.binos = 0
     this.triggerDown = false
     this.kick = 0
     this.climbPitch = 0
@@ -457,6 +465,10 @@ export class FpsMode {
     if (e.code === 'KeyM') { this.exit(); e.stopPropagation(); e.preventDefault(); return }
     if (e.code === 'KeyC' && !this.profile.emplaced) this.cycleStance()
     if (e.code === 'KeyR') this.startReload()
+    if (e.code === 'KeyB' && this.profile.binoculars) {
+      this.binosUp = !this.binosUp
+      this.game.audio.play('ui_click', { gain: 0.35, rate: this.binosUp ? 1.2 : 0.9 })
+    }
     e.stopPropagation()
   }
 
@@ -468,7 +480,7 @@ export class FpsMode {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (!this.active || document.pointerLockElement !== this.game.renderer.renderer.domElement) return
-    const sens = 0.0021 * (1 - this.ads * 0.55)
+    const sens = 0.0021 * (1 - this.ads * 0.55) * (1 - this.binos * 0.82)
     this.yaw += e.movementX * sens
     this.pitch = clamp(this.pitch - e.movementY * sens, -1.4, 1.4)
     e.stopPropagation()
@@ -480,6 +492,13 @@ export class FpsMode {
     e.preventDefault()
     // Not holding the mouse yet? The click buys the lock — it does not fire.
     if (!this.locked) { this.requestLock(); return }
+    // Glassing: either button lowers the binoculars back to the weapon — a
+    // click never fires through them.
+    if (this.binosUp) {
+      this.binosUp = false
+      this.game.audio.play('ui_click', { gain: 0.35, rate: 0.9 })
+      return
+    }
     if (e.button === 0) {
       this.triggerDown = true
       // Single-discharge weapons fire on the click; held weapons fire in update.
@@ -528,6 +547,7 @@ export class FpsMode {
     const s = this.soldier
     const u = this.unit
     if (!s || !u || s.hp <= 0) return
+    if (this.binos > 0.2) return // hands are full of field glasses
     if (this.reloadT > 0 || this.boltT > 0) return
     if (this.profile.heat && this.venting) return // Vickers jacket boiled dry
     if (this.profile.ammoKind === 'fuel') { if (this.fuel <= 0.05) return }
@@ -964,8 +984,11 @@ export class FpsMode {
     this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 300)
     this.updateMuzzleFlash(dt)
     const canAds = !this.profile.emplaced || this.profile.control === 'directgun'
-    const adsTarget = this.adsHeld && this.reloadT <= 0 && canAds ? 1 : 0
+    const adsTarget = this.adsHeld && this.reloadT <= 0 && canAds && !this.binosUp ? 1 : 0
     this.ads += (adsTarget - this.ads) * Math.min(1, dt * 10)
+    // Field glasses come up a touch slower than a weapon shoulders — deliberate.
+    const binosTarget = this.binosUp && this.reloadT <= 0 ? 1 : 0
+    this.binos += (binosTarget - this.binos) * Math.min(1, dt * 7)
 
     // -- command spine: the predicted pose lands at most once per sim tick ----
     const tick = g.ctx.s.tick
@@ -999,7 +1022,9 @@ export class FpsMode {
     // A little kick-driven roll on top of the existing idle sway gives a shot
     // some character without a full third axis of recoil to track.
     cam.rotation.z = Math.sin(this.swayT * 1.1) * 0.0012 + this.kick * 0.006
-    const fov = lerp(this.profile.hipFov, this.profile.adsFov, this.ads) + this.fovKick
+    // Binoculars override the weapon's FOV pair with a strong fixed field —
+    // roughly 6x glasses; a purely client-side camera change (see §binoculars).
+    const fov = lerp(lerp(this.profile.hipFov, this.profile.adsFov, this.ads), 9.5, this.binos) + this.fovKick
     if (Math.abs(cam.fov - fov) > 0.1) { cam.fov = fov; cam.updateProjectionMatrix() }
 
     // -- supersonic whiz-by: enemy rounds cracking past the camera this frame,
@@ -1214,7 +1239,8 @@ export class FpsMode {
     if (this.inspect) { this.poseInspect(); return }
     // Looking through the optic (sniper scope OR the field-gun dial sight): the
     // weapon drops away so the magnified sight picture fills the eye.
-    const scopedAway = (this.profile.scope || !!this.profile.gunsight) && this.ads > 0.85
+    const scopedAway = ((this.profile.scope || !!this.profile.gunsight) && this.ads > 0.85)
+      || this.binos > 0.5 // the revolver hand drops while glassing
     vm.group.visible = !scopedAway
     if (scopedAway) return
     const t = this.swayT
@@ -1315,7 +1341,7 @@ export class FpsMode {
     // Sight picture: the aperture tightens as the weapon comes to the shoulder
     // and opens slightly while moving. It disappears under an optic (the sniper
     // telescope OR the field-gun dial sight).
-    const scoped = (p.scope || !!p.gunsight) && this.ads > 0.6
+    const scoped = ((p.scope || !!p.gunsight) && this.ads > 0.6) || this.binos > 0.6
     const moving = this.moveInput().len > 0.1
     const gap = 11 - this.ads * 6 + (moving ? 4 : 0) + s.suppression * 10
     this.crosshair.style.setProperty('--sight-gap', `${gap.toFixed(1)}px`)
@@ -1325,9 +1351,10 @@ export class FpsMode {
     this.crosshair.classList.toggle('fps-sight--blocked', this.reloadT > 0 || this.boltT > 0.08)
     // Fade in whichever optic this weapon lays through — the plain reticle scope
     // for the sniper, the amber telescopic graticule for the gun.
-    const opticAlpha = scoped ? Math.min(1, (this.ads - 0.6) / 0.3) : 0
+    const opticAlpha = (p.scope || !!p.gunsight) && this.ads > 0.6 ? Math.min(1, (this.ads - 0.6) / 0.3) : 0
     this.scopeEl.style.opacity = String(p.scope ? opticAlpha : 0)
     this.gunsightEl.style.opacity = String(p.gunsight ? opticAlpha : 0)
+    this.binoEl.style.opacity = String(Math.min(1, Math.max(0, (this.binos - 0.25) / 0.4)))
 
     this.hintEl.textContent = locked
       ? `${s.name.first} ${s.name.last} · ${p.name} — M or Esc to return to command`
@@ -1407,6 +1434,27 @@ export class FpsMode {
     this.scopeEl.appendChild(reticleV)
     this.scopeEl.appendChild(reticleH)
     root.appendChild(this.scopeEl)
+
+    // Officer's field glasses: the classic twin-circle mask. An SVG even-odd
+    // cutout — full-screen black sheet with two overlapping round apertures —
+    // plus a faint centre hairline for laying observations. Faded by `binos`.
+    this.binoEl = document.createElement('div')
+    this.binoEl.style.cssText =
+      'position:absolute;inset:0;opacity:0;transition:opacity 0.1s;pointer-events:none'
+    this.binoEl.innerHTML =
+      '<svg width="100%" height="100%" style="position:absolute;inset:0">' +
+      '<defs><mask id="ms-binomask">' +
+      '<rect width="100%" height="100%" fill="white"/>' +
+      '<circle cx="42%" cy="50%" r="31%" fill="black"/>' +
+      '<circle cx="58%" cy="50%" r="31%" fill="black"/>' +
+      '</mask></defs>' +
+      '<rect width="100%" height="100%" fill="black" mask="url(#ms-binomask)"/>' +
+      '<circle cx="42%" cy="50%" r="31%" fill="none" stroke="rgba(0,0,0,0.85)" stroke-width="6"/>' +
+      '<circle cx="58%" cy="50%" r="31%" fill="none" stroke="rgba(0,0,0,0.85)" stroke-width="6"/>' +
+      '<line x1="50%" y1="28%" x2="50%" y2="72%" stroke="rgba(20,20,15,0.55)" stroke-width="1"/>' +
+      '<line x1="34%" y1="50%" x2="66%" y2="50%" stroke="rgba(20,20,15,0.55)" stroke-width="1"/>' +
+      '</svg>'
+    root.appendChild(this.binoEl)
 
     // Artillery telescopic gun sight (the 18-pounder lays through this): a round
     // amber-tinted field with a laid graticule — a fine crosshair, a central

@@ -1190,6 +1190,8 @@ export class Game {
   selectedSections: number[] = []
   private assaultHintShown = false
   private selRings: THREE.Mesh[] = []
+  /** Pooled rings marking posts that marching crews have claimed but not reached. */
+  private destRings: THREE.Mesh[] = []
 
   /**
    * German commander's minimal spend UI (MP v1): hotkeys 1–4 despatch a squad
@@ -1337,6 +1339,33 @@ export class Game {
       ring.position.set(sec.mid.x, this.terrain.heightAt(sec.mid.x, sec.mid.z) + 0.4, sec.mid.z)
       ;(ring.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.abs(Math.sin(this.ctx.s.time * 4)) * 0.3
     }
+  }
+
+  /**
+   * A claimed post reads as taken before the cursor ever reaches it: while a
+   * crew is still marching up, a ring sits on the fire-step spot its purchase
+   * reserved (the unit's pos IS the reservation — see unitClearance).
+   */
+  private syncDestinationRings(): void {
+    let n = 0
+    for (const u of this.ctx.s.units) {
+      if (u.march === null || u.disbanded) continue
+      if (n >= this.destRings.length) {
+        const geo = new THREE.TorusGeometry(1.6, 0.12, 6, 24)
+        geo.rotateX(Math.PI / 2)
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+          color: 0xa04a3a, transparent: true, opacity: 0.5, depthWrite: false,
+        }))
+        this.renderer.scene.add(mesh)
+        this.destRings.push(mesh)
+      }
+      const ring = this.destRings[n++]
+      ring.visible = true
+      ring.position.set(u.pos.x, this.terrain.heightAt(u.pos.x, u.pos.z) + 0.25, u.pos.z)
+      ;(ring.material as THREE.MeshBasicMaterial).opacity =
+        0.35 + Math.abs(Math.sin(this.ctx.s.time * 3 + u.id)) * 0.25
+    }
+    for (let i = n; i < this.destRings.length; i++) this.destRings[i].visible = false
   }
 
   applySettings(st: GameSettings): void {
@@ -1723,6 +1752,7 @@ export class Game {
     }
 
     if (s.mode === 'bigpush') this.syncSelectionRings()
+    this.syncDestinationRings()
 
     // Warning rings pulse and expire.
     for (let i = this.warnRings.length - 1; i >= 0; i--) {
