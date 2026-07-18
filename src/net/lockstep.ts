@@ -23,9 +23,10 @@ export const INPUT_DELAY = 6
 export const HASH_EVERY = 30
 
 export type NetMsg =
-  /** Joiner's pre-battle beacon; the host answers with hello. */
-  | { t: 'hi' }
-  | { t: 'hello'; seedStr: string; matchLen: MatchLength; hostSide: Team }
+  /** Joiner's pre-battle beacon; the host answers with hello, echoing the
+   *  nonce so exactly ONE joiner pairs (BroadcastChannel rooms are open). */
+  | { t: 'hi'; nonce: string }
+  | { t: 'hello'; seedStr: string; matchLen: MatchLength; hostSide: Team; nonce: string }
   | { t: 'env'; env: Envelope }
   /** Sent after every stepped tick. SEALS the sender's inputs: because the
    *  channel is ordered and submits stamp tick+INPUT_DELAY, once you hold
@@ -82,6 +83,13 @@ export class LockstepSession {
   /** Local player action → scheduled for BOTH sims at tick+delay. */
   submit(cmds: Cmd[]): void {
     if (cmds.length === 0) return
+    // While rebuilding, a locally-enqueued envelope would be wiped by
+    // adoptState but still applied by the peer — a guaranteed re-desync.
+    // The rebuild takes a moment; commands during it are simply refused.
+    if (this.resyncing || this.desyncedAt !== null) {
+      this.ev.onStatus?.('order lost in the confusion (resynchronising)')
+      return
+    }
     const env: Envelope = {
       tick: this.runner.ctx.s.tick + INPUT_DELAY,
       side: this.side,
@@ -103,9 +111,14 @@ export class LockstepSession {
     return this.runner.ctx.s.tick + 1 <= this.peerFrame + INPUT_DELAY
   }
 
+  private lastFrameSent = -1
+
   /** Call AFTER each runner.step(). Seals this tick; hashes on cadence. */
   afterStep(): void {
     const tick = this.runner.ctx.s.tick
+    // Post-outcome steps no longer advance the tick — don't spam the wire.
+    if (tick === this.lastFrameSent) return
+    this.lastFrameSent = tick
     this.transport.send({ t: 'frame', tick } satisfies NetMsg)
     if (tick % HASH_EVERY === 0) {
       const h = hashSim(this.runner.ctx.s)
@@ -183,7 +196,7 @@ export class LockstepSession {
     this.ev.onStatus?.(`rebuilding from log: ${envs.length} envelopes to tick ${tick}`)
     const fresh = new SimRunner({
       seedStr: this.seedStr, difficulty: 'front', mode: 'bigpush',
-      matchLen: this.matchLen, aiPersona: null,
+      matchLen: this.matchLen, aiPersona: null, headless: true,
     })
     fresh.begin()
     for (const env of envs) fresh.enqueue(JSON.parse(JSON.stringify(env)) as Envelope)
@@ -217,10 +230,22 @@ export class LockstepSession {
   private onPeerLost(): void {
     if (this.peerGone) return
     this.peerGone = true
-    this.ev.onStatus?.('peer lost — the AI takes their side')
+    // A desync/resync in flight with a dead peer can never complete — clear
+    // it or gate() blocks forever with nobody left to free it.
+    this.desyncedAt = null
+    this.resyncing = false
+    this.resyncBuffer.length = 0
     // The remaining human's machine adopts the ABSENT side with the AI.
+    // Only the German side has an AI commander today: if the BRITISH
+    // commander vanished, the game layer declares a walkover instead
+    // (the onPeerLost handler checks which side is absent).
     const absent: Team = this.side === 'brit' ? 'german' : 'brit'
-    if (absent === 'german') this.runner.adoptAi('methodical')
+    if (absent === 'german') {
+      this.runner.adoptAi('methodical')
+      this.ev.onStatus?.('peer lost — the AI takes their side')
+    } else {
+      this.ev.onStatus?.('peer lost — the British commander has quit the field')
+    }
     this.ev.onPeerLost?.()
   }
 

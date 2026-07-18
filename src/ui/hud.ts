@@ -49,6 +49,7 @@ export class Hud implements HudBridge {
   private tooltipFor: HTMLElement | null = null
   private tooltipBuild: (() => HTMLElement) | null = null
   private shopEl: HTMLElement | null = null
+  private bottomEl: HTMLElement | null = null
   private overlay: { el: HTMLElement; dispose: () => void } | null = null
   private shownTips = new Set<string>(JSON.parse(localStorage.getItem('mudsteel.tips') ?? '[]') as string[])
   private bannerT = 0
@@ -171,7 +172,7 @@ export class Hud implements HudBridge {
     }
     const pauseBtn = el('button', 'ms-btn ms-btn--ghost ms-btn--small', 'II')
     pauseBtn.title = `Pause (${keyLabel(this.game.input.bindFor('pause'))})`
-    pauseBtn.addEventListener('click', () => { this.game.paused = !this.game.paused; pauseBtn.blur() })
+    pauseBtn.addEventListener('click', () => { if (!this.game.net) this.game.paused = !this.game.paused; pauseBtn.blur() })
     const menuBtn = el('button', 'ms-btn ms-btn--ghost ms-btn--small', '☰')
     menuBtn.addEventListener('click', () => { this.openPause(); menuBtn.blur() })
     const fps = el('span', 'hud-fps', '')
@@ -184,6 +185,7 @@ export class Hud implements HudBridge {
 
   private buildBottom(): void {
     const bottom = el('div', 'hud-bottom')
+    this.bottomEl = bottom
     bottom.style.pointerEvents = 'auto'
 
     // Orders row.
@@ -304,7 +306,10 @@ export class Hud implements HudBridge {
     t.enemies.textContent = s.phase === 'assault'
       ? `${s.enemies.length + s.vehicles.filter((v) => v.team === 'german' && !v.dead).length} in the open`
       : s.phase === 'build' ? `stand-to in ${Math.ceil(s.buildTimer)}s` : ''
-    t.timerBtn.style.display = s.phase === 'build' ? '' : 'none'
+    // The German commander gets none of the British controls: no early
+    // advance, no shop, no orders row (his tools are section clicks + 1-4).
+    t.timerBtn.style.display = s.phase === 'build' && g.mySide === 'brit' ? '' : 'none'
+    if (this.bottomEl) this.bottomEl.style.display = g.mySide === 'german' ? 'none' : ''
     const lineFrac = s.mode === 'bigpush'
       ? Math.max(0, Math.min(1, s.strength.brit / 100))
       : Math.max(0, Math.min(1, s.breach / 100))
@@ -536,7 +541,13 @@ export class Hud implements HudBridge {
         wavesServed: c.wavesServed ?? 0,
       })),
       letter: null,
-      onRestart: () => { this.closeOverlay(); this.game.startRun(this.game.seedStr, this.game.difficulty) },
+      // Multiplayer: there is no "restart" — the other commander is a human.
+      // Leave the match instead of silently dropping into a classic SP run.
+      onRestart: () => {
+        this.closeOverlay()
+        if (this.game.net) { this.onQuitToTitle?.(); return }
+        this.game.startRun(this.game.seedStr, this.game.difficulty)
+      },
       onMenu: () => { this.closeOverlay(); this.onQuitToTitle?.() },
       onContinueEndless: canContinue ? () => { this.closeOverlay(); this.game.continueEndless() } : undefined,
     })
@@ -561,7 +572,11 @@ export class Hud implements HudBridge {
       onResume: () => { this.closeOverlay(); g.paused = false },
       onSettings: () => this.openSettings(),
       onHelp: () => this.openHelp(),
-      onRestart: () => { this.closeOverlay(); g.paused = false; g.startRun(g.seedStr, g.difficulty) },
+      onRestart: () => {
+        this.closeOverlay(); g.paused = false
+        if (g.net) { this.onQuitToTitle?.(); return }
+        g.startRun(g.seedStr, g.difficulty)
+      },
       onQuit: () => { this.closeOverlay(); this.onQuitToTitle?.() },
     })
     this.mount(scr)

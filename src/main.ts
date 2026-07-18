@@ -94,6 +94,9 @@ function main(): void {
   }
 
   const showTitle = () => {
+    // Leaving a live MP match: send the bye so the peer's AI takes over (or
+    // the walkover fires) instead of gate-freezing them forever.
+    game.leaveMatch()
     game.running = false
     const save = loadRun()
     title = createTitleScreen({
@@ -144,6 +147,7 @@ function main(): void {
    * BroadcastChannel between two local tabs), then the hi/hello terms
    * handshake, then hand the open transport to the game.
    */
+  let netConnecting = false
   const startBigPushNet = async (
     role: 'host' | 'join' | 'local-host' | 'local-join',
     code: string,
@@ -151,6 +155,8 @@ function main(): void {
     seed: string,
     status: (line: string) => void,
   ): Promise<void> => {
+    if (netConnecting) { status('already connecting — one attempt at a time'); return }
+    netConnecting = true
     const { helloAsHost, helloAsJoiner, connectRtc, createRoom } = await import('./net/signaling')
     const { BroadcastTransport } = await import('./net/transport')
     try {
@@ -182,16 +188,25 @@ function main(): void {
       })
     } catch (e) {
       status(`✗ ${(e as Error).message}`)
+    } finally {
+      netConnecting = false
     }
   }
 
   hud.onQuitToTitle = () => showTitle()
   game.onExitToTitle = () => showTitle()
 
-  // Pause when the tab goes to sleep.
+  // Pause when the tab goes to sleep — except in MP, where paused is ignored
+  // and would only leave the HUD's pause state lit after the tab returns.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && game.running) game.paused = true
+    if (document.hidden && game.running && !game.net) game.paused = true
   })
+  // Tab closed / reloaded mid-match: BroadcastChannel has no disconnect
+  // signal of its own, and WebRTC's takes seconds — say goodbye properly.
+  // Both hooks (some closes skip one); leaveMatch is idempotent. A hard
+  // process kill still slips through — heartbeat detection is M6 debt.
+  window.addEventListener('pagehide', () => game.leaveMatch())
+  window.addEventListener('beforeunload', () => game.leaveMatch())
 
   // Main loop.
   let last = performance.now()

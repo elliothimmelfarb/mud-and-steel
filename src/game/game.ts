@@ -172,6 +172,18 @@ export class Game {
     return this.runner?.ctx as unknown as Ctx
   }
 
+  /**
+   * Leave a multiplayer match cleanly: the bye tells the peer to adopt the
+   * AI (or claim the walkover) instead of freezing at the gate. Called on
+   * quit-to-title and on page unload.
+   */
+  leaveMatch(): void {
+    if (!this.net) return
+    this.net.close()
+    this.net = null
+    this.mySide = 'brit'
+  }
+
   get endless(): boolean { return this.ctx?.s.endless ?? false }
   set endless(v: boolean) { if (this.ctx) this.ctx.s.endless = v }
 
@@ -469,7 +481,20 @@ export class Game {
           onStatus: (l) => this.hud?.toast(l, 'info'),
           onDesync: () => this.hud?.toast('Signals crossed — resynchronising with the other commander…', 'warn'),
           onResynced: () => this.hud?.toast('Back in step with the other commander.', 'info'),
-          onPeerLost: () => this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn'),
+          onPeerLost: () => {
+            if (this.theirSide === 'german') {
+              this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn')
+            } else {
+              // No AI can command Britain yet (#41): the German human wins
+              // by walkover. The peer is gone, so ending locally is safe.
+              this.hud?.toast('The British commander has quit the field — the day is yours.', 'warn')
+              const s = this.ctx.s
+              if (s.outcome === 'ongoing') {
+                s.outcome = 'defeat' // British defeat: outcomes are brit-POV
+                this.events.emit('gameOver', { victory: false })
+              }
+            }
+          },
         },
         () => new SimRunner({ seedStr, difficulty, mode, events: this.events, matchLen: bigpush?.matchLen, aiPersona: null }),
       )
@@ -858,6 +883,7 @@ export class Game {
   }
 
   confirmPlace(): boolean {
+    if (this.mySide !== 'brit') return false // the sim would drop it anyway
     const id = this.buildSelection
     if (!id || !this.ghostValid) {
       if (id) this.audio.play('ui_error', { gain: 0.5 })
@@ -956,6 +982,7 @@ export class Game {
   }
 
   sellSelected(): void {
+    if (this.mySide !== 'brit') return // those are the other fellow's men
     const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
     if (!u) return
     this.submit([{ t: 'sell', unitId: u.id }])
@@ -985,6 +1012,7 @@ export class Game {
   }
 
   issueOrder(id: OrderId): void {
+    if (this.mySide !== 'brit') return // British orders; the sim would drop them
     if (!this.orderReady(id)) { this.audio.play('ui_error', { gain: 0.4 }); return }
     // Flare aims where the commander is looking; the sim clamps the throw.
     const cmd: Cmd = id === 'flare'
@@ -998,11 +1026,13 @@ export class Game {
   }
 
   buyUpgrade(id: string): void {
+    if (this.mySide !== 'brit') return
     if (this.upgradeAvailable(id) !== 'buyable') { this.audio.play('ui_error', { gain: 0.4 }); return }
     this.submit([{ t: 'upgrade', id }])
   }
 
   callWaveEarly(): void {
+    if (this.mySide !== 'brit') return
     if (this.ctx.s.phase !== 'build') return
     this.submit([{ t: 'callwave' }])
   }
@@ -1233,6 +1263,8 @@ export class Game {
   // -------------------------------------------------------------------------
 
   private acc = 0
+  private gateStallT = 0
+  private gateStallWarned = false
   /** Eased Big Push camera-leash boundary (render-side smoothing of advanceZ-12). */
   private leashZ = WORLD.frontTrenchZ - 12
   frame(dt: number): void {
@@ -1279,6 +1311,19 @@ export class Game {
     if (steps === 8) this.acc = 0
     // A gate-held MP battle must not bank unbounded catch-up time.
     if (this.net && this.acc > SIM_DT * 4) this.acc = SIM_DT * 4
+
+    // Gate starvation has no event of its own — if the peer stops sealing
+    // frames (hidden tab, dying link) tell the player what the freeze is.
+    if (this.net && this.running && s.outcome === 'ongoing' && !this.net.peerGone && !this.net.gate()) {
+      this.gateStallT += dt
+      if (this.gateStallT > 3 && !this.gateStallWarned) {
+        this.gateStallWarned = true
+        this.hud?.toast('Waiting on the other commander — their line has gone quiet…', 'warn')
+      }
+    } else {
+      this.gateStallT = 0
+      this.gateStallWarned = false
+    }
 
     // The Big Push camera leash: follow your men forward within ~0.5 s;
     // ease back over ~3 s when the forward men die (never yank the view).

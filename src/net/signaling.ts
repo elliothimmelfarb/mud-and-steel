@@ -101,36 +101,67 @@ export function connectRtc(code: string, role: NetRole, onStatus?: (s: string) =
       pc.ondatachannel = (e) => armChannel(e.channel)
     }
 
+    // ICE candidates race the offer/answer POSTs into the mailbox (both are
+    // independent fetches) — hold any that arrive early and flush them once
+    // the remote description lands. addIceCandidate before that throws, and
+    // the mailbox never re-delivers.
+    const earlyIce: Array<RTCIceCandidateInit | null> = []
+    let haveRemote = false
+    const takeIce = async (cand: RTCIceCandidateInit | null) => {
+      if (!haveRemote) { earlyIce.push(cand); return }
+      await pc.addIceCandidate(cand ?? undefined).catch(() => {})
+    }
+    const remoteSet = async () => {
+      haveRemote = true
+      for (const cand of earlyIce.splice(0)) await pc.addIceCandidate(cand ?? undefined).catch(() => {})
+    }
+
+    // One message at a time; the cursor advances only past messages that were
+    // actually processed, so an exception mid-batch re-delivers the rest next
+    // poll instead of discarding them. `busy` stops overlapping polls from
+    // double-processing the same batch on a slow link.
+    let busy = false
     const poll = async () => {
-      const { msgs, next } = await api<{ msgs: Array<{ from: NetRole; payload: SignalPayload }>; next: number }>(
-        `/api/rooms/${code}?since=${cursor}`,
-      )
-      cursor = next
-      for (const m of msgs) {
-        if (m.from === role) continue
-        const p = m.payload
-        if (p.t === 'offer' && role === 'join') {
-          onStatus?.('offer received — answering')
-          await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp })
-          const answer = await pc.createAnswer()
-          await pc.setLocalDescription(answer)
-          await sendSignal(code, role, { t: 'answer', sdp: pc.localDescription!.sdp } satisfies SignalPayload)
-        } else if (p.t === 'answer' && role === 'host') {
-          onStatus?.('answer received')
-          await pc.setRemoteDescription({ type: 'answer', sdp: p.sdp })
-        } else if (p.t === 'ice') {
-          await pc.addIceCandidate(p.cand ?? undefined).catch(() => {})
+      if (busy || settled) return
+      busy = true
+      try {
+        const { msgs } = await api<{ msgs: Array<{ from: NetRole; payload: SignalPayload }>; next: number }>(
+          `/api/rooms/${code}?since=${cursor}`,
+        )
+        for (const m of msgs) {
+          if (settled) return
+          const p = m.payload
+          if (m.from === role) { cursor++; continue }
+          if (p.t === 'offer' && role === 'join' && pc.signalingState === 'stable' && !haveRemote) {
+            onStatus?.('offer received — answering')
+            await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp })
+            await remoteSet()
+            const answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            await sendSignal(code, role, { t: 'answer', sdp: pc.localDescription!.sdp } satisfies SignalPayload)
+          } else if (p.t === 'answer' && role === 'host' && pc.signalingState === 'have-local-offer') {
+            onStatus?.('answer received')
+            await pc.setRemoteDescription({ type: 'answer', sdp: p.sdp })
+            await remoteSet()
+          } else if (p.t === 'ice') {
+            await takeIce(p.cand ?? null)
+          }
+          cursor++
         }
+      } finally {
+        busy = false
       }
     }
+    const fatal = (msg: string) =>
+      msg.includes('no such room') || msg.includes('not configured') || msg.includes('bad room')
     pollTimer = window.setInterval(() => {
       if (settled) return
       void poll().catch((e: Error) => {
-        // A dead room is fatal; transient fetch hiccups are not.
-        if (String(e.message).includes('no such room')) finish(new Error('room expired or never existed'))
+        // A dead/unconfigured room is fatal; transient fetch hiccups are not.
+        if (fatal(String(e.message))) finish(new Error(e.message))
       })
     }, POLL_MS)
-    void poll().catch(() => {})
+    void poll().catch((e: Error) => { if (fatal(String(e.message))) finish(new Error(e.message)) })
   })
 }
 
@@ -148,8 +179,12 @@ export function helloAsHost(t: Transport, seedStr: string, matchLen: MatchLength
       reject(new Error('no opponent arrived'))
     }, timeoutMs)
     t.onMessage = (raw) => {
-      if ((raw as { t?: string }).t !== 'hi') return
-      t.send({ t: 'hello', seedStr, matchLen, hostSide: 'brit' } satisfies NetMsg)
+      const m = raw as NetMsg
+      if (m.t !== 'hi') return
+      // Echo the joiner's nonce: exactly one joiner pairs; a third tab in the
+      // same BroadcastChannel room keeps beaconing and times out instead of
+      // silently corrupting a two-player battle.
+      t.send({ t: 'hello', seedStr, matchLen, hostSide: 'brit', nonce: m.nonce } satisfies NetMsg)
       window.clearTimeout(deadline)
       t.onMessage = null
       resolve({ transport: t, seedStr, matchLen, side: 'brit', isCreator: true })
@@ -159,7 +194,9 @@ export function helloAsHost(t: Transport, seedStr: string, matchLen: MatchLength
 
 export function helloAsJoiner(t: Transport, timeoutMs = 120_000): Promise<MatchTerms> {
   return new Promise<MatchTerms>((resolve, reject) => {
-    const beacon = window.setInterval(() => t.send({ t: 'hi' }), 500)
+    // Lobby plumbing, not sim: Math.random is fine here.
+    const nonce = Math.random().toString(36).slice(2, 10)
+    const beacon = window.setInterval(() => t.send({ t: 'hi', nonce } satisfies NetMsg), 500)
     const deadline = window.setTimeout(() => {
       window.clearInterval(beacon)
       t.onMessage = null
@@ -167,7 +204,7 @@ export function helloAsJoiner(t: Transport, timeoutMs = 120_000): Promise<MatchT
     }, timeoutMs)
     t.onMessage = (raw) => {
       const m = raw as NetMsg
-      if (m.t !== 'hello') return // pre-battle noise — ignore
+      if (m.t !== 'hello' || m.nonce !== nonce) return // someone else's hello
       window.clearInterval(beacon)
       window.clearTimeout(deadline)
       t.onMessage = null
@@ -179,6 +216,6 @@ export function helloAsJoiner(t: Transport, timeoutMs = 120_000): Promise<MatchT
         isCreator: false,
       })
     }
-    t.send({ t: 'hi' })
+    t.send({ t: 'hi', nonce } satisfies NetMsg)
   })
 }
