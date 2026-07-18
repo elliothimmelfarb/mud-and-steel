@@ -15,14 +15,14 @@
  * Exit:  M or Esc (or death, which is very much period-authentic).
  */
 import * as THREE from 'three'
-import type { Bullet, Soldier, Unit, UnitKindId } from '../core/types'
+import type { Bullet, Soldier, Stance, Unit, UnitKindId } from '../core/types'
 import { COMBAT, WORLD } from '../core/config'
 import { standSurface } from '../sim/ballistics'
 import { sectionAt } from '../sim/trench'
 import { dist2 } from '../sim/sim'
 import {
-  WEAPON_PROFILES, dischargeWeapon, groundHit, clampToBand,
-  type WeaponProfile, type Viewmodel, type GroundHit,
+  WEAPON_PROFILES, presentDischarge, groundHit, clampToBand,
+  type WeaponProfile, type Viewmodel, type GroundHit, type FireParams,
 } from './weapons'
 import type { Game } from './game'
 
@@ -58,6 +58,25 @@ export class FpsMode {
   private pitch = 0
   private unit: Unit | null = null
   private soldier: Soldier | null = null
+
+  // Local prediction (#41 item 1): the camera and viewmodel follow THESE
+  // every render frame; the sim soldier only moves when the per-tick fpspose
+  // command lands at the next boundary (≤1 tick behind in SP — invisible,
+  // since your own body isn't drawn while embodied). Every write that used
+  // to hit soldier/unit sim fields directly now goes through the command
+  // stream; these mirrors are the ONLY thing this file mutates per frame.
+  private pos = { x: 0, z: 0 }
+  private stance: Stance = 'stand'
+  private animPhase = 0
+  private heat = 0            // heat-weapon jacket mirror (rides fpspose)
+  private venting = false
+  private lastPoseTick = -1
+  // Tool-work accumulator: seconds at the current target, flushed as ONE
+  // fpstool command per tick (or when the target changes) — same granularity
+  // the old by-hand loop applied per frame, just landed at the boundary.
+  private toolKind: 'heal' | 'parapet' | 'wire' | null = null
+  private toolTargetId = -1
+  private toolSeconds = 0
 
   // active weapon
   private profile: WeaponProfile = WEAPON_PROFILES.rifleman
@@ -264,12 +283,22 @@ export class FpsMode {
     // next tick boundary on every peer and in every replay identically.
     // Render-side embodiment (camera, viewmodel) engages this frame.
     this.game.possessCmd(unit.id, soldier.id)
-    // Emplaced crews stand at their gun; snap the man onto the mounting.
+    // Seed the predictor from the man as he stands. Emplaced crews stand at
+    // their gun; the snap onto the mounting rides the first fpspose command
+    // (it lands the same boundary the possess above does).
+    this.pos.x = soldier.pos.x
+    this.pos.z = soldier.pos.z
+    this.stance = soldier.stance === 'dead' ? 'stand' : soldier.stance
+    this.animPhase = soldier.animPhase
     if (this.profile.emplaced) {
-      soldier.pos.x = unit.pos.x
-      soldier.pos.z = unit.pos.z
-      soldier.stance = 'stand'
+      this.pos.x = unit.pos.x
+      this.pos.z = unit.pos.z
+      this.stance = 'stand'
     }
+    this.lastPoseTick = -1
+    this.toolKind = null
+    this.toolTargetId = -1
+    this.toolSeconds = 0
     this.yaw = soldier.facing
     // mortars/gas lay high; guns lay a touch low; everyone else level.
     this.pitch = this.profile.startPitch ?? (this.profile.control === 'lob' ? -0.35 : 0)
@@ -294,7 +323,10 @@ export class FpsMode {
     this.hitMarkerKill = false
     this.hurtT.fill(0)
     this.game.ctx.fpsFeedback.length = 0
-    if (this.profile.heat) { unit.heat = 0; unit.venting = false }
+    // A fresh grip on the spade handles: the jacket mirror starts cold and
+    // the value reaches the sim unit via the fpspose stream, never directly.
+    this.heat = 0
+    this.venting = false
     this.keys.clear()
     this.prevSpeed = this.game.speed
     this.game.speed = 1 // war at watch-tick speed only
@@ -356,6 +388,7 @@ export class FpsMode {
   exit(): void {
     if (!this.active) return
     this.active = false
+    this.flushTool() // any final quantum of work lands before the release does
     this.game.releaseCmd()
     this.game.ctx.fpsInvincible = false // no possessed man to shield once we're out
     if (document.pointerLockElement) document.exitPointerLock()
@@ -374,9 +407,10 @@ export class FpsMode {
     cam.fov = 50
     cam.rotation.z = 0
     cam.updateProjectionMatrix()
-    // Hand the rig a sensible continuation of the view.
+    // Hand the rig a sensible continuation of the view (the predicted spot —
+    // the sim soldier may still be a tick behind it).
     if (this.soldier) {
-      this.game.rig.target.set(this.soldier.pos.x, 0, this.soldier.pos.z)
+      this.game.rig.target.set(this.pos.x, 0, this.pos.z)
       // Rig yaw is the camera's bearing FROM the target; to keep looking the
       // way the soldier faced, the camera must sit behind him: yaw = -facing.
       this.game.rig.yaw = -wrapAngle(this.yaw)
@@ -472,9 +506,8 @@ export class FpsMode {
   // -------------------------------------------------------------------------
 
   private cycleStance(): void {
-    const s = this.soldier
-    if (!s || s.stance === 'dead') return
-    s.stance = s.stance === 'stand' ? 'crouch' : s.stance === 'crouch' ? 'prone' : 'stand'
+    if (!this.soldier || this.soldier.stance === 'dead') return
+    this.stance = this.stance === 'stand' ? 'crouch' : this.stance === 'crouch' ? 'prone' : 'stand'
   }
 
   private canReload(): boolean {
@@ -496,7 +529,7 @@ export class FpsMode {
     const u = this.unit
     if (!s || !u || s.hp <= 0) return
     if (this.reloadT > 0 || this.boltT > 0) return
-    if (this.profile.heat && u.venting) return // Vickers jacket boiled dry
+    if (this.profile.heat && this.venting) return // Vickers jacket boiled dry
     if (this.profile.ammoKind === 'fuel') { if (this.fuel <= 0.05) return }
     else if (this.profile.ammoKind !== 'none') {
       if (this.ammo <= 0) {
@@ -509,12 +542,23 @@ export class FpsMode {
     const cam = this.game.renderer.camera
     const dir = camDir(this.yaw, this.pitch)
     const moving = this.moveInput().len > 0.1
-    dischargeWeapon(this.profile, {
-      game: this.game, ctx: this.game.ctx, unit: u, soldier: s,
+    const params: FireParams = {
       camPos: { x: cam.position.x, y: cam.position.y, z: cam.position.z },
-      dir, yaw: this.yaw, pitch: this.pitch, ads: this.ads, moving, ground: this.reticle,
-      muzzleWorld: this.muzzleWorldPos(),
-    })
+      dir, yaw: this.yaw, pitch: this.pitch, ads: this.ads, moving,
+      // Snapshot — the live reticle keeps moving with the camera after this frame.
+      ground: this.reticle ? { ...this.reticle } : null,
+      muzzle: this.muzzleWorldPos(),
+    }
+    // Feel is NOW, consequence is the boundary: report, world ejecta, recoil
+    // and flash land this frame; the ordnance itself spawns when the fpsfire
+    // command applies — identically on every lockstep peer and in every replay.
+    presentDischarge(this.profile, this.game, s, params)
+    this.game.submitFpsFire(params)
+    // The jacket mirror warms locally (it reaches the sim via fpspose).
+    if (this.profile.heat) {
+      this.heat = Math.min(1, this.heat + COMBAT.vickersHeatPerShot * this.game.ctx.mods.heatRate)
+      if (this.heat >= 1) this.game.audio.play('steam_vent', { x: u.pos.x, y: 1, z: u.pos.z })
+    }
 
     // Spend the discharge.
     this.boltT = this.profile.fireInterval
@@ -611,7 +655,7 @@ export class FpsMode {
     this.pitch = clamp(pitch, -1.4, 1.4)
   }
   debugStance(st: 'stand' | 'crouch' | 'prone'): void {
-    if (this.soldier && !this.profile.emplaced) this.soldier.stance = st
+    if (this.soldier && !this.profile.emplaced) this.stance = st
   }
   /** Hold the barrel flash lit so its placement can be inspected frame-by-frame. */
   debugFreezeFlash(on: boolean): void {
@@ -724,40 +768,59 @@ export class FpsMode {
     this.muzzleFlashCore.position.set(m.x, m.y, m.z - fwd)
   }
 
-  /** Medic/sapper: mend by hand while the trigger is held. */
+  /**
+   * Medic/sapper: mend by hand while the trigger is held. Target selection and
+   * feedback (progress bar, work sounds) stay per-frame right here; the actual
+   * hp/parapet/wire mutation is claimed as seconds-of-work and lands via one
+   * fpstool command per tick (see accumulateTool/flushTool).
+   */
   private applyTool(dt: number): void {
-    const s = this.soldier
     const g = this.game
-    if (!s) return
+    if (!this.soldier) return
+    const px = this.pos.x, pz = this.pos.z
     if (this.profile.id === 'medic') {
       const worst = this.nearestWounded()
       if (worst) {
-        worst.hp = Math.min(worst.maxHp, worst.hp + 14 * g.ctx.mods.healRate * dt)
+        this.accumulateTool('heal', worst.id, dt)
         this.toolProgress = worst.hp / worst.maxHp
-        if (Math.random() < dt * 1.5) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.25 })
+        if (Math.random() < dt * 1.5) g.audio.play('build', { x: px, y: 1, z: pz, gain: 0.25 })
       } else this.toolProgress = 0
     } else {
       // Engineer: parapet first, then torn wire — same priorities as the AI.
-      const sec = sectionAt(g.ctx.s.sections, s.pos.x, s.pos.z)
+      const sec = sectionAt(g.ctx.s.sections, px, pz)
       if (sec && sec.owner === 'brit' && sec.parapetHp < sec.parapetMax) {
-        sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 18 * g.ctx.mods.repairRate * dt)
+        this.accumulateTool('parapet', sec.id, dt)
         this.toolProgress = sec.parapetHp / sec.parapetMax
-        if (Math.random() < dt * 0.6) g.audio.play('build', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.35 })
+        if (Math.random() < dt * 0.6) g.audio.play('build', { x: px, y: 1, z: pz, gain: 0.35 })
         return
       }
       let mended = false
       for (const d of g.ctx.s.defences) {
         if (d.kind !== 'wire' || d.hp >= d.maxHp || d.hp <= 0) continue
-        if (dist2(d.pos.x, d.pos.z, s.pos.x, s.pos.z) > (this.profile.maxRange) ** 2) continue
-        d.hp = Math.min(d.maxHp, d.hp + 14 * g.ctx.mods.repairRate * dt)
-        d.wear = Math.max(0, d.wear - 0.2 * dt)
+        if (dist2(d.pos.x, d.pos.z, px, pz) > (this.profile.maxRange) ** 2) continue
+        this.accumulateTool('wire', d.id, dt)
         this.toolProgress = d.hp / d.maxHp
-        if (Math.random() < dt * 0.6) g.audio.play('wire_snip', { x: s.pos.x, y: 1, z: s.pos.z, gain: 0.3 })
+        if (Math.random() < dt * 0.6) g.audio.play('wire_snip', { x: px, y: 1, z: pz, gain: 0.3 })
         mended = true
         break
       }
       if (!mended && !(sec && sec.parapetHp < sec.parapetMax)) this.toolProgress = 0
     }
+  }
+
+  /** Add a quantum of work; switching targets flushes what the old one earned. */
+  private accumulateTool(kind: 'heal' | 'parapet' | 'wire', targetId: number, dt: number): void {
+    if (this.toolKind !== kind || this.toolTargetId !== targetId) this.flushTool()
+    this.toolKind = kind
+    this.toolTargetId = targetId
+    this.toolSeconds += dt
+  }
+
+  private flushTool(): void {
+    if (this.toolKind && this.toolSeconds > 0) {
+      this.game.submitFpsTool(this.toolKind, this.toolTargetId, this.toolSeconds)
+    }
+    this.toolSeconds = 0
   }
 
   private nearestWounded(): Soldier | null {
@@ -769,7 +832,7 @@ export class FpsMode {
       if (u.disbanded) continue
       for (const c of u.crew) {
         if (c.hp <= 0 || c === s) continue
-        if (dist2(c.pos.x, c.pos.z, s.pos.x, s.pos.z) > (this.profile.maxRange) ** 2) continue
+        if (dist2(c.pos.x, c.pos.z, this.pos.x, this.pos.z) > (this.profile.maxRange) ** 2) continue
         const frac = c.hp / c.maxHp
         if (frac < worstFrac) { worstFrac = frac; worst = c }
       }
@@ -824,21 +887,20 @@ export class FpsMode {
     }
     this.lastHp = s.hp
 
-    // -- movement -------------------------------------------------------------
+    // -- movement (predicted — the sim soldier follows via fpspose) -----------
     const mv = this.moveInput()
-    const sprinting = this.keys.has('ShiftLeft') && s.stance === 'stand' && mv.z > 0.5
+    const sprinting = this.keys.has('ShiftLeft') && this.stance === 'stand' && mv.z > 0.5
     if (mv.len > 0.1) {
-      let speed = sprinting ? SPRINT_SPEED : MOVE_SPEED[s.stance]
-      speed *= 1 - g.ctx.terrain.mudAt(s.pos.x, s.pos.z) * 0.45
-      speed *= 1 - Math.min(0.35, g.ctx.terrain.slopeAt(s.pos.x, s.pos.z) * 0.5)
+      let speed = sprinting ? SPRINT_SPEED : MOVE_SPEED[this.stance]
+      speed *= 1 - g.ctx.terrain.mudAt(this.pos.x, this.pos.z) * 0.45
+      speed *= 1 - Math.min(0.35, g.ctx.terrain.slopeAt(this.pos.x, this.pos.z) * 0.5)
       const sinY = Math.sin(this.yaw), cosY = Math.cos(this.yaw)
       const dx = (sinY * mv.z + cosY * mv.x) * speed * dt
       const dz = (-cosY * mv.z + sinY * mv.x) * speed * dt
-      s.pos.x = clamp(s.pos.x + dx, -WORLD.width / 2 + 2, WORLD.width / 2 - 2)
-      s.pos.z = clamp(s.pos.z + dz, -WORLD.depth / 2 + 2, WORLD.depth / 2 - 2)
-      s.animPhase += dt * (sprinting ? 11 : 7)
+      this.pos.x = clamp(this.pos.x + dx, -WORLD.width / 2 + 2, WORLD.width / 2 - 2)
+      this.pos.z = clamp(this.pos.z + dz, -WORLD.depth / 2 + 2, WORLD.depth / 2 - 2)
+      this.animPhase += dt * (sprinting ? 11 : 7)
     }
-    s.facing = this.yaw
 
     // -- held-trigger weapons -------------------------------------------------
     let firedThisFrame = false
@@ -856,18 +918,19 @@ export class FpsMode {
       this.fuel = Math.min(1, this.fuel + 0.06 * dt)
     }
 
-    // -- weapon heat (Vickers) — the player now nurses the jacket -------------
+    // -- weapon heat (Vickers) — the player nurses the LOCAL jacket mirror;
+    // the sim unit takes the value from the per-tick fpspose command ---------
     if (this.profile.heat) {
-      if (u.venting || u.heat >= 1) {
-        u.venting = true
-        u.heat -= dt / COMBAT.vickersVentTime
-        if (u.heat <= 0.35) { u.heat = 0.35; u.venting = false }
+      if (this.venting || this.heat >= 1) {
+        this.venting = true
+        this.heat -= dt / COMBAT.vickersVentTime
+        if (this.heat <= 0.35) { this.heat = 0.35; this.venting = false }
         if (Math.random() < dt * 2) {
           const y = g.ctx.terrain.heightAt(u.pos.x, u.pos.z) + 1.1
           g.effects?.steam(u.pos.x, y, u.pos.z)
         }
       } else if (!firedThisFrame) {
-        u.heat = Math.max(0, u.heat - COMBAT.vickersCoolRate * dt)
+        this.heat = Math.max(0, this.heat - COMBAT.vickersCoolRate * dt)
       }
     }
 
@@ -901,13 +964,25 @@ export class FpsMode {
     const adsTarget = this.adsHeld && this.reloadT <= 0 && canAds ? 1 : 0
     this.ads += (adsTarget - this.ads) * Math.min(1, dt * 10)
 
+    // -- command spine: the predicted pose lands at most once per sim tick ----
+    const tick = g.ctx.s.tick
+    if (tick !== this.lastPoseTick) {
+      this.lastPoseTick = tick
+      if (this.profile.heat) {
+        g.submitFpsPose(this.pos.x, this.pos.z, this.stance, this.yaw, this.heat, this.venting)
+      } else {
+        g.submitFpsPose(this.pos.x, this.pos.z, this.stance, this.yaw)
+      }
+      this.flushTool() // the tick's accumulated medic/sapper work rides along
+    }
+
     // -- camera ---------------------------------------------------------------
     this.swayT += dt
     const cam = g.renderer.camera
-    const eyeH = this.profile.eyeHeight ?? EYE_HEIGHT[s.stance]
-    const eyeBase = standSurface(g.ctx, s.pos.x, s.pos.z) + eyeH
-    const bob = Math.abs(Math.sin(s.animPhase * 0.9)) * 0.035 * mv.len * (sprinting ? 1.6 : 1)
-    cam.position.set(s.pos.x, eyeBase + bob, s.pos.z)
+    const eyeH = this.profile.eyeHeight ?? EYE_HEIGHT[this.stance]
+    const eyeBase = standSurface(g.ctx, this.pos.x, this.pos.z) + eyeH
+    const bob = Math.abs(Math.sin(this.animPhase * 0.9)) * 0.035 * mv.len * (sprinting ? 1.6 : 1)
+    cam.position.set(this.pos.x, eyeBase + bob, this.pos.z)
     const breathe = Math.sin(this.swayT * 1.7) * 0.0016 * (1 + s.suppression * 5) * (1 - this.ads * 0.6)
     cam.rotation.order = 'YXZ'
     // swayYaw rides on top of the player's actual yaw as a wander, same as
@@ -1023,14 +1098,16 @@ export class FpsMode {
       dir.x, dir.y, dir.z, this.profile.maxRange + 20)
     // Show the ring where the round will ACTUALLY land — clamped into the
     // weapon's range band — so the reticle never lies about the fall of shot.
-    const cl = clampToBand(s.pos.x, s.pos.z, raw.x, raw.z, this.profile.minRange, this.profile.maxRange)
+    // Band about the PREDICTED spot: the discharge clamps about the sim pos,
+    // which trails it by no more than one tick's walk.
+    const cl = clampToBand(this.pos.x, this.pos.z, raw.x, raw.z, this.profile.minRange, this.profile.maxRange)
     const gy = this.game.ctx.terrain.heightAt(cl.x, cl.z)
-    this.reticle = { x: cl.x, z: cl.z, y: gy, dist: Math.hypot(cl.x - s.pos.x, cl.z - s.pos.z) }
+    this.reticle = { x: cl.x, z: cl.z, y: gy, dist: Math.hypot(cl.x - this.pos.x, cl.z - this.pos.z) }
     this.aimRing.visible = this.locked
     this.aimRing.position.set(cl.x, gy + 0.15, cl.z)
     // Amber when the raw aim sat inside the band; a washed red at the clamped
     // limit warns you the crosshair is past the gun's reach.
-    const rawD = Math.hypot(raw.x - s.pos.x, raw.z - s.pos.z)
+    const rawD = Math.hypot(raw.x - this.pos.x, raw.z - this.pos.z)
     const atLimit = rawD < this.profile.minRange || rawD > this.profile.maxRange
     ;(this.aimRing.material as THREE.MeshBasicMaterial).color.setHex(atLimit ? 0xc98a3a : 0xe0a94a)
   }
@@ -1263,8 +1340,9 @@ export class FpsMode {
     const showFuel = p.ammoKind === 'fuel'
     this.gaugeWrap.style.display = showHeat || showFuel ? 'block' : 'none'
     if (showHeat) {
-      const h = u.heat
-      this.gaugeLabel.textContent = u.venting ? 'JACKET VENTING — HOLD' : 'BARREL HEAT'
+      // The local mirror, not u.heat — the gauge must not trail the trigger.
+      const h = this.heat
+      this.gaugeLabel.textContent = this.venting ? 'JACKET VENTING — HOLD' : 'BARREL HEAT'
       this.gaugeBar.style.background =
         `linear-gradient(90deg, ${h > 0.8 ? '#d06a34' : h > 0.5 ? '#c9a53a' : '#7fae5a'} ${h * 100}%, rgba(255,255,255,0.12) ${h * 100}%)`
     } else if (showFuel) {
@@ -1275,7 +1353,7 @@ export class FpsMode {
 
     // Stance (walking weapons only) + health.
     this.stanceEl.style.display = p.emplaced ? 'none' : 'block'
-    this.stanceEl.textContent = s.stance === 'stand' ? '↑  STANDING' : s.stance === 'crouch' ? '⌄  CROUCHED' : '—  PRONE'
+    this.stanceEl.textContent = this.stance === 'stand' ? '↑  STANDING' : this.stance === 'crouch' ? '⌄  CROUCHED' : '—  PRONE'
     const hpFrac = Math.max(0, s.hp / s.maxHp)
     this.healthEl.style.background =
       `linear-gradient(90deg, ${hpFrac > 0.4 ? '#7fae5a' : '#a04a3a'} ${hpFrac * 100}%, rgba(255,255,255,0.12) ${hpFrac * 100}%)`

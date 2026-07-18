@@ -10,14 +10,19 @@
  * it has changed) and drops invalid ones silently and identically on all
  * clients.
  */
-import type { BuildableId, DefenceKindId, EnemyKindId, Team, TargetPriority, Unit, UnitKindId } from '../core/types'
+import type { BuildableId, DefenceKindId, EnemyKindId, Soldier, Stance, Team, TargetPriority, Unit, UnitKindId, Vec3 } from '../core/types'
 import {
   DEFENCE_DEFS, ECONOMY, ENEMY_DEFS, ORDER_DEFS, PLACEMENT, TRENCH, UNIT_DEFS, UPGRADE_DEFS,
   UPGRADE_TIER_WAVE, WIRE_SEGMENT_LEN, WORLD,
 } from '../core/config'
 import { forkRand } from '../core/rng'
 import { makeSoldierName } from '../core/flavor'
-import { type Ctx, type SimState } from './sim'
+import { dist2, type Ctx, type SimState } from './sim'
+// Layering note: the weapon profiles (and the sim half of a discharge) live
+// with the viewmodels in game/weapons.ts. Importing them here pulls no cycle —
+// weapons.ts only imports sim leaf modules — and keeps the ballistic numbers
+// in ONE table instead of a mirrored sim copy that could drift.
+import { WEAPON_PROFILES, dischargeWeaponSim } from '../game/weapons'
 import { projectToFireStep, sectionAt } from './trench'
 import { spawnFlare } from './projectiles'
 import { spawnVehicle } from './vehicles'
@@ -50,6 +55,18 @@ export type Cmd =
    *  agree on it (issue #41 item 2). */
   | { t: 'possess'; unitId: number; soldierId: number }
   | { t: 'release' }
+  /** Embodiment rides the spine end-to-end (#41 item 1). The render-side
+   *  predictor reports its pose at most once per tick; every trigger pull and
+   *  every quantum of tool work is a command. Feel (flash, report, recoil)
+   *  stays render-side and instant — only what the hash can see lands here. */
+  | { t: 'fpspose'; x: number; z: number; stance: Stance; facing: number; heat?: number; venting?: boolean }
+  | {
+      t: 'fpsfire'; camPos: Vec3; dir: Vec3; yaw: number; pitch: number; ads: number; moving: boolean
+      ground: { x: number; z: number; y: number; dist: number } | null; muzzle: Vec3
+    }
+  /** `amount` is SECONDS of work, not effect — rates and mods stay sim-side,
+   *  so a client can only ever claim time at the bandage/parapet/wire. */
+  | { t: 'fpstool'; tool: 'heal' | 'parapet' | 'wire'; targetId: number; amount: number }
   // German-side commands (the AI commander today; a human via lockstep in M5).
   | { t: 'spawnsquad'; kinds: EnemyKindId[]; x: number; role: 'garrison' | 'assault'; targetSection: number }
   | { t: 'gbarrage'; x: number; z: number; shells: number; gas: boolean }
@@ -339,6 +356,18 @@ export function placeStartingWire(s: SimState): void {
 // Application — sim mutations only; presentation reacts via the event bus.
 // ---------------------------------------------------------------------------
 
+/** Largest ground one fpspose command may cover (see the case for why). */
+const FPS_POSE_MAX_STEP = 3.0
+
+/** The embodied man and his weapon, or null when the fps* command is stale
+ *  (released, disbanded, or the man died before the tick boundary). */
+function possessedPair(s: SimState): { unit: Unit; soldier: Soldier } | null {
+  if (s.possessedSoldierId < 0) return null
+  const unit = s.units.find((x) => x.id === s.possessedUnitId && !x.disbanded)
+  const soldier = unit?.crew.find((x) => x.id === s.possessedSoldierId && x.hp > 0)
+  return unit && soldier ? { unit, soldier } : null
+}
+
 export function applyEnvelope(host: CmdHost, env: Envelope): void {
   for (const cmd of env.cmds) applyCmd(host, env.side, cmd)
 }
@@ -353,7 +382,8 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
   // every client.
   const britOnly = cmd.t === 'buy' || cmd.t === 'sell' || cmd.t === 'order' || cmd.t === 'upgrade' ||
     cmd.t === 'targeting' || cmd.t === 'callwave' || cmd.t === 'beginwave' || cmd.t === 'continueendless' ||
-    cmd.t === 'possess' || cmd.t === 'release'
+    cmd.t === 'possess' || cmd.t === 'release' ||
+    cmd.t === 'fpspose' || cmd.t === 'fpsfire' || cmd.t === 'fpstool'
   if (britOnly && side !== 'brit') return
 
   switch (cmd.t) {
@@ -501,6 +531,72 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
       s.possessedSoldierId = -1
       s.possessedUnitId = -1
       break
+
+    case 'fpspose': {
+      const p = possessedPair(s)
+      if (!p || cmd.stance === 'dead') return // death is the sim's to declare
+      const { unit: u, soldier: c } = p
+      // Sanity bound, not physics — the predictor already obeys stance speeds
+      // and mud. This only stops a corrupt/forged command teleporting the man:
+      // one commanded step may cover at most FPS_POSE_MAX_STEP of ground.
+      let dx = cmd.x - c.pos.x, dz = cmd.z - c.pos.z
+      const d = Math.hypot(dx, dz)
+      if (d > FPS_POSE_MAX_STEP) { dx *= FPS_POSE_MAX_STEP / d; dz *= FPS_POSE_MAX_STEP / d }
+      c.pos.x = Math.min(WORLD.width / 2 - 2, Math.max(-WORLD.width / 2 + 2, c.pos.x + dx))
+      c.pos.z = Math.min(WORLD.depth / 2 - 2, Math.max(-WORLD.depth / 2 + 2, c.pos.z + dz))
+      c.stance = cmd.stance
+      c.facing = cmd.facing
+      // Heat weapons: the player nurses the jacket render-side; his model is
+      // authoritative and lands here (dischargeWeaponSim never touches heat).
+      if (cmd.heat !== undefined) u.heat = Math.min(1, Math.max(0, cmd.heat))
+      if (cmd.venting !== undefined) u.venting = cmd.venting
+      break
+    }
+
+    case 'fpsfire': {
+      const p = possessedPair(s)
+      if (!p) return
+      dischargeWeaponSim(WEAPON_PROFILES[p.unit.kind] ?? WEAPON_PROFILES.rifleman, ctx, p.unit, p.soldier, {
+        camPos: cmd.camPos, dir: cmd.dir, yaw: cmd.yaw, pitch: cmd.pitch,
+        ads: cmd.ads, moving: cmd.moving, ground: cmd.ground, muzzle: cmd.muzzle,
+      })
+      break
+    }
+
+    case 'fpstool': {
+      const p = possessedPair(s)
+      if (!p) return
+      const c = p.soldier
+      const profile = WEAPON_PROFILES[p.unit.kind] ?? WEAPON_PROFILES.rifleman
+      // Clamp the claimed work to a few ticks' worth; the soldier's sim pos can
+      // trail the predictor by a step, so reach gets a little slack on top.
+      const secs = Math.min(0.4, Math.max(0, cmd.amount))
+      if (secs <= 0) return
+      const reach2 = (profile.maxRange + 3) ** 2
+      if (cmd.tool === 'heal') {
+        for (const u of s.units) {
+          if (u.disbanded) continue
+          const w = u.crew.find((x) => x.id === cmd.targetId)
+          if (!w) continue
+          if (w.hp <= 0 || dist2(w.pos.x, w.pos.z, c.pos.x, c.pos.z) > reach2) return
+          w.hp = Math.min(w.maxHp, w.hp + 14 * ctx.mods.healRate * secs)
+          return
+        }
+      } else if (cmd.tool === 'parapet') {
+        // Same rule as the by-hand loop: the sapper shores the section he
+        // stands in, no other.
+        const sec = sectionAt(s.sections, c.pos.x, c.pos.z)
+        if (!sec || sec.id !== cmd.targetId || sec.owner !== 'brit') return
+        sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 18 * ctx.mods.repairRate * secs)
+      } else {
+        const w = s.defences.find((x) => x.id === cmd.targetId)
+        if (!w || w.kind !== 'wire' || w.hp <= 0) return
+        if (dist2(w.pos.x, w.pos.z, c.pos.x, c.pos.z) > reach2) return
+        w.hp = Math.min(w.maxHp, w.hp + 14 * ctx.mods.repairRate * secs)
+        w.wear = Math.max(0, w.wear - 0.2 * secs)
+      }
+      break
+    }
 
     case 'spawnsquad': {
       // The German commander's buy: a squad marches in from their rear.

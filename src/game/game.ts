@@ -6,7 +6,7 @@
 import * as THREE from 'three'
 import type {
   BuildableId, CasualtyRecord, DefenceKindId, Difficulty, GameSettings,
-  TargetPriority, Team, Unit, UnitKindId, WavePlan,
+  Stance, TargetPriority, Team, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
   BUILD_ORDER, DEEDS, DEFENCE_DEFS, ECONOMY, PLACEMENT, RANKS,
@@ -49,7 +49,7 @@ import {
   type Cmd, type OrderId,
 } from '../sim/commands'
 import { FpsMode } from './fps'
-import { setViewmodelEmissive } from './weapons'
+import { setViewmodelEmissive, type FireParams } from './weapons'
 
 export type { OrderId } from '../sim/commands'
 
@@ -196,6 +196,23 @@ export class Game {
     this.submit([{ t: 'possess', unitId, soldierId }])
   }
   releaseCmd(): void { this.submit([{ t: 'release' }]) }
+  /** FpsMode's predicted pose, at most once per tick (heat only for heat weapons). */
+  submitFpsPose(x: number, z: number, stance: Stance, facing: number, heat?: number, venting?: boolean): void {
+    const cmd: Extract<Cmd, { t: 'fpspose' }> = { t: 'fpspose', x, z, stance, facing }
+    if (heat !== undefined) { cmd.heat = heat; cmd.venting = venting }
+    this.submit([cmd])
+  }
+  /** One trigger pull. Presentation already played; the ordnance spawns at the boundary. */
+  submitFpsFire(p: FireParams): void {
+    this.submit([{
+      t: 'fpsfire', camPos: p.camPos, dir: p.dir, yaw: p.yaw, pitch: p.pitch,
+      ads: p.ads, moving: p.moving, ground: p.ground, muzzle: p.muzzle,
+    }])
+  }
+  /** A quantum of medic/sapper work — `amount` is seconds at the task. */
+  submitFpsTool(tool: 'heal' | 'parapet' | 'wire', targetId: number, amount: number): void {
+    this.submit([{ t: 'fpstool', tool, targetId, amount }])
+  }
   /** True once the player embodied anyone this run. Until embodiment intents
    *  land in the protocol (#41 item 1), an embodied battle's war diary can
    *  diverge from what was played — the diary records the flag and playback
