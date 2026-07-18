@@ -74,8 +74,10 @@ export class SimRunner implements CmdHost {
   private seqCounter = 0
   private aiSeq = 0
   private draining = false
+  /** Adopted mid-match (MP takeover): its envelopes ARE logged. */
+  private aiAdopted = false
   /** The German AI commander (Big Push SP; also the MP disconnect fallback). */
-  readonly ai: AiCommander | null
+  ai: AiCommander | null
 
   constructor(opts: RunnerOpts) {
     const seed = hashString(opts.seedStr)
@@ -206,6 +208,13 @@ export class SimRunner implements CmdHost {
     this.pending.push(env)
   }
 
+  /** In-flight envelopes (stamped ahead, not yet applied). The lockstep log
+   *  reply must include these — they are part of the battle a rebuilding
+   *  peer has to know about, but they are not in the applied log yet. */
+  get pendingEnvelopes(): readonly Envelope[] {
+    return this.pending
+  }
+
   /**
    * Local convenience: stamp with the current tick (applies next boundary).
    * A submit made WHILE the queue is draining (i.e. from an event handler
@@ -257,7 +266,7 @@ export class SimRunner implements CmdHost {
     // client that runs the same seed, so lockstep peers never disagree on it.
     if (this.ai && s.outcome === 'ongoing' && s.phase !== 'debrief') {
       const cmds = this.ai.think(ctx)
-      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: 'german', seq: this.aiSeq++, cmds, ai: true })
+      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: 'german', seq: this.aiSeq++, cmds, ai: this.aiAdopted ? undefined : true })
     }
 
     // Commands apply only at the tick boundary — before anything moves.
@@ -542,6 +551,62 @@ export class SimRunner implements CmdHost {
     for (const sec of s.sections) if (sec.owner === 'brit') score += SCORE.perSectionHeld
     s.stats.score = score
     this.ctx.events.emit('gameOver', { victory })
+  }
+
+  // -------------------------------------------------------------------------
+  // Lockstep support: mid-match AI takeover + log-replay state adoption
+  // -------------------------------------------------------------------------
+
+  /**
+   * A human left the German side (MP disconnect): the AI picks up their
+   * command authority. Unlike the from-start SP commander, this one's
+   * envelopes ARE logged — a rejoiner cannot re-derive a takeover that
+   * started at an arbitrary tick.
+   */
+  adoptAi(persona: AiPersona): void {
+    if (this.ai) return
+    this.aiAdopted = true
+    this.ai = new AiCommander(persona, forkRand((this.ctx.s.seed ^ this.ctx.s.tick) >>> 0, 'ai-takeover'))
+  }
+
+  /** The absent human returned: the takeover AI stands down. */
+  releaseAi(): void {
+    if (this.aiAdopted) {
+      this.ai = null
+      this.aiAdopted = false
+    }
+  }
+
+  /**
+   * Adopt another runner's exact battle (lockstep resync / rejoin): the fresh
+   * runner was rebuilt from the creator's envelope log; we take its state,
+   * RNG and log while keeping OUR object identities (ctx, terrain, events) —
+   * the render layer holds references to them.
+   */
+  adoptState(fresh: SimRunner): void {
+    const ctx = this.ctx as { s: typeof fresh.ctx.s; rand: typeof fresh.ctx.rand; mods: typeof fresh.ctx.mods; flowInf: typeof fresh.ctx.flowInf; flowVeh: typeof fresh.ctx.flowVeh; flowDirty: boolean }
+    ctx.s = fresh.ctx.s
+    ctx.rand = fresh.ctx.rand
+    ctx.mods = fresh.ctx.mods
+    ctx.flowInf = fresh.ctx.flowInf
+    ctx.flowVeh = fresh.ctx.flowVeh
+    // Verbatim, NOT forced true: the rebuild cadence is part of the sim
+    // (s.lastFlowRebuild) — forcing a rebuild here fires it at a tick the
+    // peer doesn't, and the two flows diverge as obstacles change.
+    ctx.flowDirty = fresh.ctx.flowDirty
+    this.terrain.copyFrom(fresh.terrain)
+    this.weather.copyFrom(fresh.weather)
+    this.waveRand = fresh.waveRand
+    // The fresh runner's pending queue holds the in-flight tail (envelopes
+    // stamped past the replay tick, delivered via the log reply) — keep it.
+    // Our own pending is superseded: everything in it is either in the log
+    // or in that tail.
+    this.pending.length = 0
+    this.pending.push(...fresh.pending)
+    this.log.length = 0
+    this.log.push(...fresh.log)
+    this.ai = fresh.ai
+    this.aiAdopted = false
   }
 
   // -------------------------------------------------------------------------

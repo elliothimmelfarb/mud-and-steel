@@ -6,7 +6,7 @@
 import * as THREE from 'three'
 import type {
   BuildableId, CasualtyRecord, DefenceKindId, Difficulty, GameSettings,
-  TargetPriority, Unit, UnitKindId, WavePlan,
+  TargetPriority, Team, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
   BUILD_ORDER, DEEDS, DEFENCE_DEFS, ECONOMY, PLACEMENT, RANKS,
@@ -37,6 +37,10 @@ import { spawnEnemy } from '../sim/enemies'
 import { standSurface } from '../sim/ballistics'
 import { collectGasBlobs } from '../sim/gas'
 import { SimRunner } from '../sim/runner'
+import { LockstepSession } from '../net/lockstep'
+import type { Transport } from '../net/transport'
+import { ENEMY_DEFS } from '../core/config'
+import type { EnemyKindId } from '../core/types'
 import {
   costOf as cmdCostOf, createUnit as simCreateUnit, fieldBuildAllowed as simFieldBuildAllowed,
   isUnitKind as simIsUnitKind, marchPathLength, MARCH_SPEED, orderReady as simOrderReady,
@@ -149,17 +153,35 @@ export class Game {
 
   // sim — the runner owns the battle; the game renders it and submits commands.
   runner: SimRunner | null = null
+  /** Live multiplayer session (null in singleplayer). Owns the runner when set. */
+  net: LockstepSession | null = null
+  /** Which commander this machine is. Always 'brit' outside multiplayer. */
+  mySide: Team = 'brit'
+  get theirSide(): Team { return this.mySide === 'brit' ? 'german' : 'brit' }
   seedStr = ''
   difficulty: Difficulty = 'front'
   private runRand: Rand = Math.random
   /** Local command sink. All player actions route through here. */
   private submit(cmds: Cmd[]): void {
-    this.runner?.submit('brit', cmds)
+    if (this.net) this.net.submit(cmds)
+    else this.runner?.submit('brit', cmds)
   }
 
   /** Sim context (undefined before the first startRun, like the old field). */
   get ctx(): Ctx {
     return this.runner?.ctx as unknown as Ctx
+  }
+
+  /**
+   * Leave a multiplayer match cleanly: the bye tells the peer to adopt the
+   * AI (or claim the walkover) instead of freezing at the gate. Called on
+   * quit-to-title and on page unload.
+   */
+  leaveMatch(): void {
+    if (!this.net) return
+    this.net.close()
+    this.net = null
+    this.mySide = 'brit'
   }
 
   get endless(): boolean { return this.ctx?.s.endless ?? false }
@@ -400,7 +422,7 @@ export class Game {
   // Run lifecycle
   // -------------------------------------------------------------------------
 
-  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona }): void {
+  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; net?: { transport: Transport; side: Team; isCreator: boolean } }): void {
     this.seedStr = seedStr
     this.difficulty = difficulty
     // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
@@ -445,7 +467,42 @@ export class Game {
     this.events.clear()
     // The runner builds the whole battle headlessly (terrain, weather, state,
     // starting wire / save restore); the game wires rendering onto it.
-    this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: mode === 'bigpush' ? (bigpush?.persona ?? 'methodical') : null })
+    // Multiplayer: the lockstep session owns the runner — commands route
+    // through it, and there is NO from-start AI (a human holds each side;
+    // the AI only ever steps in on peer loss).
+    this.net?.close()
+    this.net = null
+    const netCfg = mode === 'bigpush' ? bigpush?.net : undefined
+    if (netCfg) {
+      this.mySide = netCfg.side
+      this.net = new LockstepSession(
+        seedStr, bigpush?.matchLen ?? 'battle', netCfg.side, netCfg.isCreator, netCfg.transport,
+        {
+          onStatus: (l) => this.hud?.toast(l, 'info'),
+          onDesync: () => this.hud?.toast('Signals crossed — resynchronising with the other commander…', 'warn'),
+          onResynced: () => this.hud?.toast('Back in step with the other commander.', 'info'),
+          onPeerLost: () => {
+            if (this.theirSide === 'german') {
+              this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn')
+            } else {
+              // No AI can command Britain yet (#41): the German human wins
+              // by walkover. The peer is gone, so ending locally is safe.
+              this.hud?.toast('The British commander has quit the field — the day is yours.', 'warn')
+              const s = this.ctx.s
+              if (s.outcome === 'ongoing') {
+                s.outcome = 'defeat' // British defeat: outcomes are brit-POV
+                this.events.emit('gameOver', { victory: false })
+              }
+            }
+          },
+        },
+        () => new SimRunner({ seedStr, difficulty, mode, events: this.events, matchLen: bigpush?.matchLen, aiPersona: null }),
+      )
+      this.runner = this.net.runner
+    } else {
+      this.mySide = 'brit'
+      this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: mode === 'bigpush' ? (bigpush?.persona ?? 'methodical') : null })
+    }
     this.leashZ = WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
     ;(this.rig as unknown as { terrain: Terrain }).terrain = this.terrain
@@ -478,8 +535,10 @@ export class Game {
     this.rankMarkers.count = 0
     this.embodyHintShown = false
     this.audio.setMuffled(this.ctx.s.masksOn ? 0.4 : 0)
-    this.rig.target.set(0, 0, WORLD.frontTrenchZ + 30)
-    this.rig.yaw = 0
+    // The German commander starts over HIS parapet, looking back across no-man's-land.
+    const camSign = this.mySide === 'german' ? -1 : 1
+    this.rig.target.set(0, 0, camSign * (WORLD.frontTrenchZ + 30))
+    this.rig.yaw = this.mySide === 'german' ? Math.PI : 0
     this.rig.pitch = 0.88
     this.rig.dist = 85
     this.applySettings(this.settings)
@@ -719,7 +778,7 @@ export class Game {
 
   private autosave(): void {
     const s = this.ctx.s
-    if (s.mode !== 'classic') return
+    if (s.mode !== 'classic' || this.net) return
     const save: RunSave = {
       version: 2,
       seed: this.seedStr,
@@ -824,6 +883,7 @@ export class Game {
   }
 
   confirmPlace(): boolean {
+    if (this.mySide !== 'brit') return false // the sim would drop it anyway
     const id = this.buildSelection
     if (!id || !this.ghostValid) {
       if (id) this.audio.play('ui_error', { gain: 0.5 })
@@ -847,7 +907,8 @@ export class Game {
     if (s.mode === 'bigpush') {
       const sec = sectionAt(s.sections, x, z)
       if (sec) {
-        if (sec.owner === 'brit' && sec.home === 'brit' && sec.line === 'front') {
+        // Side-symmetric: "mine" is whichever commander this machine is.
+        if (sec.owner === this.mySide && sec.home === this.mySide && sec.line === 'front') {
           // Toggle this stretch into the selection.
           const i = this.selectedSections.indexOf(sec.id)
           if (i >= 0) this.selectedSections.splice(i, 1)
@@ -859,12 +920,12 @@ export class Game {
           }
           return
         }
-        if (sec.owner === 'german' && this.selectedSections.length > 0) {
+        if (sec.owner === this.theirSide && this.selectedSections.length > 0) {
           this.submit([{ t: 'assault', sections: [...this.selectedSections], targetSection: sec.id }])
           this.selectedSections = []
           return
         }
-        if (sec.owner === 'brit' && sec.home === 'german' && sec.facing !== 1) {
+        if (sec.owner === this.mySide && sec.home === this.theirSide && sec.facing !== (this.mySide === 'brit' ? 1 : -1)) {
           this.submit([{ t: 'consolidate', section: sec.id }])
           this.hud?.toast('Consolidating — reversing the fire step. Keep men on it.', 'info')
           return
@@ -921,6 +982,7 @@ export class Game {
   }
 
   sellSelected(): void {
+    if (this.mySide !== 'brit') return // those are the other fellow's men
     const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
     if (!u) return
     this.submit([{ t: 'sell', unitId: u.id }])
@@ -950,6 +1012,7 @@ export class Game {
   }
 
   issueOrder(id: OrderId): void {
+    if (this.mySide !== 'brit') return // British orders; the sim would drop them
     if (!this.orderReady(id)) { this.audio.play('ui_error', { gain: 0.4 }); return }
     // Flare aims where the commander is looking; the sim clamps the throw.
     const cmd: Cmd = id === 'flare'
@@ -963,11 +1026,13 @@ export class Game {
   }
 
   buyUpgrade(id: string): void {
+    if (this.mySide !== 'brit') return
     if (this.upgradeAvailable(id) !== 'buyable') { this.audio.play('ui_error', { gain: 0.4 }); return }
     this.submit([{ t: 'upgrade', id }])
   }
 
   callWaveEarly(): void {
+    if (this.mySide !== 'brit') return
     if (this.ctx.s.phase !== 'build') return
     this.submit([{ t: 'callwave' }])
   }
@@ -1028,8 +1093,44 @@ export class Game {
   private assaultHintShown = false
   private selRings: THREE.Mesh[] = []
 
+  /**
+   * German commander's minimal spend UI (MP v1): hotkeys 1–4 despatch a squad
+   * to the first selected own section (or the centre of the line). The sim
+   * re-validates cost and target — this is a request, not a bank transfer.
+   */
+  private static readonly GERMAN_KITS: Array<{ name: string; kinds: EnemyKindId[] }> = [
+    { name: 'Rifle squad', kinds: ['einf', 'einf', 'einf'] },
+    { name: 'MG team', kinds: ['emg', 'einf'] },
+    { name: 'Stosstruppen', kinds: ['estorm', 'estorm', 'einf'] },
+    { name: 'Pioneers', kinds: ['epioneer', 'einf', 'einf'] },
+  ]
+
+  private germanSpawn(kit: number): void {
+    const preset = Game.GERMAN_KITS[kit]
+    if (!preset) return
+    const s = this.ctx.s
+    const own = s.sections.filter((c) => c.home === 'german' && c.owner === 'german')
+    if (own.length === 0) return
+    const selected = own.find((c) => this.selectedSections.includes(c.id))
+    const target = selected ?? own.find((c) => c.line === 'front') ?? own[0]
+    const cost = preset.kinds.reduce((a, k) => a + ENEMY_DEFS[k].cost, 0)
+    if (s.germanReq < cost) {
+      this.hud?.toast(`${preset.name}: short by ${cost - Math.floor(s.germanReq)} req.`, 'warn')
+      return
+    }
+    this.submit([{ t: 'spawnsquad', kinds: preset.kinds, x: target.mid.x, role: 'garrison', targetSection: target.id }])
+    this.hud?.toast(`${preset.name} despatched to the line (${cost} req).`, 'info')
+    this.audio.play('ui_click', { gain: 0.5 })
+  }
+
   /** Step into the boots of the selected unit's senior surviving man. */
   possessSelected(): void {
+    if (this.net) {
+      // Possession mutates ctx.possessedSoldierId OUTSIDE the command stream —
+      // a determinism breaker until it becomes a Cmd (issue #41 / M6).
+      this.hud?.toast('No embodiment in multiplayer yet — command from the map.', 'info')
+      return
+    }
     const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
     if (!u) return
     const c = u.crew.find((s) => s.hp > 0)
@@ -1162,6 +1263,8 @@ export class Game {
   // -------------------------------------------------------------------------
 
   private acc = 0
+  private gateStallT = 0
+  private gateStallWarned = false
   /** Eased Big Push camera-leash boundary (render-side smoothing of advanceZ-12). */
   private leashZ = WORLD.frontTrenchZ - 12
   frame(dt: number): void {
@@ -1186,12 +1289,19 @@ export class Game {
     }
 
     // Fixed-step sim (the runner owns the tick; we own the accumulator).
-    const effSpeed = this.paused || this.modalOpen || !this.running ? 0 : this.speed
+    // Multiplayer: real time marches for BOTH commanders — speed is locked
+    // to 1 and menus/modals do not freeze the battle (the other human is
+    // still fighting it). Only the lockstep gate may hold a step back.
+    const effSpeed = this.net
+      ? (this.running ? 1 : 0)
+      : (this.paused || this.modalOpen || !this.running ? 0 : this.speed)
     this.acc += dt * effSpeed
     let steps = 0
     const s = this.ctx.s
     while (this.acc >= SIM_DT && steps < 8) {
+      if (this.net && !this.net.gate()) break
       this.runner!.step()
+      this.net?.afterStep()
       // Battle intensity for the ambience bed (presentation, tick-paced).
       this.battleNoise = Math.max(0, this.battleNoise - SIM_DT * 0.2)
       if (s.enemies.length > 0) this.battleNoise = Math.min(1, this.battleNoise + s.enemies.length * 0.001)
@@ -1199,15 +1309,31 @@ export class Game {
       steps++
     }
     if (steps === 8) this.acc = 0
+    // A gate-held MP battle must not bank unbounded catch-up time.
+    if (this.net && this.acc > SIM_DT * 4) this.acc = SIM_DT * 4
+
+    // Gate starvation has no event of its own — if the peer stops sealing
+    // frames (hidden tab, dying link) tell the player what the freeze is.
+    if (this.net && this.running && s.outcome === 'ongoing' && !this.net.peerGone && !this.net.gate()) {
+      this.gateStallT += dt
+      if (this.gateStallT > 3 && !this.gateStallWarned) {
+        this.gateStallWarned = true
+        this.hud?.toast('Waiting on the other commander — their line has gone quiet…', 'warn')
+      }
+    } else {
+      this.gateStallT = 0
+      this.gateStallWarned = false
+    }
 
     // The Big Push camera leash: follow your men forward within ~0.5 s;
     // ease back over ~3 s when the forward men die (never yank the view).
-    if (s.mode === 'bigpush' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
+    if (s.mode === 'bigpush' && this.mySide === 'brit' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
       const want = s.advance.brit - 12
       const tau = want < this.leashZ ? 0.15 : 1.0
       this.leashZ += (want - this.leashZ) * Math.min(1, dt / tau)
       this.rig.leashMinZ = this.leashZ
     } else {
+      // German commander (MP): free camera v1 — his leash mirrors in M6.
       this.rig.leashMinZ = null
     }
 
@@ -1227,9 +1353,10 @@ export class Game {
         this.moveKbCursor(dir.x, dir.z)
       }
     }
-    if (input.consume('pause')) this.paused = !this.paused
-    if (input.consume('speedDown')) this.speed = this.speed === 4 ? 2 : this.speed === 2 ? 1 : 0.5
-    if (input.consume('speedUp')) this.speed = this.speed === 0.5 ? 1 : this.speed === 1 ? 2 : 4
+    // Multiplayer: time belongs to both commanders — no pause, no speed.
+    if (input.consume('pause')) { if (!this.net) this.paused = !this.paused }
+    if (input.consume('speedDown')) { if (!this.net) this.speed = this.speed === 4 ? 2 : this.speed === 2 ? 1 : 0.5 }
+    if (input.consume('speedUp')) { if (!this.net) this.speed = this.speed === 0.5 ? 1 : this.speed === 1 ? 2 : 4 }
     if (input.consume('cancel')) {
       if (this.buildSelection) this.setBuildSelection(null)
       else if (this.selectedSections.length > 0) this.selectedSections = []
@@ -1254,11 +1381,12 @@ export class Game {
     if (input.consume('orderFlare')) this.issueOrder('flare')
     if (input.consume('orderBarrage')) this.issueOrder('barrage')
     if (input.consume('orderTank')) this.issueOrder('marktank')
-    // Build hotkeys.
+    // Build hotkeys. The German commander's 1–4 despatch squads instead.
     for (let i = 0; i < BUILD_ORDER.length; i++) {
       const action = (i < 12 ? `build${i + 1}` : `buildD${i - 11}`) as import('../render/controls').Action
       if (input.consume(action)) {
-        this.setBuildSelection(this.buildSelection === BUILD_ORDER[i] ? null : BUILD_ORDER[i])
+        if (this.mySide === 'german') { if (i < 4) this.germanSpawn(i) }
+        else this.setBuildSelection(this.buildSelection === BUILD_ORDER[i] ? null : BUILD_ORDER[i])
       }
     }
   }

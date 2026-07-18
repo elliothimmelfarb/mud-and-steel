@@ -94,6 +94,9 @@ function main(): void {
   }
 
   const showTitle = () => {
+    // Leaving a live MP match: send the bye so the peer's AI takes over (or
+    // the walkover fires) instead of gate-freezing them forever.
+    game.leaveMatch()
     game.running = false
     const save = loadRun()
     title = createTitleScreen({
@@ -111,6 +114,10 @@ function main(): void {
         audio.unlock()
         hideTitle()
         game.startRun(seed, 'front', null, 'bigpush', { matchLen: length, persona })
+      },
+      onBigPushNet: ({ role, code, length, seed, status }) => {
+        audio.unlock()
+        void startBigPushNet(role, code, length, seed, status)
       },
       onContinue: () => {
         audio.unlock()
@@ -135,13 +142,71 @@ function main(): void {
     stack = []
   }
 
+  /**
+   * The Big Push, human vs human. Rendezvous (Vercel mailbox + WebRTC, or a
+   * BroadcastChannel between two local tabs), then the hi/hello terms
+   * handshake, then hand the open transport to the game.
+   */
+  let netConnecting = false
+  const startBigPushNet = async (
+    role: 'host' | 'join' | 'local-host' | 'local-join',
+    code: string,
+    length: import('./core/types').MatchLength,
+    seed: string,
+    status: (line: string) => void,
+  ): Promise<void> => {
+    if (netConnecting) { status('already connecting — one attempt at a time'); return }
+    netConnecting = true
+    const { helloAsHost, helloAsJoiner, connectRtc, createRoom } = await import('./net/signaling')
+    const { BroadcastTransport } = await import('./net/transport')
+    try {
+      let terms
+      if (role === 'local-host' || role === 'local-join') {
+        const room = code || 'LOCL'
+        const me = role === 'local-host' ? 'host' : 'join'
+        status(`two-tab room "${room}" — waiting for the other tab…`)
+        const t = new BroadcastTransport(room, me)
+        terms = me === 'host' ? await helloAsHost(t, seed, length) : await helloAsJoiner(t)
+      } else if (role === 'host') {
+        status('opening a room…')
+        const { code: roomCode } = await createRoom()
+        status(`ROOM ${roomCode} — read this code to your opponent`)
+        const t = await connectRtc(roomCode, 'host', (l) => status(`ROOM ${roomCode} — ${l}`))
+        status(`ROOM ${roomCode} — connected, agreeing terms…`)
+        terms = await helloAsHost(t, seed, length)
+      } else {
+        if (!/^[A-Z]{4}$/.test(code)) { status('enter the 4-letter room code first'); return }
+        status(`joining ${code}…`)
+        const t = await connectRtc(code, 'join', (l) => status(`${code} — ${l}`))
+        status(`${code} — connected, awaiting terms…`)
+        terms = await helloAsJoiner(t)
+      }
+      hideTitle()
+      game.startRun(terms.seedStr, 'front', null, 'bigpush', {
+        matchLen: terms.matchLen,
+        net: { transport: terms.transport, side: terms.side, isCreator: terms.isCreator },
+      })
+    } catch (e) {
+      status(`✗ ${(e as Error).message}`)
+    } finally {
+      netConnecting = false
+    }
+  }
+
   hud.onQuitToTitle = () => showTitle()
   game.onExitToTitle = () => showTitle()
 
-  // Pause when the tab goes to sleep.
+  // Pause when the tab goes to sleep — except in MP, where paused is ignored
+  // and would only leave the HUD's pause state lit after the tab returns.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && game.running) game.paused = true
+    if (document.hidden && game.running && !game.net) game.paused = true
   })
+  // Tab closed / reloaded mid-match: BroadcastChannel has no disconnect
+  // signal of its own, and WebRTC's takes seconds — say goodbye properly.
+  // Both hooks (some closes skip one); leaveMatch is idempotent. A hard
+  // process kill still slips through — heartbeat detection is M6 debt.
+  window.addEventListener('pagehide', () => game.leaveMatch())
+  window.addEventListener('beforeunload', () => game.leaveMatch())
 
   // Main loop.
   let last = performance.now()
@@ -170,6 +235,20 @@ function main(): void {
   if (playMode === 'bigpush') {
     document.getElementById('boot')?.classList.add('done')
     game.startRun(new URLSearchParams(location.search).get('seed') ?? 'the-big-push', 'front', null, 'bigpush')
+    return
+  }
+
+  // Dev entry for two-tab lockstep: ?mp=local-host / ?mp=local-join
+  // (&room=XXXX&seed=YYYY) — skips the title, drives the BroadcastChannel path.
+  const mpMode = new URLSearchParams(location.search).get('mp')
+  if (mpMode === 'local-host' || mpMode === 'local-join') {
+    document.getElementById('boot')?.classList.add('done')
+    const p = new URLSearchParams(location.search)
+    void startBigPushNet(
+      mpMode, p.get('room') ?? 'LOCL', 'battle', p.get('seed') ?? 'the-big-push',
+      // eslint-disable-next-line no-console
+      (l) => console.log('[mp]', l),
+    )
     return
   }
 

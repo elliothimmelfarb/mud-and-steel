@@ -463,6 +463,129 @@ export async function runBalanceLab(n = 50, opts: { onProgress?: (l: string) => 
   return summary
 }
 
+/**
+ * M5 gate: two REAL LockstepSessions over a jittery loopback transport —
+ * the full netcode path (T+6 scheduling, tick gating, hash exchange) with a
+ * scripted human on each side. Then the brutal part: kill the German client
+ * mid-assault (AI takes over, its envelopes now logged), have a fresh client
+ * rejoin via log replay, and demand hash equality ever after.
+ */
+export async function runLockstepProbe(opts: { seed?: string; simSeconds?: number; latencyTicks?: number; jitterTicks?: number; kill?: boolean; onProgress?: (l: string) => void } = {}): Promise<Record<string, unknown>> {
+  const say = opts.onProgress ?? (() => {})
+  const { loopbackPair } = await import('../net/transport')
+  const { LockstepSession, HASH_EVERY } = await import('../net/lockstep')
+  const { hashSim: hashOf } = await import('../sim/hash')
+  const { mulberry32 } = await import('../core/rng')
+
+  const seed = opts.seed ?? 'm5-lockstep'
+  const seconds = opts.simSeconds ?? 480
+  const jrand = mulberry32(0xbeef)
+  const [ta, tb] = loopbackPair({ latencyTicks: opts.latencyTicks ?? 4, jitterTicks: opts.jitterTicks ?? 5, rand: jrand })
+
+  const status: string[] = []
+  const a = new LockstepSession(seed, 'battle', 'brit', true, ta, { onStatus: (l) => status.push('A: ' + l) })
+  let b = new LockstepSession(seed, 'battle', 'german', false, tb, { onStatus: (l) => status.push('B: ' + l) })
+  a.runner.begin(); b.runner.begin()
+
+  const britBot = new ProbeCommander()
+  let desyncs = 0
+  let firstDesync = -1
+  let killed = false
+  let rejoined = false
+  const doKill = opts.kill !== false
+  const killAt = doKill ? seconds * 0.55 : Infinity
+  const rejoinAt = seconds * 0.7
+  let germanNext = 5
+
+  const out: Record<string, unknown> = {}
+  const cap = 30 * (seconds + 60)
+  for (let i = 0; i < cap; i++) {
+    const sa = a.runner.ctx.s
+    if (sa.time >= seconds || sa.outcome !== 'ongoing') break
+
+    // British human (scripted) on A.
+    const cmds = britBot.think(sa)
+    if (cmds.length > 0) a.submit(cmds)
+
+    // German human (scripted) on B — until we murder his browser.
+    if (!killed && b.runner.ctx.s.time >= germanNext) {
+      germanNext += 12
+      const sb = b.runner.ctx.s
+      const held = sb.sections.filter((c) => c.home === 'german' && c.line === 'front' && c.owner === 'german')
+      if (held.length > 0 && sb.germanReq >= 120) {
+        const sec = held[Math.floor(sb.time / 12) % held.length]
+        b.submit([{ t: 'spawnsquad', kinds: ['einf', 'einf', 'einf'], x: sec.mid.x, role: 'garrison', targetSection: sec.id }])
+      }
+    }
+
+    // Kill the German client mid-match; A's AI takes the side over.
+    if (!killed && sa.time >= killAt) {
+      killed = true
+      tb.close()
+      say(`killed German client at t=${Math.round(sa.time)}s`)
+    }
+    // A fresh client rejoins over a new pair and fast-forwards from A's log.
+    if (killed && !rejoined && sa.time >= rejoinAt) {
+      rejoined = true
+      const [t3, t4] = loopbackPair({ latencyTicks: 2, jitterTicks: 2, rand: jrand })
+      a.attachTransport(t3)
+      b = new LockstepSession(seed, 'battle', 'german', false, t4, { onStatus: (l) => status.push('B2: ' + l) })
+      b.runner.begin()
+      b.requestLog()
+      // Pump both endpoints until the log round-trip lands and B has rebuilt.
+      for (let p = 0; p < 400 && b.runner.ctx.s.tick === 0; p++) { t3.pump(); t4.pump() }
+      say(`rejoined at A tick ${sa.tick}; B rebuilt to tick ${b.runner.ctx.s.tick}`)
+    }
+
+    // Step each side as its gate allows; pump the wires once per tick.
+    if (a.gate()) { a.runner.step(); a.afterStep() }
+    if (!killed || rejoined) {
+      if (b.gate()) { b.runner.step(); b.afterStep() }
+    }
+    ;(a.transport as { pump?: () => void }).pump?.()
+    ;(b.transport as { pump?: () => void }).pump?.()
+
+    if (a.desyncedAt !== null || b.desyncedAt !== null) {
+      desyncs++
+      if (firstDesync < 0) firstDesync = (a.desyncedAt ?? b.desyncedAt)!
+    }
+    if (i % 6000 === 5999) {
+      say(`t=${Math.round(sa.time)}s A#${sa.tick} B#${b.runner.ctx.s.tick} gap=${sa.tick - b.runner.ctx.s.tick}`)
+      await nextTick()
+    }
+  }
+
+  // Final settle: step whichever side is BEHIND until the ticks meet (either
+  // can end ahead — B keeps stepping while A waits on its own gate). Gates
+  // stay respected: the behind side can always step, its frames free the other.
+  for (let i = 0; i < 800; i++) {
+    const ka = a.runner.ctx.s.tick
+    const kb = b.runner.ctx.s.tick
+    if (ka === kb) break
+    if (ka < kb && a.gate()) { a.runner.step(); a.afterStep() }
+    else if (kb < ka && b.gate()) { b.runner.step(); b.afterStep() }
+    ;(a.transport as { pump?: () => void }).pump?.()
+    ;(b.transport as { pump?: () => void }).pump?.()
+  }
+  const tickA = a.runner.ctx.s.tick
+  const tickB = b.runner.ctx.s.tick
+  out.finalTickA = tickA
+  out.finalTickB = tickB
+  out.finalHashA = hashOf(a.runner.ctx.s)
+  out.finalHashB = hashOf(b.runner.ctx.s)
+  out.hashesEqual = tickA === tickB && out.finalHashA === out.finalHashB
+  out.desyncFlags = desyncs
+  out.firstDesyncTick = firstDesync
+  out.killTick = doKill ? Math.round(killAt * 30) : -1
+  out.killed = killed
+  out.rejoined = rejoined
+  out.aiTookOver = status.some((l) => l.includes('AI takes'))
+  out.statusTail = status.slice(-6)
+  out.ok = Boolean(out.hashesEqual && (!doKill || (killed && rejoined && (out.aiTookOver as boolean))) && desyncs === 0)
+  void HASH_EVERY
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Page harness
 // ---------------------------------------------------------------------------
@@ -486,6 +609,7 @@ export function startTwinSimLab(app: HTMLElement): void {
     assault: (o: { seed?: string } = {}) => runAssaultProbe({ onProgress: say, ...o }),
     verdicts: () => runVerdictProbe({ onProgress: say }),
     balance: (n = 50) => runBalanceLab(n, { onProgress: say }),
+    lockstep: (o: { simSeconds?: number; latencyTicks?: number; jitterTicks?: number } = {}) => runLockstepProbe({ onProgress: say, ...o }),
   }
   ;(window as unknown as { __twinsim: typeof api }).__twinsim = api
 

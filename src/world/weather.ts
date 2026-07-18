@@ -23,6 +23,15 @@ export class Weather {
   private rainBias = 0
   private fogBias = 0
 
+  /** Adopt another weather's exact state (lockstep resync). Same seed assumed. */
+  copyFrom(other: Weather): void {
+    Object.assign(this.state, other.state)
+    this.t = other.t
+    this.todTarget = other.todTarget
+    this.rainBias = other.rainBias
+    this.fogBias = other.fogBias
+  }
+
   constructor(seed: number) {
     this.noise = new ValueNoise2D(seed ^ 0x1f2e3d)
     this.t = (seed % 1000) * 3.7
