@@ -112,6 +112,10 @@ function main(): void {
         hideTitle()
         game.startRun(seed, 'front', null, 'bigpush', { matchLen: length, persona })
       },
+      onBigPushNet: ({ role, code, length, seed, status }) => {
+        audio.unlock()
+        void startBigPushNet(role, code, length, seed, status)
+      },
       onContinue: () => {
         audio.unlock()
         const s = loadRun()
@@ -133,6 +137,52 @@ function main(): void {
     if (title) { title.dispose(); title.el.remove(); title = null }
     for (const s of stack) { s.dispose(); s.el.remove() }
     stack = []
+  }
+
+  /**
+   * The Big Push, human vs human. Rendezvous (Vercel mailbox + WebRTC, or a
+   * BroadcastChannel between two local tabs), then the hi/hello terms
+   * handshake, then hand the open transport to the game.
+   */
+  const startBigPushNet = async (
+    role: 'host' | 'join' | 'local-host' | 'local-join',
+    code: string,
+    length: import('./core/types').MatchLength,
+    seed: string,
+    status: (line: string) => void,
+  ): Promise<void> => {
+    const { helloAsHost, helloAsJoiner, connectRtc, createRoom } = await import('./net/signaling')
+    const { BroadcastTransport } = await import('./net/transport')
+    try {
+      let terms
+      if (role === 'local-host' || role === 'local-join') {
+        const room = code || 'LOCL'
+        const me = role === 'local-host' ? 'host' : 'join'
+        status(`two-tab room "${room}" — waiting for the other tab…`)
+        const t = new BroadcastTransport(room, me)
+        terms = me === 'host' ? await helloAsHost(t, seed, length) : await helloAsJoiner(t)
+      } else if (role === 'host') {
+        status('opening a room…')
+        const { code: roomCode } = await createRoom()
+        status(`ROOM ${roomCode} — read this code to your opponent`)
+        const t = await connectRtc(roomCode, 'host', (l) => status(`ROOM ${roomCode} — ${l}`))
+        status(`ROOM ${roomCode} — connected, agreeing terms…`)
+        terms = await helloAsHost(t, seed, length)
+      } else {
+        if (!/^[A-Z]{4}$/.test(code)) { status('enter the 4-letter room code first'); return }
+        status(`joining ${code}…`)
+        const t = await connectRtc(code, 'join', (l) => status(`${code} — ${l}`))
+        status(`${code} — connected, awaiting terms…`)
+        terms = await helloAsJoiner(t)
+      }
+      hideTitle()
+      game.startRun(terms.seedStr, 'front', null, 'bigpush', {
+        matchLen: terms.matchLen,
+        net: { transport: terms.transport, side: terms.side, isCreator: terms.isCreator },
+      })
+    } catch (e) {
+      status(`✗ ${(e as Error).message}`)
+    }
   }
 
   hud.onQuitToTitle = () => showTitle()
@@ -170,6 +220,20 @@ function main(): void {
   if (playMode === 'bigpush') {
     document.getElementById('boot')?.classList.add('done')
     game.startRun(new URLSearchParams(location.search).get('seed') ?? 'the-big-push', 'front', null, 'bigpush')
+    return
+  }
+
+  // Dev entry for two-tab lockstep: ?mp=local-host / ?mp=local-join
+  // (&room=XXXX&seed=YYYY) — skips the title, drives the BroadcastChannel path.
+  const mpMode = new URLSearchParams(location.search).get('mp')
+  if (mpMode === 'local-host' || mpMode === 'local-join') {
+    document.getElementById('boot')?.classList.add('done')
+    const p = new URLSearchParams(location.search)
+    void startBigPushNet(
+      mpMode, p.get('room') ?? 'LOCL', 'battle', p.get('seed') ?? 'the-big-push',
+      // eslint-disable-next-line no-console
+      (l) => console.log('[mp]', l),
+    )
     return
   }
 

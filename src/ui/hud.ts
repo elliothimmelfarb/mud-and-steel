@@ -297,7 +297,8 @@ export class Hud implements HudBridge {
     const s = g.ctx.s
     const t = this.topInfo
 
-    t.req.textContent = `£${Math.floor(s.req)}`
+    // The German commander spends his own requisition purse (MP).
+    t.req.textContent = g.mySide === 'german' ? `${Math.floor(s.germanReq)} Req` : `£${Math.floor(s.req)}`
     t.wave.textContent = `WAVE ${s.wave}`
     t.date.textContent = fieldDateShort(s.wave)
     t.enemies.textContent = s.phase === 'assault'

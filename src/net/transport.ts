@@ -70,17 +70,49 @@ export class LoopbackTransport implements Transport {
   }
 }
 
-/** Two local tabs, zero servers — for a quick human-vs-human smoke on one machine. */
-export class BroadcastTransport implements Transport {
-  private ch: BroadcastChannel
-  onMessage: ((msg: unknown) => void) | null = null
+/**
+ * Messages can land between "channel open" and "session constructed" (the
+ * hello handshake happens before LockstepSession exists). Both live
+ * transports buffer until a handler is attached, then flush in order —
+ * no message is ever dropped on the floor by a wiring race.
+ */
+abstract class BufferedTransport implements Transport {
+  private handler: ((msg: unknown) => void) | null = null
+  private backlog: unknown[] = []
   onClose: (() => void) | null = null
 
+  get onMessage(): ((msg: unknown) => void) | null {
+    return this.handler
+  }
+
+  set onMessage(fn: ((msg: unknown) => void) | null) {
+    this.handler = fn
+    if (fn) {
+      const pending = this.backlog
+      this.backlog = []
+      for (const msg of pending) fn(msg)
+    }
+  }
+
+  protected deliver(msg: unknown): void {
+    if (this.handler) this.handler(msg)
+    else this.backlog.push(msg)
+  }
+
+  abstract send(msg: unknown): void
+  abstract close(): void
+}
+
+/** Two local tabs, zero servers — for a quick human-vs-human smoke on one machine. */
+export class BroadcastTransport extends BufferedTransport {
+  private ch: BroadcastChannel
+
   constructor(room: string, private me: string) {
+    super()
     this.ch = new BroadcastChannel(`mudsteel-${room}`)
     this.ch.onmessage = (e) => {
       const d = e.data as { from: string; msg: unknown }
-      if (d.from !== this.me) this.onMessage?.(d.msg)
+      if (d.from !== this.me) this.deliver(d.msg)
     }
   }
 
@@ -98,13 +130,12 @@ export class BroadcastTransport implements Transport {
  * Production: a WebRTC DataChannel, ordered + reliable, negotiated through
  * the Vercel signaling mailbox (see net/signaling.ts). STUN only in v1.
  */
-export class RtcTransport implements Transport {
-  onMessage: ((msg: unknown) => void) | null = null
-  onClose: (() => void) | null = null
+export class RtcTransport extends BufferedTransport {
   private dc: RTCDataChannel | null = null
   readonly pc: RTCPeerConnection
 
   constructor() {
+    super()
     this.pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -115,7 +146,7 @@ export class RtcTransport implements Transport {
 
   attach(dc: RTCDataChannel): void {
     this.dc = dc
-    dc.onmessage = (e) => this.onMessage?.(JSON.parse(e.data as string))
+    dc.onmessage = (e) => this.deliver(JSON.parse(e.data as string))
     dc.onclose = () => this.onClose?.()
   }
 

@@ -23,6 +23,8 @@ export const INPUT_DELAY = 6
 export const HASH_EVERY = 30
 
 export type NetMsg =
+  /** Joiner's pre-battle beacon; the host answers with hello. */
+  | { t: 'hi' }
   | { t: 'hello'; seedStr: string; matchLen: MatchLength; hostSide: Team }
   | { t: 'env'; env: Envelope }
   /** Sent after every stepped tick. SEALS the sender's inputs: because the

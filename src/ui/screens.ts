@@ -286,6 +286,18 @@ export function createTitleScreen(o: {
   version: string;
   onNewGame: (x: { difficulty: 'quiet' | 'front' | 'push'; seed: string }) => void;
   onBigPush?: (x: { length: 'raid' | 'battle' | 'grand' | 'attrition'; persona: 'methodical' | 'stosstrupp' | 'opportunist'; seed: string }) => void;
+  /**
+   * Online / local-two-tab Big Push. The screen stays dumb: it hands over the
+   * chosen terms plus a status sink; main.ts runs the signaling dance and
+   * reports progress lines back into the panel.
+   */
+  onBigPushNet?: (x: {
+    role: 'host' | 'join' | 'local-host' | 'local-join';
+    code: string;
+    length: 'raid' | 'battle' | 'grand' | 'attrition';
+    seed: string;
+    status: (line: string) => void;
+  }) => void;
   onContinue: () => void;
   onSettings: () => void;
   onHelp: () => void;
@@ -516,6 +528,47 @@ export function createTitleScreen(o: {
     bpActions.appendChild(chit('Back', 'ms-btn ms-btn--ghost', () => showMain()));
     bpActions.appendChild(chit('Over the Top', 'ms-btn ms-btn--primary', bpBegin));
     bpPanel.appendChild(bpActions);
+  }
+
+  // --- Online: two human commanders over WebRTC (or two local tabs) ---
+  if (o.onBigPushNet) {
+    const netHead = make('h3', 'title-new__subtitle', 'AGAINST ANOTHER COMMANDER');
+    netHead.style.cssText = 'margin:1.1rem 0 .4rem;letter-spacing:.14em;font-size:.72rem;opacity:.75';
+    bpPanel.appendChild(netHead);
+
+    const statusLine = div('seed-row__label');
+    statusLine.style.cssText = 'min-height:1.2em;margin-top:.45rem;opacity:.85';
+    const status = (line: string): void => { statusLine.textContent = line; };
+
+    const codeRow = div('seed-row');
+    const codeLabel = make('label', 'seed-row__label', 'ROOM CODE');
+    codeLabel.htmlFor = 'ms-bp-room-input';
+    const codeInput = make('input', 'seed-input');
+    codeInput.id = 'ms-bp-room-input';
+    codeInput.type = 'text';
+    codeInput.maxLength = 4;
+    codeInput.autocomplete = 'off';
+    codeInput.spellcheck = false;
+    codeInput.placeholder = 'from your opponent';
+    codeInput.style.textTransform = 'uppercase';
+    codeRow.appendChild(codeLabel);
+    codeRow.appendChild(codeInput);
+    bpPanel.appendChild(codeRow);
+
+    const netGo = (role: 'host' | 'join' | 'local-host' | 'local-join'): void => {
+      const seed = bpSeedInput.value.trim().toUpperCase() || randomSeed();
+      o.onBigPushNet?.({ role, code: codeInput.value.trim().toUpperCase(), length: bpLength, seed, status });
+    };
+    const netActions = div('title-new__actions');
+    netActions.appendChild(chit('Host a Match', 'ms-btn', () => netGo('host')));
+    netActions.appendChild(chit('Join with Code', 'ms-btn', () => netGo('join')));
+    netActions.appendChild(chit('Two Tabs: Host', 'ms-btn ms-btn--ghost', () => netGo('local-host')));
+    netActions.appendChild(chit('Two Tabs: Join', 'ms-btn ms-btn--ghost', () => netGo('local-join')));
+    bpPanel.appendChild(netActions);
+    bpPanel.appendChild(statusLine);
+    codeInput.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); netGo('join'); }
+    });
   }
   content.appendChild(bpWrap);
 
