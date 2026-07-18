@@ -22,6 +22,7 @@ export interface TwinProbeOpts {
   seed?: string
   waves?: number
   difficulty?: Difficulty
+  mode?: 'classic' | 'bigpush'
   startReq?: number
   onProgress?: (line: string) => void
 }
@@ -130,7 +131,7 @@ export async function runTwinProbe(opts: TwinProbeOpts = {}): Promise<TwinProbeR
   const say = opts.onProgress ?? (() => {})
   const t0 = performance.now()
 
-  const mk = () => new SimRunner({ seedStr: seed, difficulty, headless: true, startReq })
+  const mk = () => new SimRunner({ seedStr: seed, difficulty, mode: opts.mode ?? 'classic', headless: true, startReq })
   const a = mk()
   const b = mk()
   ;(window as unknown as { __twinsimLast: object }).__twinsimLast = { a, b }

@@ -35,6 +35,8 @@ export interface ActiveOrders {
 
 export interface SimState {
   seed: number
+  /** Which game this is: the classic defence campaign or the Big Push. */
+  mode: 'classic' | 'bigpush'
   time: number
   /** Fixed 30 Hz tick counter. Commands are stamped with and applied at ticks. */
   tick: number

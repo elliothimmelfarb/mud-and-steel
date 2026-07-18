@@ -121,21 +121,33 @@ export class Scenery {
     // boards are nudged off the centreline toward the parados (opposite the
     // enemy-facing bench the men stand on); the communication trenches and the
     // traverse jogs have a symmetric floor, so their boards stay centred.
-    const boards = makeInstanced(duckboardGeometry(), 460, this.scene)
+    const boards = makeInstanced(duckboardGeometry(), t.layout === 'bigpush' ? 900 : 460, this.scene)
+    const boardCap = t.layout === 'bigpush' ? 896 : 456
     let b = 0
-    const parapetLines = [t.frontLine, t.supportLine]
-    const lines = [...parapetLines, ...t.commLines]
-    for (const line of lines) {
+    // Each entry knows its facing so the parados nudge lands on the correct
+    // (away-from-enemy) side of the German system too.
+    const boardLines: Array<{ line: Vec2[]; facing: 1 | -1; parapetLine: boolean }> = [
+      { line: t.frontLine, facing: 1, parapetLine: true },
+      { line: t.supportLine, facing: 1, parapetLine: true },
+      ...t.commLines.map((l) => ({ line: l, facing: 1 as const, parapetLine: false })),
+    ]
+    if (t.layout === 'bigpush') {
+      boardLines.push(
+        { line: t.germanLine, facing: -1, parapetLine: true },
+        { line: t.germanSupportLine, facing: -1, parapetLine: true },
+        ...t.germanCommLines.map((l) => ({ line: l, facing: -1 as const, parapetLine: false })),
+      )
+    }
+    for (const { line, facing, parapetLine: isParapetLine } of boardLines) {
       // Push the boards onto the deep floor, which on a fire step sits on the
       // parados side of the centreline.
-      const isParapetLine = parapetLines.includes(line)
-      for (let s = 0; s < line.length - 1 && b < 456; s++) {
+      for (let s = 0; s < line.length - 1 && b < boardCap; s++) {
         const a = line[s], c = line[s + 1]
         const len = Math.hypot(c.x - a.x, c.z - a.z)
         if (len < 1.6) continue
-        // Parados normal (toward +z, away from the enemy).
+        // Parados normal (away from the enemy: +z for British, -z for German).
         let nx = (c.z - a.z) / len, nz = -(c.x - a.x) / len
-        if (nz < 0) { nx = -nx; nz = -nz }
+        if (nz * facing < 0) { nx = -nx; nz = -nz }
         // Only the benched bays keep the off-centre floor; traverses and links
         // are symmetric corridors.
         const isBay = Math.abs(c.x - a.x) >= 8 && Math.abs(c.x - a.x) > 2 * Math.abs(c.z - a.z)
@@ -143,7 +155,7 @@ export class Scenery {
         // Duckboards are X-long: yawing local +Z onto the parados normal lays
         // the stringers along the trench, treads across it.
         const yaw = Math.atan2(nx, nz)
-        for (let d = 1; d < len - 0.5 && b < 456; d += 1.9) {
+        for (let d = 1; d < len - 0.5 && b < boardCap; d += 1.9) {
           const x = a.x + (c.x - a.x) * (d / len) + nx * parados
           const z = a.z + (c.z - a.z) * (d / len) + nz * parados
           // A board belongs on the DEEP floor. Skip bench tops, the guarded
@@ -173,23 +185,30 @@ export class Scenery {
     // slope so the boards lie against the earth — a vertical panel on a sloped
     // wall leaves a jarring daylight gap behind the slats. The German line far
     // north gets the sandbag treatment only (it's a horizon read).
-    const bags = makeInstanced(sandbagCourseGeometry(), 380, this.scene)
-    const revet = makeInstanced(revetmentPanelGeometry(1.45), 260, this.scene)
+    const dressMul = t.layout === 'bigpush' ? 2 : 1
+    const bags = makeInstanced(sandbagCourseGeometry(), 380 * dressMul, this.scene)
+    const revet = makeInstanced(revetmentPanelGeometry(1.45), 260 * dressMul, this.scene)
     // Timber facing on the fire step's riser. The carved bench is real geometry,
     // but at the terrain's 1 m cell it renders as a smooth ramp — this plank
     // face is what makes it read as a BUILT step from the trench floor. LOW on
     // purpose: a full-height face at the centreline reads as a fence walling
     // the trench (and pokes into the skyline from behind); a boarded lower
     // riser under an earth lip reads as a two-tier fire step.
-    const stepFace = makeInstanced(revetmentPanelGeometry(1.0), 260, this.scene)
-    const sheets = makeInstanced(corrugatedSheetGeometry(), 90, this.scene)
-    const ladders = makeInstanced(scalingLadderGeometry(), 24, this.scene)
+    const stepFace = makeInstanced(revetmentPanelGeometry(1.0), 260 * dressMul, this.scene)
+    const sheets = makeInstanced(corrugatedSheetGeometry(), 90 * dressMul, this.scene)
+    const ladders = makeInstanced(scalingLadderGeometry(), 24 * dressMul, this.scene)
     let bg = 0, rv = 0, sf = 0, sh = 0, ld = 0
     const dressLines: Array<{ line: Vec2[]; facing: 1 | -1; full: boolean }> = [
       { line: t.frontLine, facing: 1, full: true },
       { line: t.supportLine, facing: 1, full: true },
-      { line: t.germanLine, facing: -1, full: false },
+      // Classic: the horizon line gets sandbags only. Big Push: the German
+      // front is a REAL fighting line ten seconds' sprint away — full
+      // revetment, fire-step facing, ladders, the lot. Same for their support.
+      { line: t.germanLine, facing: -1, full: t.layout === 'bigpush' },
     ]
+    if (t.layout === 'bigpush') {
+      dressLines.push({ line: t.germanSupportLine, facing: -1, full: true })
+    }
     for (const { line, facing, full } of dressLines) {
       for (let s = 0; s < line.length - 1; s++) {
         const a = line[s], c = line[s + 1]
@@ -221,7 +240,7 @@ export class Scenery {
           // Sandbag course nests into the enemy parapet crest, with a touch of
           // settle-roll so a long wall undulates instead of beading. Skip any
           // run whose ends would hang over a crossing corridor's cut.
-          if (bg < 378) {
+          if (bg < 378 * dressMul) {
             const sx = cx + nx * (TRENCH.width / 2 + 0.85)
             const sz = cz + nz * (TRENCH.width / 2 + 0.85)
             const overhangs = t.trenchAt(sx - ax * 1.15, sz - az * 1.15) > 0.2
@@ -245,7 +264,7 @@ export class Scenery {
           // raked back to the wall's measured rise so it LIES on the slope.
           // Only where BOTH panel ends have a wall behind them — at corners
           // the crossing corridor leaves nothing to lean on.
-          if (rv < 256) {
+          if (rv < 256 * dressMul) {
             const px = cx - nx * 0.95, pz = cz - nz * 0.95
             const wallAt = (ex: number, ez: number): number =>
               t.heightAt(ex - nx * 0.75, ez - nz * 0.75) - floorY
@@ -264,7 +283,7 @@ export class Scenery {
           // riser, top tucked under the bench edge. Bays only — links have a
           // plain symmetric floor, no bench — and only where the bench truly
           // rises behind both panel ends.
-          if (isBay && sf < 256) {
+          if (isBay && sf < 256 * dressMul) {
             const px = cx - nx * 0.15, pz = cz - nz * 0.15
             const benchBehind = (ex: number, ez: number): number =>
               t.heightAt(ex + nx * 0.95, ez + nz * 0.95) - floorY
@@ -279,7 +298,7 @@ export class Scenery {
         }
         if (!full) continue
         // A scrounged corrugated sheet leaning on the parados here and there.
-        if (sh < 90 && rand() < 0.45) {
+        if (sh < 90 * dressMul && rand() < 0.45) {
           const f = 0.25 + rand() * 0.5
           const cx = a.x + abx * f, cz = a.z + abz * f
           if (t.trenchAt(cx - nx * 0.5, cz - nz * 0.5) < 0.72) continue
@@ -292,7 +311,7 @@ export class Scenery {
         }
         // Scaling ladders against the enemy wall of the fire bays, head over
         // the parapet — ready for a raid. Front line only, every few bays.
-        if (line === t.frontLine && isBay && ld < 24 && s % 3 === 0) {
+        if ((line === t.frontLine || (t.layout === 'bigpush' && line === t.germanLine)) && isBay && ld < 24 * dressMul && s % 3 === 0) {
           // Mid-bay, between sandbag runs — at a corner a ladder reads as a
           // stray plank; centred on the bay it reads as what it is.
           const f = 0.42 + rand() * 0.12
@@ -322,7 +341,8 @@ export class Scenery {
     const gWire = makeInstanced(wireCoilGeometry(), 140, this.scene)
     const gPosts = makeInstanced(wirePostGeometry(), 220, this.scene)
     let gw = 0, gp = 0
-    const gz0 = WORLD.enemySpawnZ - 13
+    // Belt sits in front of wherever their fire trench actually is.
+    const gz0 = t.layout === 'bigpush' ? -(WORLD.frontTrenchZ - 0.5) : WORLD.enemySpawnZ - 13
     for (const rowOff of [5.5, 8.5]) {
       for (let x = -TRENCH.frontSpanX + 3; x < TRENCH.frontSpanX - 3 && gw < 140; x += 6) {
         const lanePhase = (x + (rowOff > 7 ? 19 : 0) + 1000) % 38

@@ -53,6 +53,7 @@ export function hashSim(s: SimState): number {
   const h = new Hasher()
 
   // Scalar run state.
+  h.byte(s.mode === 'bigpush' ? 1 : 0)
   h.u32(s.tick)
   h.f64(s.time)
   h.u32(s.wave)

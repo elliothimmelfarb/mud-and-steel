@@ -191,7 +191,7 @@ export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooter
     team: target.team, deadT: 0, seed: target.id * 0.618 % 1,
     mounted: false,
   })
-  if (s.corpses.length > 140) s.corpses.shift()
+  if (s.corpses.length > 200) s.corpses.shift()
   fx(s, { t: 'blood', x: target.pos.x, y: y + 0.6, z: target.pos.z })
   if (ctx.rand() < 0.5) snd(s, { name: 'death_cry', x: target.pos.x, y, z: target.pos.z, gain: 0.5 })
 

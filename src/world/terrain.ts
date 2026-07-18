@@ -16,6 +16,16 @@ import { ValueNoise2D, forkRand, type Rand } from '../core/rng'
 
 export interface DirtyRegion { minCol: number; minRow: number; maxCol: number; maxRow: number }
 
+/**
+ * Battlefield layout. 'classic' — the defence campaign's one-sided sector
+ * (German line as a horizon read). 'bigpush' — two full mirrored trench
+ * systems: German front at -frontTrenchZ, support at -supportTrenchZ, comm
+ * trenches between, sunken lane recut through z ≈ 0 as the contested prize.
+ * The classic path must consume the SAME rand() draws as before this
+ * parameter existed — seeds reproduce identical classic battlefields.
+ */
+export type TrenchLayout = 'classic' | 'bigpush'
+
 /** Radius (in cells) of the concavity/AO neighbourhood — dirty regions grow by this. */
 const AO_REACH = 5
 
@@ -92,9 +102,15 @@ export class Terrain implements TerrainLike {
   readonly frontLine: Vec2[] = []
   readonly supportLine: Vec2[] = []
   readonly commLines: Vec2[][] = []
-  /** The German fire trench on the north horizon — scenery + spawn backdrop,
-   *  never sectioned or slotted (the sim only reads front/support). */
+  /**
+   * The German fire trench. Classic layout: a horizon read near the spawn
+   * edge — scenery + spawn backdrop, never sectioned or slotted. Big Push
+   * layout: the REAL north front at z ≈ -frontTrenchZ, mirror of the British.
+   */
   readonly germanLine: Vec2[] = []
+  /** Big Push layout only: German support line + communication trenches. */
+  readonly germanSupportLine: Vec2[] = []
+  readonly germanCommLines: Vec2[][] = []
   /** Flattened emplacement pads (behind the lines). */
   readonly pads: Vec2[] = []
 
@@ -115,7 +131,7 @@ export class Terrain implements TerrainLike {
   /** Fine-detail noise lattice, kept for carve-time surface variation. */
   private detailNoise!: ValueNoise2D
 
-  constructor(seed: number) {
+  constructor(seed: number, readonly layout: TrenchLayout = 'classic') {
     const vcount = (this.cols + 1) * (this.rows + 1)
     this.heights = new Float32Array(vcount)
     this.base = new Float32Array(vcount)
@@ -484,7 +500,12 @@ export class Terrain implements TerrainLike {
     // 2) A shallow sunken lane / old streambed crossing no-man's land (cover
     //    feature), with a ragged, two-octave noisy edge and an uneven floor
     //    instead of a clean band.
-    const laneZ = -40 + (rand() - 0.5) * 50
+    // Big Push: the lane runs through the middle of no-man's-land (z ≈ 0) —
+    // it is the contested supply objective between the two fronts. Same
+    // number of rand() draws on both paths (classic seeds must not shift).
+    const laneZ = this.layout === 'bigpush'
+      ? (rand() - 0.5) * 12
+      : -40 + (rand() - 0.5) * 50
     {
       const rMin = Math.max(0, Math.floor(this.rowAt(laneZ - 30)))
       const rMax = Math.min(this.rows, Math.ceil(this.rowAt(laneZ + 30)))
@@ -527,16 +548,20 @@ export class Terrain implements TerrainLike {
     this.carveTrenchFloor(this.frontLine, true, 1, preTrench)
     this.carveTrenchFloor(this.supportLine, true, 1, preTrench)
     this.carveTrenchFloor(this.germanLine, true, -1, preTrench)
+    this.carveTrenchFloor(this.germanSupportLine, true, -1, preTrench)
     for (const line of this.commLines) this.carveTrenchFloor(line, false, 1, preTrench)
+    for (const line of this.germanCommLines) this.carveTrenchFloor(line, false, -1, preTrench)
     // Banks go up only after EVERY floor is down — the guard inside needs the
     // full trench mask so no bank can wall a corridor it hasn't heard of.
     this.raiseTrenchBanks(this.frontLine, 1)
     this.raiseTrenchBanks(this.supportLine, 1)
     this.raiseTrenchBanks(this.germanLine, -1)
+    this.raiseTrenchBanks(this.germanSupportLine, -1)
     // Digging, spoil and boot traffic kill the turf: a ragged trodden-earth
     // band along every line, banks included. churnVis ONLY — the render mud
     // band adds zero gameplay slow-zone (churn proper stays shell-driven).
-    for (const line of [this.frontLine, this.supportLine, this.germanLine, ...this.commLines]) {
+    for (const line of [this.frontLine, this.supportLine, this.germanLine, this.germanSupportLine,
+      ...this.commLines, ...this.germanCommLines]) {
       this.stampEarthHalo(line)
     }
 
@@ -552,6 +577,18 @@ export class Terrain implements TerrainLike {
         this.spoilHeap(hx, hz, 0.3 + rand() * 0.15, 1.6 + rand() * 0.6)
       }
     }
+    if (this.layout === 'bigpush') {
+      // Mirrored spoil for the German communication trenches.
+      for (const cx of TRENCH.commTrenchXs) {
+        const nHeaps = 2 + (rand() < 0.5 ? 1 : 0)
+        for (let hIdx = 0; hIdx < nHeaps; hIdx++) {
+          const side = rand() < 0.5 ? -1 : 1
+          const hz = -(frontZ + 8 + rand() * (supportZ - frontZ - 16))
+          const hx = cx + side * (TRENCH.width / 2 + 1.6 + rand() * 1.4) + (rand() - 0.5) * 3
+          this.spoilHeap(hx, hz, 0.3 + rand() * 0.15, 1.6 + rand() * 0.6)
+        }
+      }
+    }
 
     // 4) Emplacement pads: flat discs behind the lines.
     const padSpots: Vec2[] = []
@@ -562,6 +599,15 @@ export class Terrain implements TerrainLike {
       padSpots.push({ x: i * 32 + (rand() - 0.5) * 8, z: WORLD.supportTrenchZ + 14 + rand() * 10 })
     }
     padSpots.push({ x: -46, z: WORLD.supportTrenchZ + 34 }, { x: 46, z: WORLD.supportTrenchZ + 34 })
+    if (this.layout === 'bigpush') {
+      // Mirrored pads behind the German lines for their emplacements.
+      for (let i = -3; i <= 3; i++) {
+        if (i !== 0) padSpots.push({ x: i * 30 + (rand() - 0.5) * 6, z: -(WORLD.frontTrenchZ + 16 + rand() * 8) })
+      }
+      for (let i = -2; i <= 2; i++) {
+        padSpots.push({ x: i * 32 + (rand() - 0.5) * 8, z: -(WORLD.supportTrenchZ + 14 + rand() * 10) })
+      }
+    }
     for (const p of padSpots) {
       this.flattenPad(p.x, p.z, 3.4)
       this.pads.push(p)
@@ -649,8 +695,13 @@ export class Terrain implements TerrainLike {
     this.frontLine.push(...this.makeCrenellated(TRENCH.frontSpanX, WORLD.frontTrenchZ - 0.5, 4.5, 9.5, rand))
     // Support line: same pattern, slightly longer bays and a shallower set-back.
     this.supportLine.push(...this.makeCrenellated(TRENCH.supportSpanX, WORLD.supportTrenchZ - 0.5, 3.8, 10.5, rand))
-    // German fire trench on the north horizon, mirrored to face the British.
-    this.germanLine.push(...this.makeCrenellated(TRENCH.frontSpanX, WORLD.enemySpawnZ - 13, -4.5, 9.5, rand))
+    // German fire trench, mirrored to face the British. Classic: a horizon
+    // read near the spawn edge. Big Push: the real north front, the mirror of
+    // the British line across no-man's-land.
+    const germanFrontZ = this.layout === 'bigpush'
+      ? -(WORLD.frontTrenchZ - 0.5)
+      : WORLD.enemySpawnZ - 13
+    this.germanLine.push(...this.makeCrenellated(TRENCH.frontSpanX, germanFrontZ, -4.5, 9.5, rand))
     // Communication trenches: front → support, zigzagging every ~8.5 m against
     // enfilade, with a per-line drift so no two look alike. They enter the
     // front system mid-LINK (the links sit at x ≡ cx - 2.25 mod 14) and stop a
@@ -670,6 +721,30 @@ export class Terrain implements TerrainLike {
       }
       line.push({ x: cx, z: zEnd })
       this.commLines.push(line)
+    }
+
+    // Big Push: the German SYSTEM behind their front — support line and
+    // communication trenches, the z-mirror of the British construction.
+    // Appended after all classic draws so the classic prefix is untouched.
+    if (this.layout === 'bigpush') {
+      this.germanSupportLine.push(
+        ...this.makeCrenellated(TRENCH.supportSpanX, -(WORLD.supportTrenchZ - 0.5), -3.8, 10.5, rand))
+      for (const cx of TRENCH.commTrenchXs) {
+        const zStart = -(WORLD.frontTrenchZ + 4.4)
+        const zEnd = -(WORLD.supportTrenchZ - 1.8)
+        const n = Math.max(3, Math.round((zStart - zEnd) / 8.5))
+        const drift = (rand() - 0.5) * 9
+        const line: Vec2[] = [{ x: cx - 2.25, z: zStart }]
+        for (let i = 1; i < n; i++) {
+          const t = i / n
+          const z = zStart + (zEnd - zStart) * t
+          const x = cx - 2.25 * (1 - t) + Math.sin(t * Math.PI) * drift
+            + (i % 2 ? 2.2 : -2.2) + (rand() - 0.5) * 0.8
+          line.push({ x, z })
+        }
+        line.push({ x: cx, z: zEnd })
+        this.germanCommLines.push(line)
+      }
     }
   }
 

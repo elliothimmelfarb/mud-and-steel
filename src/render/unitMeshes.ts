@@ -33,7 +33,9 @@ export interface SoldierPose {
   pitch?: number
 }
 
-const CAP = 560
+// Two full armies plus their dead (Big Push): living soldiers of both sides,
+// marching columns, and the corpse pool all share this instanced budget.
+const CAP = 900
 
 // Muted uniforms. Slight per-man tint keeps ranks from looking cloned.
 const COL_BRIT = new THREE.Color(0x6b6446)

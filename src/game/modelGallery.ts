@@ -239,7 +239,10 @@ export function startModelGallery(app: HTMLElement): void {
   let terrainWet = 0
   const ensureTerrain = (): void => {
     if (terrain) return
-    terrain = new Terrain(115599)
+    // ?gallery&bigpush shows the two-trench Big Push battlefield instead.
+    const bigpush = new URLSearchParams(location.search).has('bigpush')
+    terrain = new Terrain(115599, bigpush ? 'bigpush' : 'classic')
+    ;(window as unknown as { __galleryTerrain: Terrain }).__galleryTerrain = terrain // probe access
     terrainMesh = new TerrainMesh(terrain)
     terrainMesh.mesh.visible = false
     scene.add(terrainMesh.mesh)
