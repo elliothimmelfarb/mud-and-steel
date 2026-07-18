@@ -45,6 +45,11 @@ export type Cmd =
   | { t: 'covering'; sections: number[]; targetSection: number }
   | { t: 'recall'; groupId: number }
   | { t: 'consolidate'; section: number }
+  /** First-person embodiment: the sim stands down this man/weapon — the
+   *  player is on the trigger. Commanded so lockstep peers and replays
+   *  agree on it (issue #41 item 2). */
+  | { t: 'possess'; unitId: number; soldierId: number }
+  | { t: 'release' }
   // German-side commands (the AI commander today; a human via lockstep in M5).
   | { t: 'spawnsquad'; kinds: EnemyKindId[]; x: number; role: 'garrison' | 'assault'; targetSection: number }
   | { t: 'gbarrage'; x: number; z: number; shells: number; gas: boolean }
@@ -337,7 +342,8 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
   // host side). A german envelope carrying these is dropped identically on
   // every client.
   const britOnly = cmd.t === 'buy' || cmd.t === 'sell' || cmd.t === 'order' || cmd.t === 'upgrade' ||
-    cmd.t === 'targeting' || cmd.t === 'callwave' || cmd.t === 'beginwave' || cmd.t === 'continueendless'
+    cmd.t === 'targeting' || cmd.t === 'callwave' || cmd.t === 'beginwave' || cmd.t === 'continueendless' ||
+    cmd.t === 'possess' || cmd.t === 'release'
   if (britOnly && side !== 'brit') return
 
   switch (cmd.t) {
@@ -471,6 +477,19 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
       break
     case 'consolidate':
       if (s.mode === 'bigpush') issueConsolidate(ctx, side, cmd.section)
+      break
+
+    case 'possess': {
+      const u = s.units.find((x) => x.id === cmd.unitId && !x.disbanded)
+      const c = u?.crew.find((x) => x.id === cmd.soldierId && x.hp > 0)
+      if (!u || !c) return
+      s.possessedUnitId = u.id
+      s.possessedSoldierId = c.id
+      break
+    }
+    case 'release':
+      s.possessedSoldierId = -1
+      s.possessedUnitId = -1
       break
 
     case 'spawnsquad': {

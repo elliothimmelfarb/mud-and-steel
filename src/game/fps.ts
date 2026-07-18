@@ -260,8 +260,10 @@ export class FpsMode {
     this.soldier = soldier
     this.profile = WEAPON_PROFILES[unit.kind] ?? WEAPON_PROFILES.rifleman
     this.equip(unit.kind)
-    this.game.ctx.possessedSoldierId = soldier.id
-    this.game.ctx.possessedUnitId = unit.id
+    // Through the command stream (#41 item 2): the sim flags flip at the
+    // next tick boundary on every peer and in every replay identically.
+    // Render-side embodiment (camera, viewmodel) engages this frame.
+    this.game.possessCmd(unit.id, soldier.id)
     // Emplaced crews stand at their gun; snap the man onto the mounting.
     if (this.profile.emplaced) {
       soldier.pos.x = unit.pos.x
@@ -354,8 +356,7 @@ export class FpsMode {
   exit(): void {
     if (!this.active) return
     this.active = false
-    this.game.ctx.possessedSoldierId = -1
-    this.game.ctx.possessedUnitId = -1
+    this.game.releaseCmd()
     this.game.ctx.fpsInvincible = false // no possessed man to shield once we're out
     if (document.pointerLockElement) document.exitPointerLock()
     if (this.vm) this.vm.group.visible = false
@@ -1054,7 +1055,7 @@ export class FpsMode {
     const s = this.soldier
     if (!s) return
     const bullets = this.game.ctx.s.bullets
-    const myId = this.game.ctx.possessedSoldierId
+    const myId = s.id
     const myTeam = s.team
     const r2 = WHIZ_RADIUS * WHIZ_RADIUS
 

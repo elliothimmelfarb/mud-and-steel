@@ -167,6 +167,10 @@ export class Game {
     else this.runner?.submit('brit', cmds)
   }
 
+  /** FPS embodiment enters/leaves through the command stream (#41 item 2). */
+  possessCmd(unitId: number, soldierId: number): void { this.submit([{ t: 'possess', unitId, soldierId }]) }
+  releaseCmd(): void { this.submit([{ t: 'release' }]) }
+
   /** Sim context (undefined before the first startRun, like the old field). */
   get ctx(): Ctx {
     return this.runner?.ctx as unknown as Ctx
@@ -550,15 +554,16 @@ export class Game {
     const ev = this.events
     ev.on('soldierDied', (p) => {
       const cites = deedCitations(p.deeds)
-      const rec: CasualtyRecord = {
+      // The sim already recorded him (combat.ts pushes the roster entry —
+      // #41 item 3); we only write the epitaph, which is presentation.
+      const rec: CasualtyRecord = this.ctx.s.casualties[this.ctx.s.casualties.length - 1] ?? {
         name: { first: p.name.split(' ')[0] ?? '', last: p.name.split(' ')[1] ?? '' },
         rank: p.rank, kind: p.kind as UnitKindId, wave: p.wave,
-        epitaph: makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave, {
-          deeds: cites, wavesServed: p.wavesServed,
-        }),
-        deeds: p.deeds, wavesServed: p.wavesServed,
+        epitaph: '', deeds: p.deeds, wavesServed: p.wavesServed,
       }
-      this.ctx.s.casualties.push(rec)
+      rec.epitaph = makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave, {
+        deeds: cites, wavesServed: p.wavesServed,
+      })
       this.waveCasualties.push(rec)
       // A long-serving or decorated man's fall is marked for the player.
       if (p.wavesServed >= 4 || p.deeds !== 0) {
@@ -1465,7 +1470,7 @@ export class Game {
       if (u.disbanded) continue
       for (const c of u.crew) {
         if (c.hp <= 0) continue
-        if (c.id === this.ctx.possessedSoldierId) continue // you can't see your own body
+        if (c.id === this.ctx.s.possessedSoldierId) continue // you can't see your own body
         pose.x = c.pos.x; pose.z = c.pos.z
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
@@ -1523,7 +1528,7 @@ export class Game {
     // person — the camera sits inside it, so its full-size mesh would wall the
     // view and hide the first-person viewmodel (see syncUnits).
     this.scenery.syncDefences(s.defences, w.night)
-    this.scenery.syncUnits(s.units, this.fpsMode.active ? this.ctx.possessedUnitId : -1)
+    this.scenery.syncUnits(s.units, this.fpsMode.active ? this.ctx.s.possessedUnitId : -1)
     this.scenery.syncVehicles(s.vehicles)
 
     // Burning wrecks.

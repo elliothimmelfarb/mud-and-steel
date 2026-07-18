@@ -63,6 +63,7 @@ export function hashSim(s: SimState): number {
   h.f64(s.req)
   h.f64(s.breach)
   h.bool(s.masksOn)
+  h.u32(s.possessedSoldierId >>> 0); h.u32(s.possessedUnitId >>> 0)
   h.f64(s.earlyCallBonus)
   h.f64(s.advance.brit); h.f64(s.advance.german)
   h.f64(s.strength.brit); h.f64(s.strength.german)

@@ -201,7 +201,7 @@ export function assaultTick(ctx: Ctx, u: Unit, dt: number): void {
   if (g.state === 'recalled') {
     let allHome = true
     for (const c of u.crew) {
-      if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+      if (c.hp <= 0 || c.id === ctx.s.possessedSoldierId) continue
       const dx = u.pos.x - c.pos.x, dz = u.pos.z - c.pos.z
       const d = Math.hypot(dx, dz)
       if (d > 2.2) {
@@ -222,7 +222,7 @@ export function assaultTick(ctx: Ctx, u: Unit, dt: number): void {
 
   for (let ci = 0; ci < u.crew.length; ci++) {
     const c = u.crew[ci]
-    if (c.hp <= 0 || c.id === ctx.possessedSoldierId) continue
+    if (c.hp <= 0 || c.id === ctx.s.possessedSoldierId) continue
 
     // Pinned men go to ground where they stand.
     if (c.suppression > COMBAT.suppressPin) { c.stance = 'prone'; continue }
