@@ -119,6 +119,13 @@ function main(): void {
         audio.unlock()
         void startBigPushNet(role, code, length, seed, status)
       },
+      onWarDiary: loadWarDiary() ? () => {
+        const rec = loadWarDiary()
+        if (!rec) return
+        audio.unlock()
+        hideTitle()
+        game.startReplay(rec)
+      } : undefined,
       onContinue: () => {
         audio.unlock()
         const s = loadRun()
@@ -134,6 +141,15 @@ function main(): void {
       onHelp: openTitleHelp,
     })
     document.body.appendChild(title.el)
+  }
+
+  const loadWarDiary = (): import('./game/game').ReplayRecord | null => {
+    try {
+      const raw = localStorage.getItem(Game.REPLAY_KEY)
+      if (!raw) return null
+      const rec = JSON.parse(raw) as import('./game/game').ReplayRecord
+      return rec.v === 1 && rec.seedStr && Array.isArray(rec.envs) ? rec : null
+    } catch { return null }
   }
 
   const hideTitle = () => {
@@ -161,21 +177,28 @@ function main(): void {
     const { BroadcastTransport } = await import('./net/transport')
     try {
       let terms
+      let roomUsed: string
+      let kind: 'rtc' | 'local'
       if (role === 'local-host' || role === 'local-join') {
-        const room = code || 'LOCL'
+        kind = 'local'
+        roomUsed = code || 'LOCL'
         const me = role === 'local-host' ? 'host' : 'join'
-        status(`two-tab room "${room}" — waiting for the other tab…`)
-        const t = new BroadcastTransport(room, me)
+        status(`two-tab room "${roomUsed}" — waiting for the other tab…`)
+        const t = new BroadcastTransport(roomUsed, me)
         terms = me === 'host' ? await helloAsHost(t, seed, length) : await helloAsJoiner(t)
       } else if (role === 'host') {
+        kind = 'rtc'
         status('opening a room…')
         const { code: roomCode } = await createRoom()
+        roomUsed = roomCode
         status(`ROOM ${roomCode} — read this code to your opponent`)
         const t = await connectRtc(roomCode, 'host', (l) => status(`ROOM ${roomCode} — ${l}`))
         status(`ROOM ${roomCode} — connected, agreeing terms…`)
         terms = await helloAsHost(t, seed, length)
       } else {
         if (!/^[A-Z]{4}$/.test(code)) { status('enter the 4-letter room code first'); return }
+        kind = 'rtc'
+        roomUsed = code
         status(`joining ${code}…`)
         const t = await connectRtc(code, 'join', (l) => status(`${code} — ${l}`))
         status(`${code} — connected, awaiting terms…`)
@@ -184,12 +207,48 @@ function main(): void {
       hideTitle()
       game.startRun(terms.seedStr, 'front', null, 'bigpush', {
         matchLen: terms.matchLen,
-        net: { transport: terms.transport, side: terms.side, isCreator: terms.isCreator },
+        net: {
+          transport: terms.transport, side: terms.side, isCreator: terms.isCreator,
+          catchUp: terms.hostTick > 0,
+        },
       })
+      // If the other side ever drops, hold the door open for them.
+      armRejoin(kind, roomUsed, terms.seedStr, terms.matchLen)
     } catch (e) {
       status(`✗ ${(e as Error).message}`)
     } finally {
       netConnecting = false
+    }
+  }
+
+  /**
+   * After a peer drops, the survivor quietly reopens the rendezvous (same
+   * room code, or the same BroadcastChannel room) and waits. A returning
+   * player just uses the normal Join flow; the hello's tick > 0 makes them
+   * requestLog + fast-forward, and attachTransport un-adopts the AI here.
+   */
+  const armRejoin = (kind: 'rtc' | 'local', room: string, seed: string, length: import('./core/types').MatchLength) => {
+    game.onNetPeerLost = () => {
+      void (async () => {
+        const { connectRtc, helloAsHost } = await import('./net/signaling')
+        const { BroadcastTransport } = await import('./net/transport')
+        while (game.net?.peerGone && game.running && game.ctx.s.outcome === 'ongoing') {
+          let t: import('./net/transport').Transport | null = null
+          try {
+            t = kind === 'rtc'
+              ? await connectRtc(room, 'host', undefined, { fromEnd: true })
+              : new BroadcastTransport(room, 'host')
+            await helloAsHost(t, seed, length, 120_000, () => game.ctx.s.tick, game.mySide)
+            if (!game.net || !game.net.peerGone) { t.close(); return }
+            game.net.attachTransport(t)
+            return
+          } catch (e) {
+            t?.close()
+            if (String((e as Error).message).includes('room expired')) return // rejoin window closed
+            // timed out — reopen and keep waiting while the match lives
+          }
+        }
+      })()
     }
   }
 
@@ -234,8 +293,21 @@ function main(): void {
   const playMode = new URLSearchParams(location.search).get('play')
   if (playMode === 'bigpush') {
     document.getElementById('boot')?.classList.add('done')
-    game.startRun(new URLSearchParams(location.search).get('seed') ?? 'the-big-push', 'front', null, 'bigpush')
+    const p = new URLSearchParams(location.search)
+    const len = p.get('len') as import('./core/types').MatchLength | null
+    game.startRun(p.get('seed') ?? 'the-big-push', 'front', null, 'bigpush',
+      len ? { matchLen: len } : undefined)
     return
+  }
+
+  // ?replay — straight into the war diary (dev + shareable convenience).
+  if (new URLSearchParams(location.search).has('replay')) {
+    const rec = loadWarDiary()
+    if (rec) {
+      document.getElementById('boot')?.classList.add('done')
+      game.startReplay(rec)
+      return
+    }
   }
 
   // Dev entry for two-tab lockstep: ?mp=local-host / ?mp=local-join

@@ -53,6 +53,17 @@ import { setViewmodelEmissive } from './weapons'
 
 export type { OrderId } from '../sim/commands'
 
+/** A finished Big Push battle, portable: seed + envelope log IS the battle. */
+export interface ReplayRecord {
+  v: 1
+  seedStr: string
+  matchLen: import('../core/types').MatchLength
+  /** From-start AI persona to re-derive (SP), or null (MP — adopted-AI
+   *  envelopes are in the log). */
+  persona: import('../sim/ai').AiPersona | null
+  envs: import('../sim/commands').Envelope[]
+}
+
 export interface IntelData {
   wave: number
   date: string
@@ -157,12 +168,21 @@ export class Game {
   net: LockstepSession | null = null
   /** Which commander this machine is. Always 'brit' outside multiplayer. */
   mySide: Team = 'brit'
+  /** main.ts hooks this to reopen the signaling room so the peer can rejoin. */
+  onNetPeerLost: (() => void) | null = null
+  /** Watching a recorded battle: commands are history, input is camera-only. */
+  replayMode = false
+  static readonly REPLAY_KEY = 'ms-war-diary'
+  /** The from-start AI persona of the CURRENT run (null in MP) — recorded
+   *  into the replay so playback re-derives the same AI from the seed. */
+  private runPersona: import('../sim/ai').AiPersona | null = null
   get theirSide(): Team { return this.mySide === 'brit' ? 'german' : 'brit' }
   seedStr = ''
   difficulty: Difficulty = 'front'
   private runRand: Rand = Math.random
   /** Local command sink. All player actions route through here. */
   private submit(cmds: Cmd[]): void {
+    if (this.replayMode) return // the war diary is already written
     if (this.net) this.net.submit(cmds)
     else this.runner?.submit('brit', cmds)
   }
@@ -426,7 +446,7 @@ export class Game {
   // Run lifecycle
   // -------------------------------------------------------------------------
 
-  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; net?: { transport: Transport; side: Team; isCreator: boolean } }): void {
+  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; net?: { transport: Transport; side: Team; isCreator: boolean; catchUp?: boolean }; replay?: ReplayRecord }): void {
     this.seedStr = seedStr
     this.difficulty = difficulty
     // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
@@ -488,6 +508,7 @@ export class Game {
           onPeerLost: () => {
             if (this.theirSide === 'german') {
               this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn')
+              this.onNetPeerLost?.()
             } else {
               // No AI can command Britain yet (#41): the German human wins
               // by walkover. The peer is gone, so ending locally is safe.
@@ -505,7 +526,14 @@ export class Game {
       this.runner = this.net.runner
     } else {
       this.mySide = 'brit'
-      this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: mode === 'bigpush' ? (bigpush?.persona ?? 'methodical') : null })
+      // Replays re-derive the from-start AI from the seed, so the persona
+      // must match the recording exactly — including null for MP diaries
+      // (their adopted-AI envelopes travel in the log instead).
+      const persona = mode !== 'bigpush' ? null
+        : bigpush?.replay ? bigpush.replay.persona
+        : (bigpush?.persona ?? 'methodical')
+      this.runPersona = persona
+      this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: persona })
     }
     this.leashZ = this.mySide === 'german' ? -(WORLD.frontTrenchZ - 12) : WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
@@ -548,6 +576,25 @@ export class Game {
     this.applySettings(this.settings)
     // Plan the first wave (fires wavePrepared → intel paper via the handlers above).
     this.runner!.begin()
+    // Rejoining a battle already in progress: ask the survivor for the log
+    // and fast-forward (the same rebuild path desync recovery uses).
+    if (this.net && netCfg?.catchUp) {
+      this.hud?.toast('Rejoining the battle — the runners are bringing the war diary…', 'info')
+      this.net.requestLog()
+    }
+    // War diary playback: the whole battle is in the envelopes. Speed keys
+    // work; commands are refused at the submit() door.
+    this.replayMode = Boolean(mode === 'bigpush' && bigpush?.replay)
+    if (mode === 'bigpush' && bigpush?.replay) {
+      for (const env of bigpush.replay.envs) {
+        this.runner!.enqueue(JSON.parse(JSON.stringify(env)) as import('../sim/commands').Envelope)
+      }
+      this.hud?.toast('WAR DIARY — replaying the last battle. Speed keys work; the orders are history.', 'info')
+    }
+  }
+
+  startReplay(rec: ReplayRecord): void {
+    this.startRun(rec.seedStr, 'front', null, 'bigpush', { matchLen: rec.matchLen, replay: rec })
   }
 
   private subscribeEvents(): void {
@@ -651,6 +698,19 @@ export class Game {
       const s = this.ctx.s
       this.modalOpen = true
       this.running = false
+      // Every finished Big Push battle leaves a war diary: seed + envelope
+      // log is the WHOLE battle (the replay contract). MP diaries carry the
+      // adopted-AI envelopes in the log, so persona stays null for them.
+      if (s.mode === 'bigpush' && !this.replayMode && this.runner) {
+        try {
+          const rec: ReplayRecord = {
+            v: 1, seedStr: this.seedStr, matchLen: s.matchLen,
+            persona: this.net ? null : this.runPersona,
+            envs: this.runner.log,
+          }
+          localStorage.setItem(Game.REPLAY_KEY, JSON.stringify(rec))
+        } catch { /* storage full or blocked — the diary is a luxury */ }
+      }
       if (s.mode === 'classic') {
         submitScore(s.stats.score)
         clearRun()
@@ -1336,7 +1396,7 @@ export class Game {
 
     // The Big Push camera leash: follow your men forward within ~0.5 s;
     // ease back over ~3 s when the forward men die (never yank the view).
-    if (s.mode === 'bigpush' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active) {
+    if (s.mode === 'bigpush' && this.running && s.outcome === 'ongoing' && !this.fpsMode.active && !this.replayMode) {
       if (this.mySide === 'brit') {
         const want = s.advance.brit - 12
         const tau = want < this.leashZ ? 0.15 : 1.0

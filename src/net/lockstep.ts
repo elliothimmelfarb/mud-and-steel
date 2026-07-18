@@ -26,7 +26,9 @@ export type NetMsg =
   /** Joiner's pre-battle beacon; the host answers with hello, echoing the
    *  nonce so exactly ONE joiner pairs (BroadcastChannel rooms are open). */
   | { t: 'hi'; nonce: string }
-  | { t: 'hello'; seedStr: string; matchLen: MatchLength; hostSide: Team; nonce: string }
+  /** tick > 0 means the battle is already running: the joiner is a REJOINER
+   *  and must requestLog() to fast-forward before stepping. */
+  | { t: 'hello'; seedStr: string; matchLen: MatchLength; hostSide: Team; nonce: string; tick: number }
   | { t: 'env'; env: Envelope }
   /** Sent after every stepped tick. SEALS the sender's inputs: because the
    *  channel is ordered and submits stamp tick+INPUT_DELAY, once you hold

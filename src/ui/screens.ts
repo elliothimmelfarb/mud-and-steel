@@ -298,6 +298,8 @@ export function createTitleScreen(o: {
     seed: string;
     status: (line: string) => void;
   }) => void;
+  /** Watch the recorded last battle (shown only when a war diary exists). */
+  onWarDiary?: () => void;
   onContinue: () => void;
   onSettings: () => void;
   onHelp: () => void;
@@ -527,6 +529,7 @@ export function createTitleScreen(o: {
     const bpActions = div('title-new__actions');
     bpActions.appendChild(chit('Back', 'ms-btn ms-btn--ghost', () => showMain()));
     bpActions.appendChild(chit('Over the Top', 'ms-btn ms-btn--primary', bpBegin));
+    if (o.onWarDiary) bpActions.appendChild(chit('War Diary', 'ms-btn ms-btn--ghost', () => o.onWarDiary?.()));
     bpPanel.appendChild(bpActions);
   }
 
