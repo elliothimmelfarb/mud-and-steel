@@ -578,6 +578,8 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
           if (u.disbanded) continue
           const w = u.crew.find((x) => x.id === cmd.targetId)
           if (!w) continue
+          // A medic cannot dress his own wounds (parity with the old rule).
+          if (w.id === c.id) return
           if (w.hp <= 0 || dist2(w.pos.x, w.pos.z, c.pos.x, c.pos.z) > reach2) return
           w.hp = Math.min(w.maxHp, w.hp + 14 * ctx.mods.healRate * secs)
           return

@@ -865,6 +865,9 @@ export class FpsMode {
     // through). The sim-side guard (ctx.fpsInvincible, mirrored here) stops
     // killSoldier from ever running on him so no lethal round leaves him stuck in
     // the 'dead' stance; this tops his hp back up and clears suppression/gas.
+    // Never in a net match: this pin writes hashed state outside the command
+    // stream — lab-only by construction, and belt-and-braces here.
+    if (g.net) this.debugInvincible = false
     g.ctx.fpsInvincible = this.debugInvincible
     if (this.debugInvincible) {
       s.hp = s.maxHp; s.suppression = 0; s.gasExposure = 0
