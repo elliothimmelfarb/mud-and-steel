@@ -28,6 +28,20 @@ export const SIM_DT = 1 / WORLD.simHz
 /** Big Push reinforcement column walking pace (m/s); mud slows it locally. */
 export const MARCH_SPEED = 2.0
 
+/** The Big Push: continuous real-time economy, strength pools, match clocks. */
+export const BIGPUSH = {
+  standToSeconds: 60,       // opening ceasefire to set up
+  startReq: 450,
+  dripPerSecond: 1.2,       // ~12 per 10 s
+  laneBonus: 0.5,           // +50% drip while holding the sunken lane
+  laneHalfWidth: 9,         // |z| band that counts as the lane
+  capturedSectionBonus: 0.1,// +10% drip per enemy-home front section held
+  strengthStart: 100,
+  strengthPerMan: 0.9,      // battalion strength drained per man killed
+  holdWinSeconds: 60,       // attrition: hold majority of enemy front this long
+  matchSeconds: { raid: 600, battle: 1200, grand: 2100, attrition: 0 } as Record<string, number>,
+} as const
+
 /** Front trench span and zigzag geometry (traverses every ~12 m). */
 export const TRENCH = {
   frontSpanX: 112,      // front line x ∈ [-112, 112]

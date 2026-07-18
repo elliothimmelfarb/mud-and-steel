@@ -8,7 +8,7 @@
  * can bury your own charge.
  */
 import type { Enemy, Soldier, Team, Unit, Vehicle } from '../core/types'
-import { COMBAT, ENEMY_DEFS, MARKSMAN_KILLS, RANKS, SQUAD, UNIT_DEFS, VET_ACC_BONUS, XP_PER_KILL } from '../core/config'
+import { BIGPUSH, COMBAT, ENEMY_DEFS, MARKSMAN_KILLS, RANKS, SQUAD, UNIT_DEFS, VET_ACC_BONUS, XP_PER_KILL } from '../core/config'
 import { dist2, fx, snd, type Ctx } from './sim'
 import { damageParapet, parapetFactor, sectionAt } from './trench'
 import { fireBullet, muzzlePos, standSurface, G } from './ballistics'
@@ -185,6 +185,10 @@ export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooter
   if (target.stance === 'dead') return // never record the same man twice
   target.hp = 0
   target.stance = 'dead'
+  // Big Push: every man killed drains his battalion's strength pool.
+  if (s.mode === 'bigpush') {
+    s.strength[target.team] = Math.max(0, s.strength[target.team] - BIGPUSH.strengthPerMan)
+  }
   const y = ctx.terrain.heightAt(target.pos.x, target.pos.z)
   s.corpses.push({
     x: target.pos.x, z: target.pos.z, y, facing: target.facing,

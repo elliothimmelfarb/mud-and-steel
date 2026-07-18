@@ -23,7 +23,7 @@ export interface GameEvents {
   promoted: { unitId: number; vet: number }
   deed: { unitId: number; deed: string; cite: string }
   reqChanged: { req: number }
-  gameOver: { victory: boolean }
+  gameOver: { victory: boolean; draw?: boolean }
   toast: { text: string; kind: 'info' | 'warn' | 'danger' | 'good' }
 }
 

@@ -297,7 +297,7 @@ export class Hud implements HudBridge {
     const s = g.ctx.s
     const t = this.topInfo
 
-    t.req.textContent = `£${s.req}`
+    t.req.textContent = `£${Math.floor(s.req)}`
     t.wave.textContent = `WAVE ${s.wave}`
     t.date.textContent = fieldDateShort(s.wave)
     t.enemies.textContent = s.phase === 'assault'

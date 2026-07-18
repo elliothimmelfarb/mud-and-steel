@@ -231,7 +231,10 @@ export interface CreepingBarrage {
 }
 
 /** Terminal state of a run/match; sim stops advancing phase once decided. */
-export type MatchOutcome = 'ongoing' | 'victory' | 'defeat'
+export type MatchOutcome = 'ongoing' | 'victory' | 'defeat' | 'draw'
+
+/** Big Push match length, chosen at match creation (spec section 3). */
+export type MatchLength = 'raid' | 'battle' | 'grand' | 'attrition'
 
 // ---------------------------------------------------------------------------
 // Ordnance / hazards
