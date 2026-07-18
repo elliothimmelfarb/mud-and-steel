@@ -177,8 +177,11 @@ export class Scenery {
     const revet = makeInstanced(revetmentPanelGeometry(1.45), 260, this.scene)
     // Timber facing on the fire step's riser. The carved bench is real geometry,
     // but at the terrain's 1 m cell it renders as a smooth ramp — this plank
-    // face is what makes it read as a BUILT step from the trench floor.
-    const stepFace = makeInstanced(revetmentPanelGeometry(1.5), 260, this.scene)
+    // face is what makes it read as a BUILT step from the trench floor. LOW on
+    // purpose: a full-height face at the centreline reads as a fence walling
+    // the trench (and pokes into the skyline from behind); a boarded lower
+    // riser under an earth lip reads as a two-tier fire step.
+    const stepFace = makeInstanced(revetmentPanelGeometry(1.0), 260, this.scene)
     const sheets = makeInstanced(corrugatedSheetGeometry(), 90, this.scene)
     const ladders = makeInstanced(scalingLadderGeometry(), 24, this.scene)
     let bg = 0, rv = 0, sf = 0, sh = 0, ld = 0
@@ -207,46 +210,71 @@ export class Scenery {
         // face looks the other way — out of the riser, across the deep floor.
         const yaw = Math.atan2(nx, nz)
         const yawIn = Math.atan2(-nx, -nz)
+        // Along-segment unit vector, for probing where an instance's two ENDS
+        // will land. At every 90° corner a perpendicular corridor crosses the
+        // segment end — dressing laid blindly there juts into the path, so
+        // each piece first checks the ground it needs actually exists.
+        const ax = abx / len, az = abz / len
         for (let d = 1.15; d < len - 0.5; d += 2.3) {
           const cx = a.x + abx * (d / len)
           const cz = a.z + abz * (d / len)
           // Sandbag course nests into the enemy parapet crest, with a touch of
-          // settle-roll so a long wall undulates instead of beading.
+          // settle-roll so a long wall undulates instead of beading. Skip any
+          // run whose ends would hang over a crossing corridor's cut.
           if (bg < 378) {
             const sx = cx + nx * (TRENCH.width / 2 + 0.85)
             const sz = cz + nz * (TRENCH.width / 2 + 0.85)
-            _e.set(0, yaw, (rand() - 0.5) * 0.07)
-            _q.setFromEuler(_e)
-            _v.set(sx, t.heightAt(sx, sz) - 0.07, sz)
-            _m.compose(_v, _q, _s)
-            bags.setMatrixAt(bg++, _m)
+            const overhangs = t.trenchAt(sx - ax * 1.15, sz - az * 1.15) > 0.2
+              || t.trenchAt(sx + ax * 1.15, sz + az * 1.15) > 0.2
+            if (!overhangs) {
+              _e.set(0, yaw, (rand() - 0.5) * 0.07)
+              _q.setFromEuler(_e)
+              _v.set(sx, t.heightAt(sx, sz) - 0.07, sz)
+              _m.compose(_v, _q, _s)
+              bags.setMatrixAt(bg++, _m)
+            }
           }
           if (!full) continue
+          // Wall pieces seat on the DEEP floor. Near corners the floor sample
+          // can land on a half-carved ramp — the whole panel rides up and its
+          // top clears the lip. The trench mask is the depth truth: skip any
+          // site whose floor isn't genuinely down.
+          if (t.trenchAt(cx - nx * 0.5, cz - nz * 0.5) < 0.72) continue
           const floorY = t.heightAt(cx - nx * 0.5, cz - nz * 0.5)
           // Parados plank revetment: base pushed into the wall foot, panel
           // raked back to the wall's measured rise so it LIES on the slope.
+          // Only where BOTH panel ends have a wall behind them — at corners
+          // the crossing corridor leaves nothing to lean on.
           if (rv < 256) {
-            const wallY = t.heightAt(cx - nx * 2.1, cz - nz * 2.1)
-            const rise = Math.max(0.9, wallY - floorY)
-            const lean = Math.min(0.62, Math.atan2(1.5, rise))
-            _e.set(-lean, yaw, 0, 'YXZ')
-            _q.setFromEuler(_e)
-            _v.set(cx - nx * 0.95, floorY - 0.05, cz - nz * 0.95)
-            _m.compose(_v, _q, _s)
-            revet.setMatrixAt(rv++, _m)
+            const px = cx - nx * 0.95, pz = cz - nz * 0.95
+            const wallAt = (ex: number, ez: number): number =>
+              t.heightAt(ex - nx * 0.75, ez - nz * 0.75) - floorY
+            if (wallAt(px - ax, pz - az) > 0.9 && wallAt(px + ax, pz + az) > 0.9) {
+              const wallY = t.heightAt(cx - nx * 2.1, cz - nz * 2.1)
+              const rise = Math.max(0.9, wallY - floorY)
+              const lean = Math.min(0.62, Math.atan2(1.5, rise))
+              _e.set(-lean, yaw, 0, 'YXZ')
+              _q.setFromEuler(_e)
+              _v.set(px, floorY - 0.05, pz)
+              _m.compose(_v, _q, _s)
+              revet.setMatrixAt(rv++, _m)
+            }
           }
           // Fire-step riser face: seated at the bench's foot, raked to the
           // riser, top tucked under the bench edge. Bays only — links have a
-          // plain symmetric floor, no bench.
+          // plain symmetric floor, no bench — and only where the bench truly
+          // rises behind both panel ends.
           if (isBay && sf < 256) {
-            const benchY = t.heightAt(cx + nx * 1.0, cz + nz * 1.0)
-            const rise = Math.max(0.9, benchY - floorY)
-            const lean = Math.min(0.5, Math.atan2(0.8, rise))
-            _e.set(-lean, yawIn, 0, 'YXZ')
-            _q.setFromEuler(_e)
-            _v.set(cx - nx * 0.05, floorY - 0.03, cz - nz * 0.05)
-            _m.compose(_v, _q, _s)
-            stepFace.setMatrixAt(sf++, _m)
+            const px = cx - nx * 0.15, pz = cz - nz * 0.15
+            const benchBehind = (ex: number, ez: number): number =>
+              t.heightAt(ex + nx * 0.95, ez + nz * 0.95) - floorY
+            if (benchBehind(px - ax, pz - az) > 0.9 && benchBehind(px + ax, pz + az) > 0.9) {
+              _e.set(-0.42, yawIn, 0, 'YXZ')
+              _q.setFromEuler(_e)
+              _v.set(px, floorY - 0.03, pz)
+              _m.compose(_v, _q, _s)
+              stepFace.setMatrixAt(sf++, _m)
+            }
           }
         }
         if (!full) continue
@@ -254,6 +282,7 @@ export class Scenery {
         if (sh < 90 && rand() < 0.45) {
           const f = 0.25 + rand() * 0.5
           const cx = a.x + abx * f, cz = a.z + abz * f
+          if (t.trenchAt(cx - nx * 0.5, cz - nz * 0.5) < 0.72) continue
           const floorY = t.heightAt(cx - nx * 0.5, cz - nz * 0.5)
           _e.set(-0.5 - rand() * 0.15, yaw + (rand() - 0.5) * 0.3, 0, 'YXZ')
           _q.setFromEuler(_e)
@@ -264,14 +293,20 @@ export class Scenery {
         // Scaling ladders against the enemy wall of the fire bays, head over
         // the parapet — ready for a raid. Front line only, every few bays.
         if (line === t.frontLine && isBay && ld < 24 && s % 3 === 0) {
-          const f = 0.62 + rand() * 0.2
+          // Mid-bay, between sandbag runs — at a corner a ladder reads as a
+          // stray plank; centred on the bay it reads as what it is.
+          const f = 0.42 + rand() * 0.12
           const cx = a.x + abx * f, cz = a.z + abz * f
-          const benchY = t.heightAt(cx + nx * 1.1, cz + nz * 1.1)
-          _e.set(-0.34, yawIn, 0, 'YXZ')
-          _q.setFromEuler(_e)
-          _v.set(cx + nx * 1.1, benchY - 0.02, cz + nz * 1.1)
-          _m.compose(_v, _q, _s)
-          ladders.setMatrixAt(ld++, _m)
+          // Feet must stand ON the bench (mask ≈ 0 there); a corner cut reads
+          // as corridor and would drop the ladder into the path.
+          if (t.trenchAt(cx + nx * 1.1, cz + nz * 1.1) < 0.2) {
+            const benchY = t.heightAt(cx + nx * 1.1, cz + nz * 1.1)
+            _e.set(-0.34, yawIn, 0, 'YXZ')
+            _q.setFromEuler(_e)
+            _v.set(cx + nx * 1.1, benchY - 0.02, cz + nz * 1.1)
+            _m.compose(_v, _q, _s)
+            ladders.setMatrixAt(ld++, _m)
+          }
         }
       }
     }
