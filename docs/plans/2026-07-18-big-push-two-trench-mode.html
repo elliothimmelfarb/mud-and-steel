@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operation Order — The Big Push: Two-Trench Assault Mode</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f;
+    --brit:#5a6b3f; --hun:#5c5a66; --nml:#8d7a55;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33;
+      --brit:#8ba065; --hun:#9a97ab; --nml:#a08c60;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:960px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.3rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:66ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:.55rem 1rem;text-align:center;min-width:8.5rem}
+  .tally b{display:block;font-size:1.35rem;color:var(--brass)}
+  .tally span{font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--khaki)}
+  h2.part{
+    font-variant:small-caps;letter-spacing:.1em;font-size:1.45rem;margin:2.8rem 0 1rem;
+    border-bottom:2px solid var(--rule);padding-bottom:.3rem;color:var(--ink)
+  }
+  h2.part small{font-size:.7rem;letter-spacing:.3em;color:var(--khaki);display:block;font-variant:normal}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.priority{border-left-color:var(--blood)}
+  section.item.steel{border-left-color:var(--steel)}
+  h3{font-size:1.15rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.5rem}
+  h4{font-size:.95rem;font-variant:small-caps;letter-spacing:.05em;color:var(--ink-soft);margin:.9rem 0 .3rem}
+  .tag{font-size:.66rem;letter-spacing:.22em;text-transform:uppercase;color:var(--blood);margin-bottom:.35rem}
+  .cause{
+    border-left:3px solid var(--steel);padding:.5rem .9rem;margin:.7rem 0;
+    background:color-mix(in srgb, var(--steel) 8%, transparent);
+    font-size:.93rem;
+  }
+  .cause b{font-variant:small-caps;letter-spacing:.08em;color:var(--steel)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.83em;background:color-mix(in srgb, var(--rule) 26%, transparent);padding:.06em .32em;border-radius:3px}
+  a{color:var(--brass);text-decoration-color:var(--rule)}
+  table{width:100%;border-collapse:collapse;font-size:.9rem;margin:.7rem 0}
+  th{font-variant:small-caps;letter-spacing:.06em;text-align:left;color:var(--khaki);border-bottom:2px solid var(--rule);padding:.4rem .5rem;font-size:.82rem}
+  td{border-bottom:1px solid color-mix(in srgb, var(--rule) 55%, transparent);padding:.45rem .5rem;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .fig{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:1rem 1rem .6rem;margin:1.2rem 0;overflow-x:auto}
+  .fig figcaption{font-size:.78rem;font-style:italic;color:var(--khaki);text-align:center;padding:.5rem 0 .2rem}
+  .fig svg{display:block;margin:0 auto;max-width:100%;height:auto}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:1.4rem}
+  @media (max-width:720px){ .cols{grid-template-columns:1fr} }
+  .pill{display:inline-block;font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;border:1px solid var(--rule);border-radius:99px;padding:.1rem .55rem;color:var(--khaki);margin-left:.4rem;vertical-align:middle}
+  .pill.ship{border-color:var(--blood);color:var(--blood);font-weight:bold}
+  .size{font-weight:bold;color:var(--brass)}
+  .followups{border:1px dashed var(--rule);border-radius:4px;padding:1.2rem 1.5rem;margin-top:2.4rem;background:transparent}
+  .followups h3{color:var(--khaki)}
+  footer{text-align:center;margin-top:2.6rem;color:var(--khaki);font-size:.8rem;letter-spacing:.15em;text-transform:uppercase}
+  footer .sig{font-family:'Snell Roundhand','Segoe Script',cursive;font-size:1.5rem;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-top:.4rem}
+  .reframe{
+    border:2px solid var(--brass);border-radius:6px;padding:1.3rem 1.6rem;margin:1.6rem 0;
+    background:color-mix(in srgb, var(--brass) 7%, transparent);
+  }
+  .reframe h3{color:var(--brass)}
+  .reframe p{margin:.4rem 0}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="crest">Operation Order · Battalion Workshops</div>
+  <h1>The Big Push</h1>
+  <div class="sub">MUD &amp; STEEL — a second trench, an enemy who buys men too, and the whistle that sends them over &nbsp;·&nbsp; 18 July 2026</div>
+  <div class="stamp">Plan of Attack</div>
+</header>
+
+<p class="lede">A new mode: <strong>two trench systems face each other across no-man's-land</strong>. Both commanders — human vs AI, or human vs human — spend requisition on soldiers who <strong>march in from their own rear</strong>, file up the communication trenches, and take their posts. Either side may order sections <strong>over the top</strong> to take the opposite line. This despatch covers the reconnaissance of the existing code, the design of the mode, and the architecture that makes singleplayer AI and multiplayer <em>the same feature</em>.</p>
+
+<div class="tally">
+  <div><b>30&nbsp;Hz</b><span>deterministic sim, already</span></div>
+  <div><b>0</b><span>three.js imports in src/sim</span></div>
+  <div><b>~8</b><span>one-sided assumptions to flip</span></div>
+  <div><b>7</b><span>milestones, 2 ship gates</span></div>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Part I</small>Reconnaissance — what the ground gives us</h2>
+
+<section class="item">
+  <h3>The sim is already multiplayer-shaped</h3>
+  <div class="cause"><b>Finding:</b> the simulation core is a fixed-timestep 30&nbsp;Hz machine (<code>SIM_DT</code>, <code>config.ts:26</code>; accumulator <code>game.ts:1387</code>) driven entirely by seeded, forked RNG streams (<code>rng.ts:9–33</code>). A grep of <code>src/sim/</code> finds <strong>zero</strong> uses of <code>Math.random</code>, <code>Date.now</code>, or <code>three</code> — the sim is pure data with one-way FX/sound queues out to the renderer.</div>
+  <ul>
+    <li>Fixed call order every tick: units → enemies → vehicles → projectiles → bullets → gas → capture (<code>game.ts:1446</code>). Same inputs, same seed → same battle.</li>
+    <li>The save system (v2, <code>save.ts:63</code>) already serialises nearly the whole state, including terrain deformation as a replayable op log (<code>craterOps</code>).</li>
+    <li>Three blemishes: module-global mutable state in <code>barrage.ts:26</code>, <code>gas.ts:11</code>, <code>vehicles.ts:16</code> lives outside <code>SimState</code> — invisible to saves and fatal to running two sims in one process.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <h3>The enemy already knows how to assault a trench — we just need to lend that brain to our own men</h3>
+  <div class="cause"><b>Finding:</b> German squads have the full attacking toolkit: wedge spawning with NCOs (<code>makeSquad</code>, <code>enemies.ts:485</code>), flow-field advance with boids cohesion (<code>enemies.ts:341</code>), bounding overwatch between elements (<code>updateSquads</code>, <code>enemies.ts:531</code>), shell-hole cover, wire cutting, trench melee, and section capture (<code>updateCapture</code>, <code>trench.ts:88</code>). British units, by contrast, <em>teleport</em> into their posts (<code>createUnit</code>, <code>game.ts:994</code>) and their only offensive move is the crude global bayonet-charge direct-seek (<code>chargeMove</code>, <code>soldiers.ts:285</code>).</div>
+  <ul>
+    <li>Friend and foe are structurally split: <code>SimState.units[].crew[]</code> vs <code>SimState.enemies[]</code>, with the AI brain fields (<code>behavior</code>, <code>squadId</code>, <code>element</code>) existing only on <code>Enemy</code> (<code>types.ts:129–160</code>).</li>
+    <li>Every soldier already carries a <code>team: 'brit' | 'german'</code> field — the seed of a faction system. <code>flameCone</code> is already faction-parameterised and used by both sides; it is the template.</li>
+    <li>The adaptive wave director (<code>planWave</code>, <code>waves.ts:37</code>) — budgets, templates, counter-purchases against your loadout — is 80% of an AI <em>commander</em> already.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <h3>The world is one-directional in exactly eight places</h3>
+  <div class="cause"><b>Finding:</b> trench carving is fully polyline-parameterised (<code>carveTrench</code> takes any line, <code>terrain.ts:626</code>), and all lines carve against one shared pre-trench snapshot (<code>terrain.ts:519</code>) so a second system composes correctly for free. But "the enemy is north (−z)" is hard-coded as a sign flip in a small, enumerable set of places — the fire-step normal, parapet/parados side, scenery dressing, rout direction, spawn edges, breach scoring, camera clamps. The full ledger is in Part IV.</div>
+  <ul>
+    <li>Rendering scales: every soldier of both armies is 14 instanced part-meshes — ~14 draw calls total whether 50 men or 500 (<code>unitMeshes.ts:5</code>). Hard cap <code>CAP=560</code> instances (<code>unitMeshes.ts:36</code>) needs raising for two full armies plus their dead.</li>
+    <li>Walk/run/charge gaits are already procedural and driven by <code>moveAmount</code> — <strong>marching-in animation costs nothing new</strong>.</li>
+    <li>The FPS possession seam (<code>fps.ts:256</code>) fires the same simulated ordnance as the AI — the player can stand in either trench of this mode from day one in singleplayer.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Part II</small>The unifying reframe</h2>
+
+<div class="reframe">
+  <h3>An AI opponent and a remote human are the same thing: a command stream</h3>
+  <p>The conventional plan would build this twice — an AI opponent bolted into the sim for singleplayer, then a separate netcode layer for multiplayer. That split is a design smell, and the deterministic sim dissolves it.</p>
+  <p><strong>Make every act of command a serialisable, tick-stamped <code>Command</code></strong> — <code>BuyUnit</code>, <code>OrderAssault</code>, <code>Recall</code>, <code>FireBarrage</code> — consumed by the sim only at tick boundaries. Then:</p>
+  <ul>
+    <li><strong>Singleplayer</strong> = your commands + a local AI commander emitting commands into the same queue.</li>
+    <li><strong>Multiplayer</strong> = your commands + a remote peer's commands arriving over the wire. No server-side sim needed — both clients run the same deterministic battle (lockstep).</li>
+    <li><strong>Replays</strong> = seed + the command log. Free.</li>
+    <li><strong>Rejoin after disconnect</strong> = replay the log at max speed. Free.</li>
+    <li><strong>The soak-test harness</strong> can drive full two-sided battles headless. Free.</li>
+  </ul>
+  <p>One architecture, four features. The AI commander is just the first network peer we ship.</p>
+</div>
+
+<figure class="fig">
+<svg viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="Georgia,serif">
+  <!-- sources -->
+  <g font-size="13" text-anchor="middle">
+    <rect x="20" y="30" width="170" height="58" rx="6" fill="none" stroke="var(--brit)" stroke-width="2"/>
+    <text x="105" y="54" fill="var(--ink)">Local player</text>
+    <text x="105" y="72" fill="var(--khaki)" font-size="11" font-style="italic">HUD · placement · orders</text>
+
+    <rect x="20" y="120" width="170" height="58" rx="6" fill="none" stroke="var(--steel)" stroke-width="2"/>
+    <text x="105" y="144" fill="var(--ink)">AI commander</text>
+    <text x="105" y="162" fill="var(--khaki)" font-size="11" font-style="italic">director → persona → buys</text>
+
+    <rect x="20" y="210" width="170" height="58" rx="6" fill="none" stroke="var(--hun)" stroke-width="2" stroke-dasharray="6 3"/>
+    <text x="105" y="234" fill="var(--ink)">Remote peer</text>
+    <text x="105" y="252" fill="var(--khaki)" font-size="11" font-style="italic">via relay · scheduled T+k</text>
+  </g>
+  <!-- arrows to queue -->
+  <g stroke="var(--khaki)" stroke-width="1.6" fill="var(--khaki)">
+    <path d="M190 59 H 260 L 300 130" fill="none"/>
+    <path d="M190 149 H 300" fill="none"/>
+    <path d="M190 239 H 260 L 300 168" fill="none"/>
+    <polygon points="300,130 291,127 293,136"/>
+    <polygon points="300,149 290,144 290,154"/>
+    <polygon points="300,168 293,162 291,171"/>
+  </g>
+  <!-- queue -->
+  <rect x="302" y="108" width="180" height="84" rx="6" fill="color-mix(in srgb, var(--brass) 10%, transparent)" stroke="var(--brass)" stroke-width="2"/>
+  <text x="392" y="138" fill="var(--ink)" font-size="13" text-anchor="middle">Command queue</text>
+  <text x="392" y="156" fill="var(--khaki)" font-size="11" text-anchor="middle" font-style="italic">tick-stamped · serialisable</text>
+  <text x="392" y="174" fill="var(--khaki)" font-size="11" text-anchor="middle" font-style="italic">applied at tick boundaries</text>
+  <!-- arrow to sim -->
+  <g stroke="var(--khaki)" stroke-width="1.6" fill="var(--khaki)">
+    <path d="M482 150 H 540" fill="none"/>
+    <polygon points="540,150 530,145 530,155"/>
+  </g>
+  <!-- sim -->
+  <rect x="542" y="96" width="200" height="108" rx="6" fill="color-mix(in srgb, var(--blood) 8%, transparent)" stroke="var(--blood)" stroke-width="2"/>
+  <text x="642" y="126" fill="var(--ink)" font-size="14" text-anchor="middle" font-weight="bold">Deterministic sim</text>
+  <text x="642" y="146" fill="var(--khaki)" font-size="11" text-anchor="middle" font-style="italic">30 Hz fixed step · seeded RNG</text>
+  <text x="642" y="164" fill="var(--khaki)" font-size="11" text-anchor="middle" font-style="italic">state hash every 30 ticks</text>
+  <text x="642" y="182" fill="var(--khaki)" font-size="11" text-anchor="middle" font-style="italic">runs identically on both clients</text>
+  <!-- outputs -->
+  <g stroke="var(--khaki)" stroke-width="1.6" fill="var(--khaki)">
+    <path d="M742 120 H 790" fill="none"/><polygon points="790,120 780,115 780,125"/>
+    <path d="M742 180 H 790" fill="none"/><polygon points="790,180 780,175 780,185"/>
+  </g>
+  <g font-size="12" fill="var(--ink)">
+    <text x="798" y="116">render</text><text x="798" y="131" fill="var(--khaki)" font-size="10" font-style="italic">(local only)</text>
+    <text x="798" y="176">replay log</text><text x="798" y="191" fill="var(--khaki)" font-size="10" font-style="italic">seed + commands</text>
+  </g>
+</svg>
+<figcaption>Fig. 1 — One spine for every mode. Swap the dashed box in and the AI box out: that is the whole difference between singleplayer and multiplayer.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Part III</small>The mode — design</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 880 460" xmlns="http://www.w3.org/2000/svg" font-family="Georgia,serif">
+  <!-- ground -->
+  <rect x="40" y="20" width="800" height="420" rx="4" fill="color-mix(in srgb, var(--nml) 12%, transparent)" stroke="var(--rule)"/>
+  <!-- german rear -->
+  <rect x="40" y="20" width="800" height="60" fill="color-mix(in srgb, var(--hun) 14%, transparent)"/>
+  <text x="60" y="45" fill="var(--hun)" font-size="12" font-variant="small-caps" letter-spacing="2">German rear · reinforcement edge z = −220</text>
+  <!-- german support -->
+  <path d="M80 110 L 200 104 L 320 114 L 440 106 L 560 112 L 680 105 L 800 111" fill="none" stroke="var(--hun)" stroke-width="5" stroke-linecap="round"/>
+  <text x="60" y="132" fill="var(--hun)" font-size="11" font-style="italic">support line z ≈ −150</text>
+  <!-- german comm trenches -->
+  <g stroke="var(--hun)" stroke-width="2.5" fill="none" opacity=".75">
+    <path d="M170 108 L 160 140 L 185 160 L 175 186"/>
+    <path d="M450 108 L 462 138 L 440 162 L 452 184"/>
+    <path d="M710 108 L 700 142 L 722 164 L 712 186"/>
+  </g>
+  <!-- german front -->
+  <path d="M80 190 L 150 184 L 165 196 L 260 188 L 280 198 L 390 186 L 410 197 L 520 188 L 545 198 L 650 187 L 672 196 L 800 189" fill="none" stroke="var(--hun)" stroke-width="6" stroke-linecap="round"/>
+  <text x="60" y="176" fill="var(--hun)" font-size="12" font-weight="bold" font-variant="small-caps">German front z = −80</text>
+  <!-- NML + objective -->
+  <path d="M80 230 Q 240 222 440 231 T 800 229" fill="none" stroke="var(--nml)" stroke-width="9" opacity=".55" stroke-linecap="round"/>
+  <text x="440" y="222" fill="var(--nml)" font-size="12" text-anchor="middle" font-variant="small-caps" font-weight="bold">the sunken lane · z ≈ 0 · contested supply objective</text>
+  <g fill="var(--nml)" font-size="11" font-style="italic">
+    <text x="440" y="262" text-anchor="middle">no-man's-land · 160 m · wire, craters, dead ground</text>
+  </g>
+  <!-- brit front -->
+  <path d="M80 290 L 140 284 L 158 295 L 250 286 L 272 296 L 380 285 L 400 296 L 510 287 L 532 297 L 640 286 L 662 295 L 800 288" fill="none" stroke="var(--brit)" stroke-width="6" stroke-linecap="round"/>
+  <text x="60" y="316" fill="var(--brit)" font-size="12" font-weight="bold" font-variant="small-caps">British front z = +80</text>
+  <!-- brit comm -->
+  <g stroke="var(--brit)" stroke-width="2.5" fill="none" opacity=".75">
+    <path d="M210 292 L 200 320 L 224 342 L 214 366"/>
+    <path d="M470 292 L 482 320 L 460 344 L 472 366"/>
+    <path d="M690 292 L 680 322 L 702 344 L 692 366"/>
+  </g>
+  <!-- brit support -->
+  <path d="M80 370 L 200 364 L 320 373 L 440 365 L 560 372 L 680 364 L 800 370" fill="none" stroke="var(--brit)" stroke-width="5" stroke-linecap="round"/>
+  <text x="60" y="392" fill="var(--brit)" font-size="11" font-style="italic">support line z ≈ +150</text>
+  <!-- brit rear -->
+  <rect x="40" y="400" width="800" height="40" fill="color-mix(in srgb, var(--brit) 14%, transparent)"/>
+  <text x="60" y="425" fill="var(--brit)" font-size="12" font-variant="small-caps" letter-spacing="2">British rear · reinforcement edge z = +220</text>
+  <!-- march arrows -->
+  <g stroke="var(--brit)" stroke-width="2" fill="var(--brit)">
+    <path d="M330 415 L 330 380" fill="none" stroke-dasharray="4 3"/>
+    <polygon points="330,376 325,386 335,386"/>
+  </g>
+  <text x="342" y="404" fill="var(--brit)" font-size="10" font-style="italic">columns march in</text>
+  <g stroke="var(--hun)" stroke-width="2" fill="var(--hun)">
+    <path d="M600 48 L 600 96" fill="none" stroke-dasharray="4 3"/>
+    <polygon points="600,100 595,90 605,90"/>
+  </g>
+  <!-- assault arrows -->
+  <g stroke="var(--blood)" stroke-width="3" fill="var(--blood)">
+    <path d="M180 282 C 175 260 178 240 182 204" fill="none"/>
+    <polygon points="182,198 175,208 189,207"/>
+    <path d="M240 283 C 245 258 240 238 236 204" fill="none"/>
+    <polygon points="236,198 229,207 243,208"/>
+  </g>
+  <text x="211" y="247" fill="var(--blood)" font-size="11" font-weight="bold" text-anchor="middle" transform="rotate(-84 211 247)">OVER THE TOP</text>
+  <g stroke="var(--steel)" stroke-width="2.5" fill="none" opacity=".8">
+    <rect x="560" y="196" width="120" height="14" rx="3" stroke-dasharray="5 3"/>
+  </g>
+  <text x="620" y="180" fill="var(--steel)" font-size="10" text-anchor="middle" font-style="italic">box barrage isolating the objective sections</text>
+</svg>
+<figcaption>Fig. 2 — The mirrored battlefield. Map stays 300 × 440 m; the front lines move to z = ∓80, giving a 160 m no-man's-land with the existing sunken lane recut through the middle as a contested objective.</figcaption>
+</figure>
+
+<section class="item">
+  <h3>1 · The ground</h3>
+  <ul>
+    <li><strong>Mirror, don't invent.</strong> The German system is the British one reflected about z = 0: front at −80, support at −150, comm trenches between, rear edge at −220. <code>buildTrenchPolylines</code> already takes arbitrary lines; carving both systems against the shared pre-trench snapshot composes correctly today.</li>
+    <li><strong>One new parameter: facing.</strong> Thread an <code>enemyDir: ±1</code> sign through <code>carveTrench</code> (fire-step wall, parapet side) and the scenery dressing loops, replacing the four hard-coded <code>if (nz &gt; 0) flip</code> tests. The fire step of the north trench faces <em>south</em>; its parapet sandbags face south; its duckboards nudge north.</li>
+    <li><strong>The sunken lane becomes the prize.</strong> It already exists (<code>terrain.ts:480</code>); recut it along z ≈ 0. Holding it grants a supply-rate bonus (Part III·3) — a reason to fight <em>in</em> no-man's-land, not just across it.</li>
+    <li><strong>Captured trenches are bad homes.</strong> A taken section's fire step faces the wrong way — occupiers get parados cover only, until an engineer "consolidates" (reverses the bench over ~40 s). This falls straight out of the terrain-height-is-cover invariant, and it is exactly what made real trench raids so costly to hold. A physics quirk becomes the mode's central tactical dilemma: raid or hold?</li>
+  </ul>
+</section>
+
+<section class="item">
+  <h3>2 · Men arrive, they do not appear</h3>
+  <ul>
+    <li><strong>Buying = despatching a column.</strong> A purchase spawns the crew at your rear edge in single file. They path to the nearest communication trench mouth, file along the comm trench polyline (duckboard walking, already-animated gait), emerge at the assigned post, and <code>formUp</code>. ETA shown on the ghost at purchase time (~35–60 s by distance).</li>
+    <li><strong>In-transit men are real.</strong> They can be shelled on the march — columns caught in a barrage scatter to shell holes (reuse <code>takecover</code>) and resume. Losing half a platoon on the way up is a story, and a reason to buy before you're desperate.</li>
+    <li><strong>Implementation:</strong> a <code>marchingIn</code> unit state with a waypoint list built from <code>commLines</code> + a short flow-field leg to the post. No new pathfinder — the FlowField class is faction-agnostic and takes any target set.</li>
+    <li><strong>The build/assault phase machine dissolves.</strong> This mode is continuous real time (with an opening 60 s stand-to ceasefire to set up). Reinforcement travel time <em>is</em> the pacing mechanism that build timers used to provide.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <h3>3 · Economy — divisional supply</h3>
+  <ul>
+    <li>Both sides start with the same requisition pool (~£450) and receive a steady drip (~£12 per 10 s), so matches escalate rather than stall.</li>
+    <li>Holding the sunken lane raises your drip by ~50%; holding captured enemy front sections raises it further. Aggression compounds.</li>
+    <li>Existing roster and prices carry over unchanged (<code>UNIT_DEFS</code>, <code>config.ts:111</code>); the German commander buys from a mirrored roster (same stats, German meshes) in v1 — asymmetric national rosters are a post-ship flavour pass.</li>
+    <li>Casualties drain a per-side <strong>battalion strength</strong> pool (the two-sided descendant of the breach meter). It is a loss condition <em>and</em> the anti-turtle clock.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <h3>4 · Sections, groups, and the whistle</h3>
+  <ul>
+    <li><strong>Select a stretch of line</strong> by dragging along your trench (sections are already discrete data — <code>buildSections</code>, <code>trench.ts:10</code>), or stage a named <strong>assault group</strong> at the ladders. Selected sections glow with the existing brass-ribbon treatment.</li>
+    <li><strong>Orders, per selection</strong> (modelled on the <code>issueOrder</code> pattern, <code>game.ts:1126</code>):
+      <ul>
+        <li><strong>Over the top</strong> — whistle, ladders, and the selection's infantry form squads and advance on a chosen enemy section under the generalised squad AI: flow-field advance, bounding overwatch, wire cutting, melee, capture. This is the enemy's existing brain (<code>enemies.ts</code>) running southward-to-northward for our side.</li>
+        <li><strong>Covering fire</strong> — remaining sections concentrate on the assault frontage (target-priority override).</li>
+        <li><strong>Smoke / box barrage</strong> — existing barrage systems aimed to screen or isolate the objective.</li>
+        <li><strong>Recall</strong> — break off; squads fall back to their home fire steps (the existing <code>fallback</code> behaviour, aimed home instead of at the support line).</li>
+        <li><strong>Consolidate</strong> — engineers reverse a captured section's fire step and repair its parapet.</li>
+      </ul>
+    </li>
+    <li><strong>Win conditions:</strong> hold over half the enemy's front-line sections for 60 continuous seconds, <em>or</em> break the enemy's battalion strength. Timed variant for multiplayer lobbies: most sections held at the whistle.</li>
+    <li><strong>Embodiment carries over:</strong> possess any soldier — including one marching up the comm trench, or one going over the top — via the existing FPS seam. In singleplayer this works from the first playable build.</li>
+  </ul>
+</section>
+
+<section class="item steel">
+  <h3>5 · The AI commander</h3>
+  <ul>
+    <li>Reframe the adaptive wave director (<code>planWave</code>'s budget/template/counter logic, <code>waves.ts:37</code>) as a <strong>command emitter</strong>: it holds requisition, watches the same fog-free state, and issues <code>BuyUnit</code>/<code>OrderAssault</code> commands through the same queue as a human.</li>
+    <li>Personas set difficulty and character: <em>Methodical</em> (fortifies, probes, counter-buys), <em>Stosstrupp</em> (hoards for big pushes behind box barrages), <em>Opportunist</em> (attacks whichever of your sections is thinnest — it already reads your loadout to counter-buy).</li>
+    <li>Because it speaks the command protocol, the AI can also <strong>take over a disconnected player mid-match</strong> — an AI commander and a netcode fallback in one.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Part IV</small>Multiplayer — lockstep on the existing determinism</h2>
+
+<section class="item priority">
+  <h3>Architecture: deterministic lockstep, relay server, no server-side sim</h3>
+  <div class="cause"><b>Why lockstep:</b> commander input is low-rate (a few commands a minute, not twitch), the sim is already fixed-step and seeded, and state is far too rich to snapshot-stream at 30 Hz. Lockstep sends <em>only commands</em>; both clients compute identical battles. Bandwidth: bytes per second.</div>
+  <ul>
+    <li><strong>Scheduling:</strong> a command issued at tick T executes at T+6 (~200 ms) on both clients. Imperceptible for commander orders; the local HUD acknowledges instantly (whistle sound, ribbon flash) while the sim catches up.</li>
+    <li><strong>Transport v1: a ~150-line WebSocket relay</strong> (Node, fly.io/Render-class hosting) — rooms via 4-letter codes, relays command packets and tick acks, keeps the command log for late-join/rejoin. No game logic on the server at all. WebRTC DataChannel is a v2 latency upgrade that slots behind the same interface.</li>
+    <li><strong>Desync defence:</strong> every 30 ticks, hash the hot state (positions, hp, req, section ownership → 32-bit rolling hash) and exchange. On mismatch: pause, one client uploads a full snapshot (the v2 save format, extended to full <code>SimState</code>), both resume. Desyncs become a logged, recoverable event, not a mystery.</li>
+    <li><strong>Rejoin/replay:</strong> seed + command log <em>is</em> the match. Rejoin = fast-forward replay; spectating and post-match replays use the same path.</li>
+    <li><strong>FPS embodiment in multiplayer</strong> ships in a second pass: possessed movement/fire become tick-stamped intent commands (aim vector + trigger; spread already comes from seeded RNG in <code>fireSmallArms</code>), with local visual prediction. Until then, MP is commander-view; SP has full embodiment from the start.</li>
+  </ul>
+  <h4>Determinism risks, named</h4>
+  <table>
+    <tr><th>Risk</th><th>Reality</th><th>Mitigation</th></tr>
+    <tr><td>Module-global sim state</td><td><code>barrage.ts:26</code>, <code>gas.ts:11</code>, <code>vehicles.ts:16</code> — outside <code>SimState</code>, outside saves</td><td>M0 refactor: move onto <code>SimState</code>. Also unblocks headless soak-tests of full matches.</td></tr>
+    <tr><td>Cross-engine float math</td><td>IEEE arithmetic is identical everywhere, but <code>Math.sin/cos/pow</code> may differ between V8 and JSC</td><td>Hash check catches it in seconds. If it fires cross-browser: swap sim call sites to a small deterministic math shim (minimax approximations). Same-engine play is safe from day one.</td></tr>
+    <tr><td>Command/tick races</td><td>Input applied mid-tick today (imperatively in <code>game.ts</code>)</td><td>The command queue (Part II) applies inputs only at tick boundaries — this is the core M0 seam.</td></tr>
+    <tr><td>Two sims in one process</td><td>Needed for local AI-vs-AI soak tests</td><td>Falls out of the module-global fix; the AI commander itself needs no second sim (it reads shared state).</td></tr>
+  </table>
+</section>
+
+<section class="item steel">
+  <h3>The refactor ledger — every one-sided assumption, enumerated</h3>
+  <table>
+    <tr><th>Assumption</th><th>Where</th><th>Fix</th></tr>
+    <tr><td>Fire-step normal forced toward −z</td><td><code>terrain.ts:680</code>, <code>trench.ts:54</code></td><td><code>facing</code> sign on trench spec, threaded through carve + projection</td></tr>
+    <tr><td>Parapet/parados side test</td><td><code>terrain.ts:729/734</code></td><td>same <code>facing</code> sign</td></tr>
+    <tr><td>Scenery dressing flips (duckboards, revetment, sandbag course)</td><td><code>scenery.ts:135/177</code></td><td>read facing from the trench spec it dresses</td></tr>
+    <tr><td>Enemies spawn north, rout north, breach south</td><td><code>enemies.ts:124/502</code>, <code>flow.ts:68–87</code></td><td>per-faction spawn edge, home direction, objective section list; one flow field per faction</td></tr>
+    <tr><td>Friend/foe as two arrays with AI only on <code>Enemy</code></td><td><code>types.ts:39–160</code>, <code>sim.ts:44</code></td><td>give player squads the same behaviour struct (option b from recon) — smaller diff than unifying the pools; unification can follow later</td></tr>
+    <tr><td>Target selection reads <code>s.units</code> / <code>s.enemies</code> directly</td><td><code>ballistics.ts:261</code>, <code>combat.ts</code> helpers</td><td><code>combatantsOf(team)</code> / <code>hostilesOf(team)</code> accessors</td></tr>
+    <tr><td>Camera clamps biased to the south half</td><td><code>controls.ts:342</code></td><td>symmetric clamps; commander camera may roam both halves (fog question open)</td></tr>
+    <tr><td>Soldier instance cap 560</td><td><code>unitMeshes.ts:36</code></td><td>raise to ~900; corpse cap tuning</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Part V</small>Order of march — milestones</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 880 260" xmlns="http://www.w3.org/2000/svg" font-family="Georgia,serif" font-size="12">
+  <g fill="var(--khaki)" font-size="10" font-variant="small-caps">
+    <text x="120" y="16">groundwork</text><text x="430" y="16">singleplayer ships</text><text x="700" y="16">multiplayer ships</text>
+  </g>
+  <line x1="60" y1="24" x2="60" y2="248" stroke="var(--rule)"/>
+  <!-- bars: x scaled roughly by cumulative effort -->
+  <g>
+    <rect x="60"  y="30"  width="120" height="22" rx="4" fill="var(--steel)" opacity=".85"/><text x="66" y="45" fill="var(--paper)">M0 · Command spine</text>
+    <rect x="150" y="62"  width="140" height="22" rx="4" fill="var(--khaki)" opacity=".9"/><text x="156" y="77" fill="var(--paper)">M1 · Mirrored world</text>
+    <rect x="255" y="94"  width="140" height="22" rx="4" fill="var(--khaki)" opacity=".9"/><text x="261" y="109" fill="var(--paper)">M2 · March-in</text>
+    <rect x="340" y="126" width="180" height="22" rx="4" fill="var(--brass)"/><text x="346" y="141" fill="var(--paper)">M3 · Over the top</text>
+    <rect x="470" y="158" width="140" height="22" rx="4" fill="var(--brass)"/><text x="476" y="173" fill="var(--paper)">M4 · AI commander</text>
+    <rect x="565" y="190" width="180" height="22" rx="4" fill="var(--blood)"/><text x="571" y="205" fill="var(--paper)">M5 · Lockstep + relay</text>
+    <rect x="700" y="222" width="150" height="22" rx="4" fill="var(--blood)" opacity=".85"/><text x="706" y="237" fill="var(--paper)">M6 · MP polish</text>
+  </g>
+  <!-- ship flags -->
+  <g stroke="var(--blood)" stroke-width="2">
+    <line x1="610" y1="152" x2="610" y2="188"/>
+    <line x1="856" y1="216" x2="856" y2="252"/>
+  </g>
+  <text x="616" y="163" fill="var(--blood)" font-size="10" font-weight="bold">SHIP: The Big Push (SP)</text>
+  <text x="850" y="211" fill="var(--blood)" font-size="10" font-weight="bold" text-anchor="end">SHIP: vs Human</text>
+</svg>
+<figcaption>Fig. 3 — Each milestone is independently verifiable in the running game; nothing waits on the netcode to be fun.</figcaption>
+</figure>
+
+<section class="item">
+  <table>
+    <tr><th>Milestone</th><th>Size</th><th>Contents</th><th>Proof it works</th></tr>
+    <tr>
+      <td><strong>M0 · Command spine &amp; sim hygiene</strong></td><td class="size">M</td>
+      <td>Tick-stamped <code>Command</code> type + queue; route existing placement/orders/upgrades through it. Move barrage/gas/vehicle globals onto <code>SimState</code>. Extract a headless tick driver from <code>game.ts</code>.</td>
+      <td>Two headless sims, same seed + command log → identical state hashes for a 20-wave run. Existing mode plays unchanged.</td>
+    </tr>
+    <tr>
+      <td><strong>M1 · Mirrored world</strong></td><td class="size">M</td>
+      <td><code>facing</code> parameter through carve/dressing/fire-step; second trench system carved and dressed; symmetric camera clamps; <code>CAP</code> raise; sunken lane recut at z ≈ 0.</td>
+      <td>?gallery flyover: north trench with south-facing fire steps, parapets, duckboards. Framebuffer-readback check on both parapets.</td>
+    </tr>
+    <tr>
+      <td><strong>M2 · March-in reinforcements</strong></td><td class="size">M</td>
+      <td><code>marchingIn</code> state; rear-edge spawn; comm-trench waypoint pathing; ETA on purchase ghost; scatter-under-fire; applies to <em>both</em> factions (enemy waves now also walk up their comm trenches).</td>
+      <td>Buy a Vickers team, watch it file up the comm trench and crew the gun; shell a column mid-march, watch it scatter and re-form.</td>
+    </tr>
+    <tr>
+      <td><strong>M3 · Over the top</strong></td><td class="size">L</td>
+      <td>Faction-neutral squad AI (behaviour struct on player soldiers); per-faction flow fields; section-stretch selection UX; the five orders; symmetric capture + consolidate; battalion-strength pools; win conditions.</td>
+      <td>Scripted probe: order 3 sections over the top against a garrisoned line; squads bound, cut wire, melee, capture; recall works; consolidation reverses the bench.</td>
+    </tr>
+    <tr>
+      <td><strong>M4 · AI commander</strong> <span class="pill ship">ship SP</span></td><td class="size">M</td>
+      <td>Director → command emitter; three personas; continuous economy tuning; title-screen entry ("The Big Push") beside the existing defence campaign; save/resume for the mode.</td>
+      <td>AI-vs-AI headless soak (the M0 driver) runs 50 matches without stall or runaway economy; human playtest vs each persona.</td>
+    </tr>
+    <tr>
+      <td><strong>M5 · Lockstep + relay</strong> <span class="pill ship">ship MP</span></td><td class="size">L</td>
+      <td>WebSocket relay (rooms, command log, tick acks); T+6 scheduling; state hash exchange; desync snapshot-resync; lobby screen with room codes; AI takeover on disconnect.</td>
+      <td>Two browsers, one match, hash-clean for 30 minutes; pull one client's network mid-assault → rejoin via log replay lands in the identical battle.</td>
+    </tr>
+    <tr>
+      <td><strong>M6 · MP polish</strong></td><td class="size">M</td>
+      <td>FPS embodiment as intent commands with local prediction; spectator mode; post-match replay viewer; WebRTC transport behind the relay interface; deterministic math shim if cross-engine hashes ever trip.</td>
+      <td>Embodied MP firefight with hashes clean; replay of a full match byte-identical to the live run.</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Part VI</small>Risks &amp; open questions</h2>
+
+<div class="cols">
+<section class="item priority" style="margin-bottom:0">
+  <h3>Risks</h3>
+  <ul>
+    <li><strong>M3 is the heavy lift.</strong> Generalising the enemy brain to both factions touches the most files. Mitigation: option (b) — graft the <code>Enemy</code> behaviour struct onto player soldiers rather than unifying the pools; the ledger keeps the diff enumerable.</li>
+    <li><strong>Real-time economy balance is new territory</strong> (the current game balances via discrete waves). Mitigation: M4's AI-vs-AI soak harness doubles as a balance lab — sweep drip rates headless overnight.</li>
+    <li><strong>Perf with two armies + columns:</strong> instancing holds (14 draw calls), but per-frame CPU matrix writes double and corpse counts grow. Watch via ?fpslab probes; cap corpses per side.</li>
+    <li><strong>Cross-engine desync</strong> is possible, detectable, and recoverable (hash → snapshot resync); the math shim is the permanent fix if it ever fires in practice.</li>
+  </ul>
+</section>
+<section class="item" style="margin-bottom:0">
+  <h3>Open questions for the CO</h3>
+  <ul>
+    <li><strong>Fog of war?</strong> V1 assumes full visibility (both trenches in view, like the current game). A light fog — enemy rear hidden, front line visible — would make raids and the sunken lane observation post matter more. Cheap to add post-M3.</li>
+    <li><strong>Match length target?</strong> Drip rates and strength pools tune to it — 15 minutes feels right for MP; SP could run longer.</li>
+    <li><strong>Asymmetric rosters?</strong> V1 mirrors the British roster for the Germans. A national-flavour pass (MG08 nests, Stosstruppen) is pure config once M3 lands.</li>
+    <li><strong>Relay hosting:</strong> happy to stand up the ~150-line relay on fly.io when M5 starts — zero game logic server-side, negligible cost.</li>
+  </ul>
+</section>
+</div>
+
+<div class="followups">
+  <h3>What lands for free along the way</h3>
+  <ul>
+    <li><strong>Replays</strong> of any match (seed + command log) — including the existing defence campaign once it routes through the command spine.</li>
+    <li><strong>Headless match harness</strong> — AI-vs-AI soak tests join the repo's soak-test pattern, now for full battles.</li>
+    <li><strong>March-in for the classic mode</strong> — reinforcements walking up the comm trench would suit the defence campaign too, if we want it.</li>
+    <li><strong>Disconnect-proof MP</strong> — the AI commander is the fallback for any absent human, forever.</li>
+  </ul>
+</div>
+
+<footer>
+  Prepared in the field · 18 July 2026 · Plan tracked as issue #33
+  <div class="sig">— Claude, Battalion Workshops</div>
+</footer>
+
+</div>
+</body>
+</html>
