@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Specification — The Big Push (decisions locked)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f;
+    --brit:#5a6b3f; --hun:#5c5a66; --nml:#8d7a55; --wire:#2f6e6a;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33;
+      --brit:#8ba065; --hun:#9a97ab; --nml:#a08c60; --wire:#5fa8a2;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:960px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.2rem;letter-spacing:.06em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.8;
+  }
+  .lede{max-width:66ch;margin:0 auto 2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .lede a{color:var(--brass)}
+  h2.part{
+    font-variant:small-caps;letter-spacing:.1em;font-size:1.4rem;margin:2.6rem 0 1rem;
+    border-bottom:2px solid var(--rule);padding-bottom:.3rem;color:var(--ink)
+  }
+  h2.part small{font-size:.7rem;letter-spacing:.3em;color:var(--khaki);display:block;font-variant:normal}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.priority{border-left-color:var(--blood)}
+  section.item.steel{border-left-color:var(--steel)}
+  section.item.live{border-left-color:var(--wire)}
+  h3{font-size:1.12rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.5rem}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.83em;background:color-mix(in srgb, var(--rule) 26%, transparent);padding:.06em .32em;border-radius:3px}
+  pre{
+    font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.78rem;line-height:1.5;
+    background:color-mix(in srgb, var(--steel) 9%, transparent);border:1px solid var(--rule);
+    border-radius:4px;padding:.9rem 1.1rem;overflow-x:auto;margin:.7rem 0;
+  }
+  pre code{background:none;padding:0}
+  a{color:var(--brass);text-decoration-color:var(--rule)}
+  table{width:100%;border-collapse:collapse;font-size:.9rem;margin:.7rem 0}
+  th{font-variant:small-caps;letter-spacing:.06em;text-align:left;color:var(--khaki);border-bottom:2px solid var(--rule);padding:.4rem .5rem;font-size:.82rem}
+  td{border-bottom:1px solid color-mix(in srgb, var(--rule) 55%, transparent);padding:.45rem .5rem;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .decision{display:grid;grid-template-columns:11rem 1fr;gap:.2rem .9rem;margin:.6rem 0;padding:.7rem .9rem;border-left:3px solid var(--wire);background:color-mix(in srgb, var(--wire) 7%, transparent);font-size:.95rem}
+  .decision b{font-variant:small-caps;color:var(--wire)}
+  .fig{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:1rem 1rem .6rem;margin:1.2rem 0;overflow-x:auto}
+  .fig figcaption{font-size:.78rem;font-style:italic;color:var(--khaki);text-align:center;padding:.5rem 0 .2rem}
+  .fig svg{display:block;margin:0 auto;max-width:100%;height:auto}
+  .pill{display:inline-block;font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;border:1px solid var(--rule);border-radius:99px;padding:.1rem .55rem;color:var(--khaki);margin-left:.4rem;vertical-align:middle}
+  .pill.done{border-color:var(--wire);color:var(--wire);font-weight:bold}
+  .pill.ship{border-color:var(--blood);color:var(--blood);font-weight:bold}
+  .pill.opus{border-color:var(--steel);color:var(--steel)}
+  .pill.fable{border-color:var(--brass);color:var(--brass)}
+  footer{text-align:center;margin-top:2.6rem;color:var(--khaki);font-size:.8rem;letter-spacing:.15em;text-transform:uppercase}
+  footer .sig{font-family:'Snell Roundhand','Segoe Script',cursive;font-size:1.5rem;text-transform:none;letter-spacing:0;color:var(--ink-soft);margin-top:.4rem}
+  @media (max-width:640px){ .decision{grid-template-columns:1fr} h1{font-size:1.7rem} .stamp{position:static;display:inline-block;margin-top:.6rem} }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="crest">Specification · Battalion Workshops</div>
+  <h1>The Big Push — Specification</h1>
+  <div class="sub">Companion to the <a href="../plans/2026-07-18-big-push-two-trench-mode.html">operation order</a> · decisions locked 18 July 2026 · issues #33, #38</div>
+  <div class="stamp">Authoritative</div>
+</header>
+
+<p class="lede">The <strong>operation order</strong> holds the reconnaissance, the design rationale, and the refactor ledger — it stands. This specification records the <strong>four decisions</strong> that closed its open questions, the mechanics they pin down, the all-Vercel deployment architecture, and the workflow-orchestrated implementation plan for the sessions that build it. The game is already live at <a href="https://mud-and-steel.vercel.app">mud-and-steel.vercel.app</a>.</p>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Section 1</small>Decision log</h2>
+
+<section class="item live">
+  <div class="decision"><b>Fog of war</b><span><strong>The camera leash.</strong> The commander camera cannot travel past your farthest-forward living soldier. You may <em>look</em> at the enemy side from where your men stand; you may not <em>be</em> there. No information hiding in v1 — this is a presence constraint, and it makes forward soldiers your eyes.</span></div>
+  <div class="decision"><b>Match length</b><span><strong>Variable, chosen at match creation.</strong> Raid (~10 min) · Battle (~20 min, default) · Grand Assault (~35 min) · Attrition (untimed, strength-break only). Timed matches end at the final whistle: winner is the side holding more enemy front-line sections, tie broken by remaining battalion strength.</span></div>
+  <div class="decision"><b>Rosters</b><span><strong>Symmetric in v1.</strong> Both sides buy from the same roster at the same prices (German meshes on their side). National asymmetry (MG08 nests, Stosstruppen) is deferred to a later push.</span></div>
+  <div class="decision"><b>Hosting</b><span><strong>Everything on Vercel.</strong> Static game + serverless signaling routes + Upstash Redis for room state. The lockstep command stream rides a WebRTC DataChannel peer-to-peer — Vercel's no-long-lived-sockets rule stops being a constraint the moment the match itself needs no server. <em>Deployed and live as of this spec.</em></span></div>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Section 2</small>The camera leash — exact behaviour</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 880 240" xmlns="http://www.w3.org/2000/svg" font-family="Georgia,serif">
+  <!-- ground line -->
+  <path d="M40 190 L 200 190 Q 240 186 260 178 L 300 158 Q 330 145 360 150 L 430 165 Q 480 175 530 168 L 620 152 Q 660 146 700 152 L 840 168" fill="none" stroke="var(--rule)" stroke-width="2"/>
+  <!-- brit trench notch -->
+  <path d="M640 152 l 8 14 h 16 l 8 -14" fill="none" stroke="var(--brit)" stroke-width="3"/>
+  <text x="672" y="140" fill="var(--brit)" font-size="11" text-anchor="middle" font-variant="small-caps" font-weight="bold">your trench</text>
+  <!-- hun trench notch -->
+  <path d="M120 190 l 8 14 h 16 l 8 -14" fill="none" stroke="var(--hun)" stroke-width="3"/>
+  <text x="152" y="182" fill="var(--hun)" font-size="11" text-anchor="middle" font-variant="small-caps" font-weight="bold">their trench</text>
+  <!-- forward soldier -->
+  <g transform="translate(388,138)">
+    <circle cx="0" cy="0" r="5" fill="var(--brit)"/>
+    <line x1="0" y1="5" x2="0" y2="18" stroke="var(--brit)" stroke-width="2.5"/>
+    <line x1="-7" y1="28" x2="0" y2="18" stroke="var(--brit)" stroke-width="2.5"/>
+    <line x1="7" y1="28" x2="0" y2="18" stroke="var(--brit)" stroke-width="2.5"/>
+  </g>
+  <text x="388" y="120" fill="var(--brit)" font-size="11" text-anchor="middle" font-style="italic">farthest-forward living soldier</text>
+  <!-- leash boundary -->
+  <line x1="352" y1="40" x2="352" y2="200" stroke="var(--blood)" stroke-width="2.5" stroke-dasharray="7 4"/>
+  <text x="344" y="36" fill="var(--blood)" font-size="11" text-anchor="end" font-weight="bold" font-variant="small-caps">leash boundary = soldier − 12 m</text>
+  <!-- camera -->
+  <g transform="translate(560,58)">
+    <rect x="-16" y="-10" width="32" height="20" rx="3" fill="none" stroke="var(--steel)" stroke-width="2.5"/>
+    <path d="M16 -6 L 30 -12 L 30 12 L 16 6 Z" fill="none" stroke="var(--steel)" stroke-width="2.5"/>
+  </g>
+  <text x="560" y="30" fill="var(--steel)" font-size="11" text-anchor="middle" font-variant="small-caps" font-weight="bold">camera target clamps here</text>
+  <!-- sightline: allowed -->
+  <path d="M585 65 L 800 160" stroke="var(--wire)" stroke-width="1.8" stroke-dasharray="2 3" fill="none"/>
+  <path d="M535 65 L 150 182" stroke="var(--wire)" stroke-width="1.8" stroke-dasharray="2 3" fill="none"/>
+  <text x="168" y="148" fill="var(--wire)" font-size="11" font-style="italic" transform="rotate(17 168 148)">seeing across — always allowed</text>
+  <!-- blocked travel -->
+  <g stroke="var(--blood)" stroke-width="2.2" fill="var(--blood)">
+    <path d="M530 58 H 380" fill="none"/>
+  </g>
+  <g stroke="var(--blood)" stroke-width="2.5" fill="none">
+    <circle cx="366" cy="58" r="11"/>
+    <line x1="358" y1="66" x2="374" y2="50"/>
+  </g>
+  <text x="452" y="46" fill="var(--blood)" font-size="11" text-anchor="middle" font-style="italic">travel past the line — blocked</text>
+</svg>
+<figcaption>Fig. 1 — The leash: pitch and zoom are free, travel is earned by advancing men.</figcaption>
+</figure>
+
+<section class="item">
+  <ul>
+    <li><strong>Definition.</strong> Each tick the sim computes per-side <code>advanceZ</code>: the position along the advance axis of your farthest-forward <em>living</em> soldier — trench garrison, assault squads, and marching columns all count; corpses and the possessed-and-dead do not. Exposed on <code>SimState</code> (it must be identical on both clients; it is sim data, not render data).</li>
+    <li><strong>Clamp.</strong> The camera <em>target</em> (the orbit point in <code>CameraRig.clampTarget</code>, <code>controls.ts:342</code>) may not cross <code>advanceZ − 12 m</code> toward the enemy (sign mirrored for the north-side player). Pitch, yaw, and the full 10–170 m zoom stay free — standing on your parapet and looking across is the point.</li>
+    <li><strong>Smoothing.</strong> Boundary advances follow your men within ~0.5 s; recessions (your forward men die) ease back over ~3 s so a sniper cannot yank the player's view. If the camera sits beyond a receding boundary, it glides back rather than snapping.</li>
+    <li><strong>Start of match:</strong> boundary initialises to your own front-trench line (z = ±80) even before any purchase, so setup feels normal.</li>
+    <li><strong>Exempt:</strong> FPS embodiment (you see what he sees), game-over flyover, replays, and spectators. The leash is a commander-view rule only.</li>
+    <li><strong>Honesty note:</strong> in lockstep both clients hold full state, so this is not information security — it is exposure discipline, and it creates a real reason to push scouts and keep a toehold alive in the sunken lane. True hidden-information fog is a possible later push and is out of scope here.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Section 3</small>Match setup</h2>
+
+<section class="item">
+  <table>
+    <tr><th>Setting</th><th>Options</th><th>Notes</th></tr>
+    <tr><td><strong>Length</strong></td><td>Raid 10 min · <strong>Battle 20 min</strong> · Grand Assault 35 min · Attrition (untimed)</td><td>Timed → whistle verdict: enemy front sections held, tie by remaining strength. Attrition ends only on strength break or majority-hold. Start req and drip scale mildly with length (tuned in the M4 balance lab).</td></tr>
+    <tr><td><strong>Seed</strong></td><td>random / entered</td><td>Part of the room handshake; identical terrain on both clients.</td></tr>
+    <tr><td><strong>Opponent</strong></td><td>AI persona (Methodical · Stosstrupp · Opportunist) / room code</td><td>Same command stream either way; AI takes over a disconnected human.</td></tr>
+    <tr><td><strong>Side</strong></td><td>south (British) / north (German)</td><td>Symmetric v1 roster; meshes and flavour differ per side.</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Section 4</small>All-Vercel architecture</h2>
+
+<figure class="fig">
+<svg viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg" font-family="Georgia,serif">
+  <!-- vercel box -->
+  <rect x="270" y="20" width="340" height="150" rx="8" fill="color-mix(in srgb, var(--steel) 7%, transparent)" stroke="var(--steel)" stroke-width="2"/>
+  <text x="440" y="44" fill="var(--steel)" font-size="13" text-anchor="middle" font-variant="small-caps" font-weight="bold">Vercel — the only infrastructure</text>
+  <rect x="292" y="58" width="140" height="44" rx="5" fill="none" stroke="var(--brass)" stroke-width="1.8"/>
+  <text x="362" y="76" fill="var(--ink)" font-size="11.5" text-anchor="middle">static game (Vite)</text>
+  <text x="362" y="92" fill="var(--khaki)" font-size="10" text-anchor="middle" font-style="italic">mud-and-steel.vercel.app</text>
+  <rect x="448" y="58" width="140" height="44" rx="5" fill="none" stroke="var(--brass)" stroke-width="1.8"/>
+  <text x="518" y="76" fill="var(--ink)" font-size="11.5" text-anchor="middle">/api signaling fns</text>
+  <text x="518" y="92" fill="var(--khaki)" font-size="10" text-anchor="middle" font-style="italic">rooms · SDP/ICE relay</text>
+  <rect x="370" y="114" width="140" height="40" rx="5" fill="none" stroke="var(--brass)" stroke-width="1.8" stroke-dasharray="5 3"/>
+  <text x="440" y="131" fill="var(--ink)" font-size="11.5" text-anchor="middle">Upstash Redis</text>
+  <text x="440" y="146" fill="var(--khaki)" font-size="10" text-anchor="middle" font-style="italic">room keys · 15 min TTL</text>
+  <!-- clients -->
+  <rect x="40" y="210" width="220" height="80" rx="8" fill="color-mix(in srgb, var(--brit) 8%, transparent)" stroke="var(--brit)" stroke-width="2"/>
+  <text x="150" y="236" fill="var(--ink)" font-size="12.5" text-anchor="middle" font-weight="bold">Client A — full sim @ 30 Hz</text>
+  <text x="150" y="256" fill="var(--khaki)" font-size="10.5" text-anchor="middle" font-style="italic">commands scheduled tick T+6</text>
+  <text x="150" y="272" fill="var(--khaki)" font-size="10.5" text-anchor="middle" font-style="italic">state hash every 30 ticks</text>
+  <rect x="620" y="210" width="220" height="80" rx="8" fill="color-mix(in srgb, var(--hun) 10%, transparent)" stroke="var(--hun)" stroke-width="2"/>
+  <text x="730" y="236" fill="var(--ink)" font-size="12.5" text-anchor="middle" font-weight="bold">Client B — full sim @ 30 Hz</text>
+  <text x="730" y="256" fill="var(--khaki)" font-size="10.5" text-anchor="middle" font-style="italic">identical battle, identical seed</text>
+  <text x="730" y="272" fill="var(--khaki)" font-size="10.5" text-anchor="middle" font-style="italic">command log kept for rejoin</text>
+  <!-- signaling arrows -->
+  <g stroke="var(--khaki)" stroke-width="1.6" fill="none" stroke-dasharray="4 3">
+    <path d="M150 208 C 170 150 240 110 290 96"/>
+    <path d="M730 208 C 710 150 640 110 592 96"/>
+  </g>
+  <text x="196" y="146" fill="var(--khaki)" font-size="10.5" font-style="italic" transform="rotate(-52 196 146)">signal once</text>
+  <text x="684" y="146" fill="var(--khaki)" font-size="10.5" font-style="italic" transform="rotate(52 684 146)">signal once</text>
+  <!-- p2p channel -->
+  <line x1="262" y1="250" x2="618" y2="250" stroke="var(--wire)" stroke-width="4"/>
+  <text x="440" y="240" fill="var(--wire)" font-size="12" text-anchor="middle" font-variant="small-caps" font-weight="bold">WebRTC DataChannel — the match itself, peer to peer</text>
+  <text x="440" y="268" fill="var(--khaki)" font-size="10.5" text-anchor="middle" font-style="italic">command envelopes · hashes · snapshot resync · bytes per second, no server</text>
+</svg>
+<figcaption>Fig. 2 — Signaling is the only server touch, and it is three serverless routes. After the handshake the room keys expire and the match is pure P2P.</figcaption>
+</figure>
+
+<section class="item">
+  <h3>Deployment state &amp; signaling contract</h3>
+  <ul>
+    <li><strong>Done today:</strong> Vercel project <code>elliothimmelfarbs-projects/mud-and-steel</code> linked (Vite auto-detected, <code>vercel.json</code> committed), production alias <a href="https://mud-and-steel.vercel.app">mud-and-steel.vercel.app</a> live. <strong>Pending (Elliot, one click):</strong> connect GitHub to the Vercel account so pushes to <code>main</code> auto-deploy — until then, <code>vercel deploy --prod</code> from CI or CLI.</li>
+    <li><strong>Signaling routes</strong> (Node serverless, added in M5): <code>POST /api/rooms</code> → creates <code>{code}</code> (4 letters, 15 min TTL) · <code>POST /api/rooms/[code]/signal</code> → append SDP offer/answer/ICE for the other side · <code>GET /api/rooms/[code]?since=n</code> → poll at 1 Hz until the DataChannel opens. Storage: Upstash Redis via the Vercel Marketplace integration (free tier; Elliot approves the install when M5 starts).</li>
+    <li><strong>ICE:</strong> public STUN (Google + Cloudflare), no TURN in v1. If two symmetric NATs meet, the lobby says so plainly and offers retry; the all-Vercel fallback (HTTP long-poll command relay through the same routes) is specced as v1.5 if real-world failure rates warrant it.</li>
+    <li><strong>Rejoin:</strong> room code re-signals within the TTL; the surviving peer streams the command log and the rejoiner fast-forwards. AI commands the absent side meanwhile.</li>
+    <li><strong>Desync:</strong> 32-bit rolling hash of hot state (soldier positions/hp, req, section ownership) exchanged every 30 ticks; on mismatch both pause, the room <em>creator's</em> snapshot wins, both resume. Every desync is logged with tick + divergent subsystem.</li>
+  </ul>
+  <h3>Command protocol (v1)</h3>
+  <pre><code>type Cmd =
+  | { t:'buy';        kind:UnitKind; x:number; z:number }
+  | { t:'assault';    sections:number[]; targetSection:number }
+  | { t:'covering';   sections:number[]; targetSection:number }
+  | { t:'recall';     groupId:number }
+  | { t:'consolidate';section:number }
+  | { t:'order';      id:OrderId }              // barrage, smoke, masks…
+  | { t:'upgrade';    id:UpgradeId }
+  | { t:'sell';       unitId:number }
+
+type Envelope = { tick:number; side:Team; seq:number; cmds:Cmd[] }
+// Applied only at tick boundaries. SP: same tick. MP: scheduled tick+6 (~200 ms).
+// FPS embodiment intents (move/aim/fire) join the protocol in M6, not v1.</code></pre>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Section 5</small>Milestones — updated</h2>
+
+<section class="item">
+  <table>
+    <tr><th>Milestone</th><th>Adds on top of the operation order</th><th>Acceptance</th></tr>
+    <tr><td><strong>D0 · Vercel bootstrap</strong> <span class="pill done">done</span></td><td>Project linked, prod deploy live, <code>vercel.json</code> in repo.</td><td><a href="https://mud-and-steel.vercel.app">Live URL</a> serves the game. ✓</td></tr>
+    <tr><td><strong>M0 · Command spine</strong></td><td>Protocol above is the contract; <code>advanceZ</code> computed in sim from day one.</td><td>Twin headless sims, same seed + log → identical hashes over a 20-wave run; classic mode unchanged.</td></tr>
+    <tr><td><strong>M1 · Mirrored world</strong></td><td>—</td><td>North trench carved + dressed with south-facing fire steps; framebuffer checks on both parapets.</td></tr>
+    <tr><td><strong>M2 · March-in</strong></td><td><strong>Camera leash lands here</strong> (with <code>advanceZ</code> already in state from M0): clamp, smoothing, exemptions.</td><td>Column files up the comm trench under shellfire; camera cannot cross the leash; boundary eases on deaths.</td></tr>
+    <tr><td><strong>M3 · Over the top</strong></td><td>Match-length variants + whistle verdict logic; strength pools.</td><td>Scripted assault probe passes; timed match ends with correct verdict on all three lengths.</td></tr>
+    <tr><td><strong>M4 · AI commander</strong> <span class="pill ship">ship SP</span></td><td>Personas; balance lab sweeps drip rates per match length.</td><td>50 headless AI-vs-AI matches, no stalls, every length variant terminates correctly; playtest vs each persona.</td></tr>
+    <tr><td><strong>M5 · P2P lockstep</strong> <span class="pill ship">ship MP</span></td><td>Signaling routes + Upstash on Vercel (replaces the relay-server plan); lobby with room codes; hash exchange; snapshot resync; AI takeover.</td><td>Two browsers through the live Vercel signaling → 30 min hash-clean match; kill one client, rejoin via log replay into the identical battle.</td></tr>
+    <tr><td><strong>M6 · MP polish</strong></td><td>Embodiment intents in the protocol; spectate/replay viewer; TURN or long-poll fallback if field data demands it.</td><td>Embodied MP firefight hash-clean; replay byte-identical to live.</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<h2 class="part"><small>Section 6</small>Implementation by workflows</h2>
+
+<section class="item steel">
+  <h3>Operating doctrine for the implementing session</h3>
+  <ul>
+    <li><strong>One milestone = one GitHub Flow cycle</strong> (issue → branch → PR → merge), committed in small checkpoints throughout. Every PR ends with live verification in the running game — probes driven via <code>__game.frame()</code> when the tab is hidden — and dev servers stopped afterward.</li>
+    <li><strong>Fable designs and verifies; Opus executes the enumerable.</strong> Route stages to Opus (<code>model:'opus'</code>) when the work is mechanical over a known list — call-site sweeps, mirroring dressing code along a parameter, config plumbing, probe scaffolds. Keep on the session model: seam design, netcode, anything touching determinism, and every adversarial-verify or judge stage.</li>
+    <li><strong>Adversarial verification is not optional</strong> on determinism-touching PRs: independent skeptic agents attempt to produce hash divergence (order-of-iteration, module state, trig call sites) before merge.</li>
+  </ul>
+  <table>
+    <tr><th>Milestone</th><th>Workflow shape</th><th>Model mix</th></tr>
+    <tr><td>M0</td><td>Fable designs the command seam inline → <strong>pipeline</strong> over call-site groups (placement, orders, upgrades, globals) → twin-sim hash verify per group as it lands.</td><td><span class="pill opus">opus: sweeps</span> <span class="pill fable">fable: seam + verify</span></td></tr>
+    <tr><td>M1</td><td><strong>pipeline</strong> over the refactor-ledger rows (carve, dressing, projection, camera) → render-probe verify each.</td><td><span class="pill opus">opus: mirroring</span> <span class="pill fable">fable: verify</span></td></tr>
+    <tr><td>M2</td><td>March-in built inline (one seam); leash as a parallel branch; <strong>judge panel</strong> on feel (ETA pacing, scatter behaviour) from scripted probes.</td><td><span class="pill fable">fable: both seams</span> <span class="pill opus">opus: probes</span></td></tr>
+    <tr><td>M3</td><td>Faction-neutral squad AI inline → <strong>fan-out</strong>: orders UX, capture symmetry, strength pools, verdict logic → adversarial verify panel per subsystem.</td><td><span class="pill fable">fable: AI + verify</span> <span class="pill opus">opus: UX + pools</span></td></tr>
+    <tr><td>M4</td><td>Personas inline → <strong>loop-until-dry</strong> balance sweeps headless (drip × length matrix), completeness critic on stall states.</td><td><span class="pill opus">opus: sweeps</span> <span class="pill fable">fable: personas</span></td></tr>
+    <tr><td>M5</td><td>Netcode inline end-to-end (small, dense, unforgiving) → <strong>fan-out</strong> only for the lobby UI and failure-mode probes (drop, latency, double-join).</td><td><span class="pill fable">fable: netcode</span> <span class="pill opus">opus: lobby + probes</span></td></tr>
+    <tr><td>M6</td><td>Embodiment protocol inline → probe fan-out; replay determinism gets the full skeptic panel.</td><td><span class="pill fable">fable: protocol + verify</span> <span class="pill opus">opus: probes</span></td></tr>
+  </table>
+</section>
+
+<section class="item">
+  <h3>Out of scope (deferred, deliberately)</h3>
+  <ul>
+    <li>Asymmetric national rosters — a later push, pure config once M3 lands.</li>
+    <li>True hidden-information fog of war (the leash is presence, not secrecy).</li>
+    <li>TURN servers / long-poll relay — specced as v1.5, built only if STUN failure rates demand it.</li>
+    <li>More than two commanders per match; ranked play; persistence beyond high scores.</li>
+  </ul>
+</section>
+
+<footer>
+  Decisions locked · 18 July 2026 · spec is authoritative where it and the operation order differ
+  <div class="sig">— Claude, Battalion Workshops</div>
+</footer>
+
+</div>
+</body>
+</html>
