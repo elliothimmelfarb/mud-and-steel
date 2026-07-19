@@ -62,6 +62,22 @@ function stamp(text: string, brass = false): HTMLSpanElement {
   return s;
 }
 
+/**
+ * A labelled option group: a small stencilled heading with an optional plain
+ * hint, followed by whatever control is dropped into `.body`. Used to make the
+ * config screens say plainly what each row of cards is choosing.
+ */
+function fieldSection(label: string, hint?: string): { el: HTMLDivElement; body: HTMLDivElement } {
+  const el = div('field-section');
+  const head = div('field-section__label');
+  head.appendChild(make('span', 'field-section__name', label));
+  if (hint) head.appendChild(make('span', 'field-section__hint', hint));
+  el.appendChild(head);
+  const body = div('field-section__body');
+  el.appendChild(body);
+  return { el, body };
+}
+
 // ---------------------------------------------------------------------------
 // Focus management (keyboard parity)
 // ---------------------------------------------------------------------------
@@ -303,7 +319,8 @@ export function createTitleScreen(o: {
   onContinue: () => void;
   onSettings: () => void;
   onHelp: () => void;
-  onChangelog: () => void;
+  /** War-record entries, rendered into the always-open Despatches panel. */
+  despatches?: Array<{ version: string; date: string; title: string; items: string[] }>;
 }): ScreenHandle {
   let page: 'main' | 'new' | 'bigpush' = 'main';
 
@@ -331,50 +348,99 @@ export function createTitleScreen(o: {
   content.appendChild(logo);
   content.appendChild(sub);
 
+  // --- two-column body: menu / config on the left, Despatches always open on the right ---
+  const body = div('title-body');
+  content.appendChild(body);
+
+  const mainCol = div('title-main');
+  body.appendChild(mainCol);
+
   // --- main menu: stack of paper chits ---
   const menu = div('title-menu');
   menu.setAttribute('role', 'group');
   menu.setAttribute('aria-label', 'Main menu');
 
-  const newBattleBtn = chit('New Battle', 'ms-btn ms-btn--primary', () => showNew());
-  menu.appendChild(newBattleBtn);
-  if (o.onBigPush) {
-    menu.appendChild(chit('The Big Push', 'ms-btn ms-btn--primary', () => showBigPush()));
+  // Trench vs Trench (formerly "The Big Push") is now the headline mode, so it
+  // leads the stack; Wave Defence (the original wave-survival game) sits below.
+  let firstMenuBtn: HTMLButtonElement;
+  const tvtBtn = o.onBigPush
+    ? chit('Trench vs Trench', 'ms-btn ms-btn--primary', () => showBigPush())
+    : null;
+  const waveBtn = chit('Wave Defence', 'ms-btn ms-btn--primary', () => showNew());
+  if (tvtBtn) {
+    menu.appendChild(tvtBtn);
+    firstMenuBtn = tvtBtn;
+  } else {
+    firstMenuBtn = waveBtn;
   }
+  menu.appendChild(waveBtn);
   if (o.hasSave) {
     menu.appendChild(chit('Continue', 'ms-btn', o.onContinue));
   }
   menu.appendChild(chit('Field Manual', 'ms-btn', o.onHelp));
-  menu.appendChild(chit('Despatches', 'ms-btn', o.onChangelog));
   menu.appendChild(chit('Settings', 'ms-btn', o.onSettings));
-  content.appendChild(menu);
+  mainCol.appendChild(menu);
 
   if (o.highScore !== null) {
-    content.appendChild(
+    mainCol.appendChild(
       div('title-citation', 'MENTIONED IN DISPATCHES — BEST: ' + fmtNum(o.highScore)),
     );
   }
 
-  // --- new battle panel: difficulty postcards + seed field ---
+  // --- Despatches: the war record, always open beside the menu ---
+  if (o.despatches && o.despatches.length > 0) {
+    const desp = div('ms-panel title-despatches');
+    const dHead = div('title-despatches__head');
+    dHead.appendChild(make('h2', 'title-despatches__title', 'DESPATCHES'));
+    dHead.appendChild(stamp('WAR RECORD', true));
+    desp.appendChild(dHead);
+
+    const dBody = div('title-despatches__body ms-scroll');
+    dBody.tabIndex = 0; // scrollable region must be keyboard-reachable
+    dBody.setAttribute('role', 'group');
+    dBody.setAttribute('aria-label', 'War record');
+    for (const e of o.despatches) {
+      const entry = div('changelog-entry');
+      const ehead = div('changelog-entry__head');
+      ehead.appendChild(make('span', 'changelog-entry__version', 'v' + e.version));
+      ehead.appendChild(make('span', 'changelog-entry__title', e.title));
+      ehead.appendChild(make('span', 'changelog-entry__date', e.date));
+      entry.appendChild(ehead);
+      const list = make('ul', 'changelog-entry__items');
+      for (const item of e.items) list.appendChild(make('li', undefined, item));
+      entry.appendChild(list);
+      dBody.appendChild(entry);
+    }
+    desp.appendChild(dBody);
+    body.appendChild(desp);
+  }
+
+  // --- Wave Defence panel: difficulty postcards + seed field ---
   const wrap = div('torn-wrap title-new');
   wrap.hidden = true;
   const panel = div('ms-panel torn');
   wrap.appendChild(panel);
 
   const head = div('title-new__head');
-  head.appendChild(make('h2', 'title-new__title', 'ORDERS OF BATTLE'));
+  head.appendChild(make('h2', 'title-new__title', 'WAVE DEFENCE'));
   head.appendChild(stamp('SECRET'));
   panel.appendChild(head);
+  panel.appendChild(div(
+    'title-new__lede',
+    'Hold one trench against assault waves that climb harder with every push. Choose your posting.',
+  ));
 
+  const diffSec = fieldSection('Difficulty', 'how hard the enemy presses');
+  panel.appendChild(diffSec.el);
   const cards = div('diff-cards');
   cards.setAttribute('role', 'radiogroup');
   cards.setAttribute('aria-label', 'Difficulty');
-  panel.appendChild(cards);
+  diffSec.body.appendChild(cards);
 
   const DIFFS: Array<{ id: 'quiet' | 'front' | 'push'; name: string; flavor: string }> = [
     { id: 'quiet', name: 'QUIET SECTOR', flavor: '“for the new draft”' },
     { id: 'front', name: 'FRONT LINE', flavor: '“the standard tour”' },
-    { id: 'push', name: 'THE BIG PUSH', flavor: '“good luck, lads”' },
+    { id: 'push', name: 'GENERAL OFFENSIVE', flavor: '“good luck, lads”' },
   ];
 
   let difficulty: 'quiet' | 'front' | 'push' = 'front';
@@ -433,18 +499,22 @@ export function createTitleScreen(o: {
   actions.appendChild(chit('To the Front', 'ms-btn ms-btn--primary', begin));
   panel.appendChild(actions);
 
-  content.appendChild(wrap);
+  mainCol.appendChild(wrap);
 
-  // --- The Big Push panel: match length + opposing commander + seed ---
+  // --- Trench vs Trench panel: match length + opposing commander + seed ---
   const bpWrap = div('torn-wrap title-new');
   bpWrap.hidden = true;
   const bpPanel = div('ms-panel torn');
   bpWrap.appendChild(bpPanel);
   {
     const bpHead = div('title-new__head');
-    bpHead.appendChild(make('h2', 'title-new__title', 'THE BIG PUSH — TWO ARMIES, ONE FIELD'));
+    bpHead.appendChild(make('h2', 'title-new__title', 'TRENCH VS TRENCH'));
     bpHead.appendChild(stamp('OFFENSIVE'));
     bpPanel.appendChild(bpHead);
+    bpPanel.appendChild(div(
+      'title-new__lede',
+      'Two trenches face each other across no-man’s-land. Set the terms of the assault, then go over the top.',
+    ));
   }
 
   const LENGTHS: Array<{ id: 'raid' | 'battle' | 'grand' | 'attrition'; name: string; flavor: string }> = [
@@ -456,10 +526,12 @@ export function createTitleScreen(o: {
   let bpLength: 'raid' | 'battle' | 'grand' | 'attrition' = 'battle';
   const lenCards: HTMLDivElement[] = [];
   {
+    const sec = fieldSection('1 · Match Length', 'how long the battle runs');
+    bpPanel.appendChild(sec.el);
     const lenGroup = div('diff-cards');
     lenGroup.setAttribute('role', 'radiogroup');
     lenGroup.setAttribute('aria-label', 'Match length');
-    bpPanel.appendChild(lenGroup);
+    sec.body.appendChild(lenGroup);
     for (const L of LENGTHS) {
       const c = div('ms-card diff-card');
       c.setAttribute('role', 'radio');
@@ -485,10 +557,12 @@ export function createTitleScreen(o: {
   let bpPersona: 'methodical' | 'stosstrupp' | 'opportunist' = 'methodical';
   const perCards: HTMLDivElement[] = [];
   {
+    const sec = fieldSection('2 · Opposing Commander', 'the AI general leading the enemy trench');
+    bpPanel.appendChild(sec.el);
     const perGroup = div('diff-cards');
     perGroup.setAttribute('role', 'radiogroup');
     perGroup.setAttribute('aria-label', 'Opposing commander');
-    bpPanel.appendChild(perGroup);
+    sec.body.appendChild(perGroup);
     for (const P of PERSONAS) {
       const c = div('ms-card diff-card');
       c.setAttribute('role', 'radio');
@@ -537,9 +611,11 @@ export function createTitleScreen(o: {
 
   // --- Online: two human commanders over WebRTC (or two local tabs) ---
   if (o.onBigPushNet) {
-    const netHead = make('h3', 'title-new__subtitle', 'AGAINST ANOTHER COMMANDER');
-    netHead.style.cssText = 'margin:1.1rem 0 .4rem;letter-spacing:.14em;font-size:.72rem;opacity:.75';
-    bpPanel.appendChild(netHead);
+    const netSec = fieldSection(
+      'Play a Human — optional',
+      'skip this and press Over the Top to face the AI',
+    );
+    bpPanel.appendChild(netSec.el);
 
     const statusLine = div('seed-row__label');
     statusLine.style.cssText = 'min-height:1.2em;margin-top:.45rem;opacity:.85';
@@ -558,7 +634,7 @@ export function createTitleScreen(o: {
     codeInput.style.textTransform = 'uppercase';
     codeRow.appendChild(codeLabel);
     codeRow.appendChild(codeInput);
-    bpPanel.appendChild(codeRow);
+    netSec.body.appendChild(codeRow);
 
     const netGo = (role: 'host' | 'join' | 'local-host' | 'local-join'): void => {
       const seed = bpSeedInput.value.trim().toUpperCase() || randomSeed();
@@ -569,13 +645,13 @@ export function createTitleScreen(o: {
     netActions.appendChild(chit('Join with Code', 'ms-btn', () => netGo('join')));
     netActions.appendChild(chit('Two Tabs: Host', 'ms-btn ms-btn--ghost', () => netGo('local-host')));
     netActions.appendChild(chit('Two Tabs: Join', 'ms-btn ms-btn--ghost', () => netGo('local-join')));
-    bpPanel.appendChild(netActions);
-    bpPanel.appendChild(statusLine);
+    netSec.body.appendChild(netActions);
+    netSec.body.appendChild(statusLine);
     codeInput.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Enter') { e.preventDefault(); netGo('join'); }
     });
   }
-  content.appendChild(bpWrap);
+  mainCol.appendChild(bpWrap);
 
   const version = div('title-version', o.version);
   el.appendChild(version);
@@ -599,7 +675,7 @@ export function createTitleScreen(o: {
     wrap.hidden = true;
     bpWrap.hidden = true;
     menu.hidden = false;
-    newBattleBtn.focus();
+    firstMenuBtn.focus();
   }
 
   return { el, dispose: shell.dispose };
@@ -1093,51 +1169,6 @@ export function createHelpOverlay(o: {
 
   const foot = div('help-foot');
   foot.appendChild(chit('Close Manual', 'ms-btn ms-btn--primary', o.onClose));
-  book.appendChild(foot);
-
-  return { el, dispose: shell.dispose };
-}
-
-// ---------------------------------------------------------------------------
-// CHANGELOG / DESPATCHES
-// ---------------------------------------------------------------------------
-
-export function createChangelogOverlay(o: {
-  entries: Array<{ version: string; date: string; title: string; items: string[] }>;
-  onClose: () => void;
-}): ScreenHandle {
-  const shell = screenShell('help-screen changelog-screen', 'Despatches — war record', o.onClose);
-  const { el } = shell;
-
-  const book = div('ms-panel help-book');
-  el.appendChild(book);
-
-  const head = div('help-head');
-  head.appendChild(make('h2', 'help-title', 'DESPATCHES'));
-  head.appendChild(stamp('WAR RECORD', true));
-  book.appendChild(head);
-
-  const body = div('help-body ms-scroll changelog-body');
-  body.tabIndex = 0; // scrollable region must be keyboard-reachable
-  book.appendChild(body);
-
-  for (const e of o.entries) {
-    const entry = div('changelog-entry');
-    const ehead = div('changelog-entry__head');
-    ehead.appendChild(make('span', 'changelog-entry__version', 'v' + e.version));
-    ehead.appendChild(make('span', 'changelog-entry__title', e.title));
-    ehead.appendChild(make('span', 'changelog-entry__date', e.date));
-    entry.appendChild(ehead);
-    const list = make('ul', 'changelog-entry__items');
-    for (const item of e.items) {
-      list.appendChild(make('li', undefined, item));
-    }
-    entry.appendChild(list);
-    body.appendChild(entry);
-  }
-
-  const foot = div('help-foot');
-  foot.appendChild(chit('Close Record', 'ms-btn ms-btn--primary', o.onClose));
   book.appendChild(foot);
 
   return { el, dispose: shell.dispose };
