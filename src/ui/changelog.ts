@@ -25,6 +25,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.0',
+    date: '2026-07-19',
+    title: 'The two fronts renamed, the record left open',
+    items: [
+      'Two clear ways to fight: Trench vs Trench (formerly The Big Push) now leads the roster as the headline mode, with Wave Defence (formerly New Battle) holding the line beneath it.',
+      'The Despatches war record is now a standing panel to the right of the menu — always open, no button to press.',
+      'Trench vs Trench muster reads plainly now: numbered sections spell out match length and your opposing commander, with proper spacing between them.',
+    ],
+  },
+  {
     version: '1.1.0',
     date: '2026-07-18',
     title: 'Marked posts, officer glasses, the war record',
