@@ -25,6 +25,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.1',
+    date: '2026-07-19',
+    title: 'A smoother war',
+    items: [
+      'Sweeping performance pass: the battlefield no longer re-uploads every wire coil, trap and sandbag to the GPU each frame — only when something actually changes.',
+      'The frame loop, sky lighting and first-person HUD stopped generating garbage every frame; long fights hitch less.',
+      'Simulation hot paths (targeting shortlists, bullet sweeps, squad upkeep) run leaner — identical battles, fewer wasted cycles. Lockstep and war-diary determinism untouched.',
+    ],
+  },
+  {
     version: '1.2.0',
     date: '2026-07-19',
     title: 'The two fronts renamed, the record left open',

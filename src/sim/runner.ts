@@ -290,8 +290,10 @@ export class SimRunner implements CmdHost {
     o.coverT = Math.max(0, o.coverT - dt)
     o.rapidT = Math.max(0, o.rapidT - dt)
     o.bayonetT = Math.max(0, o.bayonetT - dt)
-    for (const k of Object.keys(o.cooldowns) as Array<keyof typeof o.cooldowns>) {
-      o.cooldowns[k] = Math.max(0, o.cooldowns[k] - dt)
+    // for-in over the fixed key set — no per-tick Object.keys array.
+    for (const k in o.cooldowns) {
+      const key = k as keyof typeof o.cooldowns
+      o.cooldowns[key] = Math.max(0, o.cooldowns[key] - dt)
     }
 
     if (s.mode === 'bigpush') {

@@ -218,6 +218,47 @@ export function updateBullets(ctx: Ctx, dt: number): void {
   s.bullets.length = w
 }
 
+// Per-sweep segment state, module-scoped so the per-soldier capsule test is a
+// plain function instead of a closure allocated for every bullet every tick.
+// Single-threaded sim; set at the top of sweep(), never escapes it.
+let _swAx = 0, _swAy = 0, _swAz = 0
+let _swSx = 0, _swSy = 0, _swSz = 0
+let _swSegLen2 = 0
+let _swShooterId = -1
+let _swHitT = Infinity
+let _swHitSol: Soldier | null = null
+let _swCtx: Ctx | null = null
+
+function testSoldier(c: Soldier): void {
+  if (c.hp <= 0 || c.id === _swShooterId) return
+  // Exact 2D segment↔cylinder intersection, then y-overlap across the whole
+  // crossing interval — plunging fire into a trench must still connect.
+  const r = hitRadius(c.stance)
+  const fx0 = _swAx - c.pos.x, fz0 = _swAz - c.pos.z
+  let t1: number, t2: number
+  if (_swSegLen2 < 1e-6) {
+    if (fx0 * fx0 + fz0 * fz0 > r * r) return
+    t1 = 0; t2 = 1
+  } else {
+    const bq = 2 * (fx0 * _swSx + fz0 * _swSz)
+    const cq = fx0 * fx0 + fz0 * fz0 - r * r
+    const disc = bq * bq - 4 * _swSegLen2 * cq
+    if (disc < 0) return
+    const sq = Math.sqrt(disc)
+    t1 = (-bq - sq) / (2 * _swSegLen2)
+    t2 = (-bq + sq) / (2 * _swSegLen2)
+    if (t2 < 0 || t1 > 1) return
+    if (t1 < 0) t1 = 0
+    if (t2 > 1) t2 = 1
+  }
+  const base = standSurface(_swCtx as Ctx, c.pos.x, c.pos.z)
+  const h = stanceHeight(c.stance)
+  const yA = _swAy + _swSy * t1, yB = _swAy + _swSy * t2
+  const yLo = yA < yB ? yA : yB, yHi = yA < yB ? yB : yA
+  if (yHi < base - 0.1 || yLo > base + h + 0.12) return
+  if (t1 < _swHitT) { _swHitT = t1; _swHitSol = c }
+}
+
 /** Swept collision for one tick of flight. Returns true if the round stopped. */
 function sweep(ctx: Ctx, b: Bullet): boolean {
   const ax = b.prev.x, ay = b.prev.y, az = b.prev.z
@@ -226,37 +267,13 @@ function sweep(ctx: Ctx, b: Bullet): boolean {
   const segLen2 = sx * sx + sz * sz
 
   // --- men (enemy team only; the shooter's own side keeps fire discipline) --
-  let hitT = Infinity
-  let hitSol: Soldier | null = null
-  const testSoldier = (c: Soldier): void => {
-    if (c.hp <= 0 || c.id === b.shooterId) return
-    // Exact 2D segment↔cylinder intersection, then y-overlap across the whole
-    // crossing interval — plunging fire into a trench must still connect.
-    const r = hitRadius(c.stance)
-    const fx0 = ax - c.pos.x, fz0 = az - c.pos.z
-    let t1: number, t2: number
-    if (segLen2 < 1e-6) {
-      if (fx0 * fx0 + fz0 * fz0 > r * r) return
-      t1 = 0; t2 = 1
-    } else {
-      const bq = 2 * (fx0 * sx + fz0 * sz)
-      const cq = fx0 * fx0 + fz0 * fz0 - r * r
-      const disc = bq * bq - 4 * segLen2 * cq
-      if (disc < 0) return
-      const sq = Math.sqrt(disc)
-      t1 = (-bq - sq) / (2 * segLen2)
-      t2 = (-bq + sq) / (2 * segLen2)
-      if (t2 < 0 || t1 > 1) return
-      if (t1 < 0) t1 = 0
-      if (t2 > 1) t2 = 1
-    }
-    const base = standSurface(ctx, c.pos.x, c.pos.z)
-    const h = stanceHeight(c.stance)
-    const yA = ay + sy * t1, yB = ay + sy * t2
-    const yLo = yA < yB ? yA : yB, yHi = yA < yB ? yB : yA
-    if (yHi < base - 0.1 || yLo > base + h + 0.12) return
-    if (t1 < hitT) { hitT = t1; hitSol = c }
-  }
+  _swAx = ax; _swAy = ay; _swAz = az
+  _swSx = sx; _swSy = sy; _swSz = sz
+  _swSegLen2 = segLen2
+  _swShooterId = b.shooterId
+  _swHitT = Infinity
+  _swHitSol = null
+  _swCtx = ctx
   if (b.team === 'brit') {
     for (const e of ctx.s.enemies) testSoldier(e)
   } else {
@@ -265,6 +282,10 @@ function sweep(ctx: Ctx, b: Bullet): boolean {
       for (const c of u.crew) testSoldier(c)
     }
   }
+  const hitT = _swHitT
+  const hitSol = _swHitSol
+  _swCtx = null
+  _swHitSol = null // don't pin a dead man's object past the sweep
 
   // --- vehicles (both sides' rounds can strike armour) -----------------------
   let hitVehT = Infinity
