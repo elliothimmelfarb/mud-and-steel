@@ -25,6 +25,7 @@ const _q = new THREE.Quaternion()
 const _e = new THREE.Euler()
 const _v = new THREE.Vector3()
 const _s = new THREE.Vector3(1, 1, 1)
+const WIRE_POST_SIDES = [-1, 1] as const
 
 function makeInstanced(geo: THREE.BufferGeometry, cap: number, scene: THREE.Scene): THREE.InstancedMesh {
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.05 })
@@ -48,6 +49,17 @@ export class Scenery {
   private defenceProps = new Map<number, THREE.Group>()
   private beams = new Map<number, THREE.Mesh>()
   private beamMat: THREE.MeshBasicMaterial
+  /** Exact per-defence field snapshot from the last instanced rebuild. The
+   *  static families (wire/traps/mines/sandbags) only recompose + re-upload
+   *  when this differs — thousands of matrix composes and five instanceMatrix
+   *  uploads per frame otherwise spent on props that never move. */
+  private defSnap = new Float64Array(0)
+  private defSnapLen = -1
+  /** Craters shift the ground under planted defences — force one rebuild. */
+  private groundDirty = true
+  private liveDefenceIds = new Set<number>()
+  private liveUnitIds = new Set<number>()
+  private liveVehicleIds = new Set<number>()
 
   constructor(private scene: THREE.Scene, private terrain: Terrain, seed: number) {
     this.dressStatic(seed)
@@ -60,6 +72,8 @@ export class Scenery {
       color: 0xfff2c0, transparent: true, opacity: 0.10, depthWrite: false,
       blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
     })
+    const prevDirty = terrain.onDirty
+    terrain.onDirty = (r) => { prevDirty?.(r); this.groundDirty = true }
   }
 
   // -- static dressing --------------------------------------------------------
@@ -438,10 +452,10 @@ export class Scenery {
    * the session-lived templates above: their geometry is shared, so disposing
    * it would corrupt the template and every other live clone.
    *
-   * Materials are shared module-cached `mat.*` everywhere, so disposing them
-   * would corrupt still-living props. The ONLY owned materials are the
-   * per-instance clones made when a vehicle is dead-dressed (see
-   * syncVehicles) — the caller opts into freeing those via `ownedMaterials`.
+   * Materials are shared everywhere — the module-cached `mat.*` set, plus the
+   * session-lived darkened wreck variants in `wreckMats` — so disposing them
+   * would corrupt still-living props. `ownedMaterials` remains for any future
+   * caller that genuinely builds one-off materials; nothing passes true today.
    */
   private disposeGroup(root: THREE.Object3D, ownedGeometries: boolean, ownedMaterials: boolean): void {
     const geos = new Set<THREE.BufferGeometry>()
@@ -464,14 +478,99 @@ export class Scenery {
 
   syncDefences(defences: Defence[], night: boolean): void {
     const t = this.terrain
+
+    // Exact change detection for the instanced families: snapshot every field
+    // the matrices are derived from and compare against last frame. Planted
+    // wire/traps/mines/sandbags are static between placements, hits and
+    // craters — most frames this leaves the GPU buffers untouched.
+    let snap = this.defSnap
+    const need = defences.length * 6
+    if (snap.length < need) { snap = this.defSnap = new Float64Array(Math.max(need, 96)) }
+    let n = 0
+    let changed = this.groundDirty
+    for (const d of defences) {
+      if (d.kind === 'searchlight' || d.kind === 'flarepost') continue
+      const kindCode = d.kind === 'wire' ? 1 : d.kind === 'tanktrap' ? 2 : d.kind === 'mine' ? 3 : 4
+      // Comparison-then-write per lane; any drift marks the frame dirty.
+      if (snap[n] !== kindCode) { changed = true; snap[n] = kindCode }
+      n++
+      if (snap[n] !== d.pos.x) { changed = true; snap[n] = d.pos.x }
+      n++
+      if (snap[n] !== d.pos.z) { changed = true; snap[n] = d.pos.z }
+      n++
+      if (snap[n] !== d.angle) { changed = true; snap[n] = d.angle }
+      n++
+      if (snap[n] !== d.wear) { changed = true; snap[n] = d.wear }
+      n++
+      const live = d.hp > 0 ? 1 : 0
+      if (snap[n] !== live) { changed = true; snap[n] = live }
+      n++
+    }
+    if (n !== this.defSnapLen) { changed = true; this.defSnapLen = n }
+
+    if (changed) {
+      this.groundDirty = false
+      this.rebuildStaticDefences(defences)
+    }
+
+    // Searchlights / flareposts stay live every frame: the sweep angle and
+    // the night beam are genuinely dynamic, and there are only ever a few.
+    const liveIds = this.liveDefenceIds
+    liveIds.clear()
+    for (const d of defences) {
+      if (d.hp <= 0 || (d.kind !== 'searchlight' && d.kind !== 'flarepost')) continue
+      liveIds.add(d.id)
+      let g = this.defenceProps.get(d.id)
+      if (!g) {
+        g = d.kind === 'searchlight' ? buildSearchlight() : buildFlarePost()
+        this.scene.add(g)
+        this.defenceProps.set(d.id, g)
+      }
+      const y = t.heightAt(d.pos.x, d.pos.z)
+      g.position.set(d.pos.x, y, d.pos.z)
+      if (d.kind === 'searchlight') {
+        g.rotation.y = -d.angle
+        let beam = this.beams.get(d.id)
+        if (!beam) {
+          const geo = new THREE.ConeGeometry(11, 150, 12, 1, true)
+          geo.translate(0, -75, 0)
+          geo.rotateX(Math.PI / 2)
+          beam = new THREE.Mesh(geo, this.beamMat)
+          this.scene.add(beam)
+          this.beams.set(d.id, beam)
+        }
+        beam.visible = night && d.active
+        beam.position.set(d.pos.x, y + 1.6, d.pos.z)
+        beam.rotation.y = -d.angle + Math.PI
+      }
+    }
+
+    // Remove props for dead searchlights/flareposts.
+    for (const [id, g] of this.defenceProps) {
+      if (!liveIds.has(id)) {
+        this.scene.remove(g)
+        this.disposeGroup(g, true, false) // fresh-built per defence; materials shared mat.*
+        this.defenceProps.delete(id)
+        const beam = this.beams.get(id)
+        if (beam) {
+          this.scene.remove(beam)
+          beam.geometry.dispose() // per-searchlight cone; beamMat is shared, leave it
+          this.beams.delete(id)
+        }
+      }
+    }
+  }
+
+  /** Recompose + upload the static instanced families. Change-gated above. */
+  private rebuildStaticDefences(defences: Defence[]): void {
+    const t = this.terrain
     let coil = 0, post = 0, trap = 0, stake = 0, bag = 0
-    const liveIds = new Set<number>()
 
     for (const d of defences) {
       if (d.hp <= 0) continue
-      const y = t.heightAt(d.pos.x, d.pos.z)
       switch (d.kind) {
         case 'wire': {
+          const y = t.heightAt(d.pos.x, d.pos.z)
           if (coil < 420) {
             _e.set(0, d.angle, (d.wear - 0.5) * 0.2)
             _q.setFromEuler(_e)
@@ -481,7 +580,7 @@ export class Scenery {
             _s.set(1, 1, 1)
             this.wireCoils.setMatrixAt(coil++, _m)
           }
-          for (const side of [-1, 1]) {
+          for (const side of WIRE_POST_SIDES) {
             if (post >= 840) break
             const px = d.pos.x + Math.cos(d.angle) * side * WIRE_SEGMENT_LEN * 0.4
             const pz = d.pos.z - Math.sin(d.angle) * side * WIRE_SEGMENT_LEN * 0.4
@@ -497,7 +596,7 @@ export class Scenery {
           if (trap < 80) {
             _e.set(0, d.angle, 0)
             _q.setFromEuler(_e)
-            _v.set(d.pos.x, y, d.pos.z)
+            _v.set(d.pos.x, t.heightAt(d.pos.x, d.pos.z), d.pos.z)
             _m.compose(_v, _q, _s)
             this.traps.setMatrixAt(trap++, _m)
           }
@@ -506,7 +605,7 @@ export class Scenery {
         case 'mine': {
           if (stake < 120) {
             _q.identity()
-            _v.set(d.pos.x, y, d.pos.z)
+            _v.set(d.pos.x, t.heightAt(d.pos.x, d.pos.z), d.pos.z)
             _m.compose(_v, _q, _s)
             this.stakes.setMatrixAt(stake++, _m)
           }
@@ -524,48 +623,7 @@ export class Scenery {
           }
           break
         }
-        case 'searchlight':
-        case 'flarepost': {
-          liveIds.add(d.id)
-          let g = this.defenceProps.get(d.id)
-          if (!g) {
-            g = d.kind === 'searchlight' ? buildSearchlight() : buildFlarePost()
-            this.scene.add(g)
-            this.defenceProps.set(d.id, g)
-          }
-          g.position.set(d.pos.x, y, d.pos.z)
-          if (d.kind === 'searchlight') {
-            g.rotation.y = -d.angle
-            let beam = this.beams.get(d.id)
-            if (!beam) {
-              const geo = new THREE.ConeGeometry(11, 150, 12, 1, true)
-              geo.translate(0, -75, 0)
-              geo.rotateX(Math.PI / 2)
-              beam = new THREE.Mesh(geo, this.beamMat)
-              this.scene.add(beam)
-              this.beams.set(d.id, beam)
-            }
-            beam.visible = night && d.active
-            beam.position.set(d.pos.x, y + 1.6, d.pos.z)
-            beam.rotation.y = -d.angle + Math.PI
-          }
-          break
-        }
-      }
-    }
-
-    // Remove props for dead searchlights/flareposts.
-    for (const [id, g] of this.defenceProps) {
-      if (!liveIds.has(id)) {
-        this.scene.remove(g)
-        this.disposeGroup(g, true, false) // fresh-built per defence; materials shared mat.*
-        this.defenceProps.delete(id)
-        const beam = this.beams.get(id)
-        if (beam) {
-          this.scene.remove(beam)
-          beam.geometry.dispose() // per-searchlight cone; beamMat is shared, leave it
-          this.beams.delete(id)
-        }
+        default: break
       }
     }
 
@@ -589,7 +647,8 @@ export class Scenery {
    *   default) to show every platform, e.g. in the commander view.
    */
   syncUnits(units: Unit[], possessedUnitId = -1): void {
-    const live = new Set<number>()
+    const live = this.liveUnitIds
+    live.clear()
     for (const u of units) {
       if (u.disbanded) continue
       let builder: (() => THREE.Group) | null = null
@@ -610,8 +669,9 @@ export class Scenery {
       }
       g.visible = u.id !== possessedUnitId // you operate it from the inside; don't wall the view
       g.position.set(u.pos.x, this.terrain.heightAt(u.pos.x, u.pos.z), u.pos.z)
-      const gunner = u.crew.find((c) => c.hp > 0)
-      if (gunner) g.rotation.y = -gunner.facing
+      for (const c of u.crew) {
+        if (c.hp > 0) { g.rotation.y = -c.facing; break }
+      }
     }
     for (const [id, g] of this.unitProps) {
       if (!live.has(id)) {
@@ -622,8 +682,26 @@ export class Scenery {
     }
   }
 
+  /** Wreck dressing: darkened variant per SOURCE material, built once and
+   *  shared by every wreck that uses that material. Session-lived like the
+   *  templates — swapping in a cached material costs no shader work and no
+   *  per-mesh clone allocation on the "vehicle destroyed" beat. */
+  private wreckMats = new Map<THREE.Material, THREE.Material>()
+
+  private wreckMaterialFor(src: THREE.MeshStandardMaterial): THREE.Material {
+    let m = this.wreckMats.get(src)
+    if (!m) {
+      const dark = src.clone()
+      dark.color.multiplyScalar(0.28)
+      this.wreckMats.set(src, dark)
+      m = dark
+    }
+    return m
+  }
+
   syncVehicles(vehicles: Vehicle[]): void {
-    const live = new Set<number>()
+    const live = this.liveVehicleIds
+    live.clear()
     for (const v of vehicles) {
       live.add(v.id)
       let entry = this.vehicleProps.get(v.id)
@@ -654,9 +732,7 @@ export class Scenery {
         entry.group.traverse((o) => {
           const mesh = o as THREE.Mesh
           if (mesh.isMesh) {
-            const m = (mesh.material as THREE.MeshStandardMaterial).clone()
-            m.color.multiplyScalar(0.28)
-            mesh.material = m
+            mesh.material = this.wreckMaterialFor(mesh.material as THREE.MeshStandardMaterial)
           }
         })
       }
@@ -664,10 +740,10 @@ export class Scenery {
     for (const [id, entry] of this.vehicleProps) {
       if (!live.has(id)) {
         this.scene.remove(entry.group)
-        // Dead-dressed vehicles carry per-instance cloned materials (owned);
-        // otherwise materials are the shared mat.* set. Geometry belongs to
-        // the session-lived template — never dispose it.
-        this.disposeGroup(entry.group, false, entry.deadDressed)
+        // Materials are shared everywhere now — the live set is the module
+        // mat.* cache, wreck dressing swaps in the session-lived wreckMats
+        // variants. Geometry belongs to the template — never dispose either.
+        this.disposeGroup(entry.group, false, false)
         this.vehicleProps.delete(id)
       }
     }

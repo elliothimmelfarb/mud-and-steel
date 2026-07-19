@@ -42,6 +42,14 @@ const SHADOW_DIST = 320    // fixed light-to-focus distance along the sun direct
 const SHADOW_NEAR = 140
 const SHADOW_FAR = 520
 
+// Scratch vectors for the per-frame sun/shadow bookkeeping — reused, never
+// allocated in the frame loop.
+const UP_Y = new THREE.Vector3(0, 1, 0)
+const UP_X = new THREE.Vector3(1, 0, 0)
+const _right = new THREE.Vector3()
+const _camUp = new THREE.Vector3()
+const _focus = new THREE.Vector3()
+
 export class Sky {
   readonly sun: THREE.DirectionalLight
   readonly hemi: THREE.HemisphereLight
@@ -86,6 +94,16 @@ export class Sky {
     this.sun.shadow.bias = -0.00035
     this.sun.shadow.normalBias = 0.12
     scene.add(this.sun, this.sun.target)
+    // The ortho frustum never changes shape — only the light's position and
+    // target move per frame (applySunTransform). Set it once here.
+    const shadowCam = this.sun.shadow.camera as THREE.OrthographicCamera
+    shadowCam.left = -SHADOW_BOX_HALF
+    shadowCam.right = SHADOW_BOX_HALF
+    shadowCam.top = SHADOW_BOX_HALF
+    shadowCam.bottom = -SHADOW_BOX_HALF
+    shadowCam.near = SHADOW_NEAR
+    shadowCam.far = SHADOW_FAR
+    shadowCam.updateProjectionMatrix()
     this.applySunTransform() // sane initial frustum before the first setConditions() call
 
     this.moonLight = new THREE.DirectionalLight(MOON, 0)
@@ -235,9 +253,8 @@ export class Sky {
     const elev = Math.sin(sunAngle)
     const east = Math.cos(sunAngle)
     // Sun path: east → south → west (battlefield faces north).
-    const dir = new THREE.Vector3(east, Math.max(elev, -0.3), 0.45).normalize()
-    this.sunDir.copy(dir)
-    this.domeUniforms.uSunDir.value.copy(dir)
+    this.sunDir.set(east, Math.max(elev, -0.3), 0.45).normalize()
+    this.domeUniforms.uSunDir.value.copy(this.sunDir)
     this.applySunTransform()
 
     // Master darkness dial (see the field doc). Full day a touch above the
@@ -312,12 +329,12 @@ export class Sky {
    */
   private applySunTransform(): void {
     const dir = this.sunDir
-    const worldUp = Math.abs(dir.y) > 0.995 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
-    const right = new THREE.Vector3().crossVectors(worldUp, dir).normalize()
-    const camUp = new THREE.Vector3().crossVectors(dir, right).normalize()
+    const worldUp = Math.abs(dir.y) > 0.995 ? UP_X : UP_Y
+    const right = _right.crossVectors(worldUp, dir).normalize()
+    const camUp = _camUp.crossVectors(dir, right).normalize()
 
     const texel = (SHADOW_BOX_HALF * 2) / this.sun.shadow.mapSize.x
-    const focus = new THREE.Vector3(this.focusX, 0, this.focusZ)
+    const focus = _focus.set(this.focusX, 0, this.focusZ)
     const rd = focus.dot(right)
     const ud = focus.dot(camUp)
     const snapR = Math.round(rd / texel) * texel - rd
@@ -326,15 +343,7 @@ export class Sky {
 
     this.sun.position.copy(focus).addScaledVector(dir, SHADOW_DIST)
     this.sun.target.position.copy(focus)
-
-    const cam = this.sun.shadow.camera as THREE.OrthographicCamera
-    cam.left = -SHADOW_BOX_HALF
-    cam.right = SHADOW_BOX_HALF
-    cam.top = SHADOW_BOX_HALF
-    cam.bottom = -SHADOW_BOX_HALF
-    cam.near = SHADOW_NEAR
-    cam.far = SHADOW_FAR
-    cam.updateProjectionMatrix()
+    // Frustum bounds are constants, set once in the constructor.
   }
 }
 

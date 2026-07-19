@@ -48,12 +48,20 @@ export function spawnEnemy(ctx: Ctx, kind: EnemyKindId, x: number, z: number, sq
   return e
 }
 
+// Tick-scratch collections, reused every call — cleared, never reallocated.
+// The officer-aura pool keeps the tick-start POSITION SNAPSHOT semantics of
+// the old per-tick array (officers move during the loop; the aura must not).
+const _byId = new Map<number, Enemy>()
+const _officerPool: Array<{ x: number; z: number }> = []
+let _officerCount = 0
+
 export function updateEnemies(ctx: Ctx, dt: number): void {
   const { s } = ctx
 
   // Index living men by id once — squads reference members by id, and a man
   // rallies on his NCO by id. O(n) build, then O(1) lookups all tick.
-  const byId = new Map<number, Enemy>()
+  const byId = _byId
+  byId.clear()
   for (const e of s.enemies) if (e.hp > 0) byId.set(e.id, e)
 
   // Squad-level orchestration: bounding-overwatch rhythm + NCO promotion. Runs
@@ -61,10 +69,15 @@ export function updateEnemies(ctx: Ctx, dt: number): void {
   // FSM below reads. No pathfinding here.
   updateSquads(ctx, dt, byId)
 
-  // Officer auras.
-  const officers: Array<{ x: number; z: number }> = []
+  // Officer auras (position snapshot, pooled).
+  _officerCount = 0
   for (const e of s.enemies) {
-    if (e.hp > 0 && e.kind === 'eofficer') officers.push({ x: e.pos.x, z: e.pos.z })
+    if (e.hp > 0 && e.kind === 'eofficer') {
+      let o = _officerPool[_officerCount]
+      if (!o) { o = { x: 0, z: 0 }; _officerPool[_officerCount] = o }
+      o.x = e.pos.x; o.z = e.pos.z
+      _officerCount++
+    }
   }
 
   let w = 0
@@ -74,7 +87,11 @@ export function updateEnemies(ctx: Ctx, dt: number): void {
     // The NCO this man rallies on, if still alive and not himself.
     const leader = e.leaderId >= 0 ? byId.get(e.leaderId) : undefined
     const leaderPos = leader && leader.hp > 0 && leader.id !== e.id ? leader.pos : null
-    const officerNear = officers.some((o) => dist2(o.x, o.z, e.pos.x, e.pos.z) < 18 * 18)
+    let officerNear = false
+    for (let oi = 0; oi < _officerCount; oi++) {
+      const o = _officerPool[oi]
+      if (dist2(o.x, o.z, e.pos.x, e.pos.z) < 18 * 18) { officerNear = true; break }
+    }
     // A living NCO close by steadies the man just as an officer does.
     const rallied = officerNear || (leaderPos !== null && dist2(leaderPos.x, leaderPos.z, e.pos.x, e.pos.z) < SQUAD.rallyRadius * SQUAD.rallyRadius)
     soldierUpkeep(ctx, e, dt, rallied, false)

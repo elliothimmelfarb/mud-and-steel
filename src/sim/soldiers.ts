@@ -383,6 +383,11 @@ function chargeMove(ctx: Ctx, u: Unit, dt: number): void {
 
 export type Target = { kind: 'soldier'; ref: Enemy } | { kind: 'vehicle'; ref: Vehicle }
 
+// pickTarget shortlist scratch — module-scoped and reused per call, so the
+// hottest per-tick loop in unit targeting allocates nothing.
+const _topE: Array<Enemy | null> = [null, null, null, null, null]
+const _topScore = new Float64Array(5)
+
 export function pickTarget(
   ctx: Ctx, u: Unit, range: number, minRange: number, prio: TargetPriority, needLos = false,
 ): Target | null {
@@ -402,22 +407,25 @@ export function pickTarget(
   }
 
   // Keep a shortlist of the best-scoring candidates, then take the first one
-  // the shooter can actually see over the dead ground.
+  // the shooter can actually see over the dead ground. Scratch parallel arrays
+  // (module-scoped, reused every call) — the insertion order, comparisons and
+  // overflow-drop match the old splice/pop shortlist exactly.
   const TOP = 5
-  const top: Array<{ e: Enemy; score: number }> = []
+  let topLen = 0
+  // Hoisted out of the enemy loop — both are invariant across candidates.
+  const coverSec = u.coverSectionId !== null ? sectionById(s, u.coverSectionId) : null
+  const night = ctx.weather.state.night
   for (const e of s.enemies) {
     if (e.hp <= 0 || e.behavior === 'rout') continue
     const d2v = dist2(e.pos.x, e.pos.z, px, pz)
     if (d2v < min2 || d2v > r2) continue
-    let score = -Math.sqrt(d2v)
+    const dist = Math.sqrt(d2v)
+    let score = -dist
     // Covering fire: this unit is ordered onto a frontage — anything near the
     // named section outranks everything else.
-    if (u.coverSectionId !== null) {
-      const cs = sectionById(s, u.coverSectionId)
-      if (cs && dist2(e.pos.x, e.pos.z, cs.mid.x, cs.mid.z) < 30 * 30) score += 300
-    }
+    if (coverSec && dist2(e.pos.x, e.pos.z, coverSec.mid.x, coverSec.mid.z) < 30 * 30) score += 300
     switch (prio) {
-      case 'strongest': score = e.maxHp - Math.sqrt(d2v) * 0.3; break
+      case 'strongest': score = e.maxHp - dist * 0.3; break
       case 'officers':
         if (e.kind === 'eofficer') score += 500
         else if (e.kind === 'emg' || e.kind === 'esniper') score += 250
@@ -426,19 +434,23 @@ export function pickTarget(
       case 'nearest': break
     }
     // Prefer visible men at night.
-    if (ctx.weather.state.night && !litAt(ctx, e.pos.x, e.pos.z)) score -= 200
-    let i = top.length
-    while (i > 0 && top[i - 1].score < score) i--
+    if (night && !litAt(ctx, e.pos.x, e.pos.z)) score -= 200
+    let i = topLen
+    while (i > 0 && _topScore[i - 1] < score) i--
     if (i < TOP) {
-      top.splice(i, 0, { e, score })
-      if (top.length > TOP) top.pop()
+      // Shift the tail right (dropping any overflow past TOP) and insert.
+      const last = topLen < TOP ? topLen : TOP - 1
+      for (let k = last; k > i; k--) { _topE[k] = _topE[k - 1]; _topScore[k] = _topScore[k - 1] }
+      _topE[i] = e
+      _topScore[i] = score
+      if (topLen < TOP) topLen++
     }
   }
-  if (!needLos && top.length > 0) return { kind: 'soldier', ref: top[0].e }
-  if (top.length > 0) {
+  if (!needLos && topLen > 0) return { kind: 'soldier', ref: _topE[0] as Enemy }
+  if (topLen > 0) {
     const eyeY = standSurface(ctx, px, pz) + 1.38
-    for (const cand of top) {
-      const e = cand.e
+    for (let k = 0; k < topLen; k++) {
+      const e = _topE[k] as Enemy
       const aimY = standSurface(ctx, e.pos.x, e.pos.z) + 0.9
       if (losClear(ctx, px, eyeY, pz, e.pos.x, aimY, e.pos.z)) {
         return { kind: 'soldier', ref: e }

@@ -52,6 +52,34 @@ const HIT_MARKER_KILL_DUR = 0.5
 const HURT_SLOTS = 4
 const HURT_INDICATOR_DUR = 1.2
 
+/**
+ * Write-if-changed DOM helpers. The first-person HUD refreshes every render
+ * frame; unconditional textContent/style writes dirty style recalc and node
+ * churn even when the value is identical (which, at rest, is every frame).
+ * Last-written values ride on the element itself, so a rebuilt HUD starts
+ * clean automatically.
+ */
+interface CachedEl extends HTMLElement { _txt?: string; _st?: Record<string, string>; _cls?: Record<string, boolean> }
+function setText(el: HTMLElement, v: string): void {
+  const e = el as CachedEl
+  if (e._txt !== v) { e._txt = v; el.textContent = v }
+}
+function setStyle(el: HTMLElement, key: 'opacity' | 'background' | 'display' | 'transform', v: string): void {
+  const e = el as CachedEl
+  const m = e._st ?? (e._st = {})
+  if (m[key] !== v) { m[key] = v; el.style[key] = v }
+}
+function setVar(el: HTMLElement, key: string, v: string): void {
+  const e = el as CachedEl
+  const m = e._st ?? (e._st = {})
+  if (m[key] !== v) { m[key] = v; el.style.setProperty(key, v) }
+}
+function setClass(el: HTMLElement, cls: string, on: boolean): void {
+  const e = el as CachedEl
+  const m = e._cls ?? (e._cls = {})
+  if (m[cls] !== on) { m[cls] = on; el.classList.toggle(cls, on) }
+}
+
 export class FpsMode {
   active = false
   yaw = 0
@@ -561,7 +589,7 @@ export class FpsMode {
 
     const cam = this.game.renderer.camera
     const dir = camDir(this.yaw, this.pitch)
-    const moving = this.moveInput().len > 0.1
+    const moving = this.moveInput(this.mvSide).len > 0.1
     const params: FireParams = {
       camPos: { x: cam.position.x, y: cam.position.y, z: cam.position.z },
       dir, yaw: this.yaw, pitch: this.pitch, ads: this.ads, moving,
@@ -860,8 +888,14 @@ export class FpsMode {
     return worst
   }
 
-  private moveInput(): { x: number; z: number; len: number } {
-    if (this.profile.emplaced) return { x: 0, z: 0, len: 0 }
+  // Two scratch objects so the main update() read and the transient
+  // tryFire()/updateHud() reads never alias — moveInput allocates nothing.
+  private readonly mvMain = { x: 0, z: 0, len: 0 }
+  private readonly mvSide = { x: 0, z: 0, len: 0 }
+
+  private moveInput(out: { x: number; z: number; len: number }): { x: number; z: number; len: number } {
+    out.x = 0; out.z = 0; out.len = 0
+    if (this.profile.emplaced) return out
     const k = this.keys
     let f = 0, r = 0
     if (k.has('KeyW') || k.has('ArrowUp')) f += 1
@@ -869,7 +903,10 @@ export class FpsMode {
     if (k.has('KeyD') || k.has('ArrowRight')) r += 1
     if (k.has('KeyA') || k.has('ArrowLeft')) r -= 1
     const len = Math.hypot(f, r)
-    return { x: f === 0 && r === 0 ? 0 : r / (len || 1), z: f === 0 && r === 0 ? 0 : f / (len || 1), len }
+    out.x = f === 0 && r === 0 ? 0 : r / (len || 1)
+    out.z = f === 0 && r === 0 ? 0 : f / (len || 1)
+    out.len = len
+    return out
   }
 
   /** Per-render-frame update. Owns the camera completely while active. */
@@ -911,7 +948,7 @@ export class FpsMode {
     this.lastHp = s.hp
 
     // -- movement (predicted — the sim soldier follows via fpspose) -----------
-    const mv = this.moveInput()
+    const mv = this.moveInput(this.mvMain)
     const sprinting = this.keys.has('ShiftLeft') && this.stance === 'stand' && mv.z > 0.5
     if (mv.len > 0.1) {
       let speed = sprinting ? SPRINT_SPEED : MOVE_SPEED[this.stance]
@@ -1096,22 +1133,22 @@ export class FpsMode {
     const hmK = hmLive ? this.hitMarkerT / hmDur : 0 // 1 → 0 across the burn
     // Alpha races ahead of the lifetime so the marker pops in immediately and
     // then visibly gutters out, rather than fading linearly the whole time.
-    this.hitMarkerEl.style.opacity = hmLive ? String(Math.min(1, hmK * 1.8)) : '0'
-    this.hitMarkerEl.style.setProperty('--hm-scale', String(1 + (hmLive ? (1 - hmK) * 0.4 : 0)))
-    this.hitMarkerEl.classList.toggle('fps-hitmarker--kill', hmLive && this.hitMarkerKill)
+    setStyle(this.hitMarkerEl, 'opacity', hmLive ? String(Math.min(1, hmK * 1.8)) : '0')
+    setVar(this.hitMarkerEl, '--hm-scale', String(1 + (hmLive ? (1 - hmK) * 0.4 : 0)))
+    setClass(this.hitMarkerEl, 'fps-hitmarker--kill', hmLive && this.hitMarkerKill)
 
     // -- directional wedges: count down and rotate to the CURRENT view -------
     for (let k = 0; k < HURT_SLOTS; k++) {
       if (this.hurtT[k] > 0) this.hurtT[k] = Math.max(0, this.hurtT[k] - dt)
       const el = this.hurtIndicatorEls[k]
-      if (this.hurtT[k] <= 0) { el.style.opacity = '0'; continue }
+      if (this.hurtT[k] <= 0) { setStyle(el, 'opacity', '0'); continue }
       // Screen angle = world bearing minus the player's own yaw — turning
       // toward the shooter always brings his wedge toward the top (12
       // o'clock) of the ring, whichever way the player is currently facing.
       const screenAngle = this.hurtBearing[k] - this.yaw
-      el.style.transform = `rotate(${(screenAngle * (180 / Math.PI)).toFixed(1)}deg)`
+      setStyle(el, 'transform', `rotate(${(screenAngle * (180 / Math.PI)).toFixed(1)}deg)`)
       const frac = this.hurtT[k] / HURT_INDICATOR_DUR
-      el.style.opacity = String(Math.min(1, frac * 1.5))
+      setStyle(el, 'opacity', String(Math.min(1, frac * 1.5)))
     }
   }
 
@@ -1342,51 +1379,51 @@ export class FpsMode {
     // and opens slightly while moving. It disappears under an optic (the sniper
     // telescope OR the field-gun dial sight).
     const scoped = ((p.scope || !!p.gunsight) && this.ads > 0.6) || this.binos > 0.6
-    const moving = this.moveInput().len > 0.1
+    const moving = this.moveInput(this.mvSide).len > 0.1
     const gap = 11 - this.ads * 6 + (moving ? 4 : 0) + s.suppression * 10
-    this.crosshair.style.setProperty('--sight-gap', `${gap.toFixed(1)}px`)
-    this.crosshair.style.setProperty('--sight-alpha', String(0.82 - this.ads * 0.22))
-    this.crosshair.style.opacity = String(locked && !scoped ? 1 : 0)
-    this.crosshair.classList.toggle('fps-sight--ads', this.ads > 0.65)
-    this.crosshair.classList.toggle('fps-sight--blocked', this.reloadT > 0 || this.boltT > 0.08)
+    setVar(this.crosshair, '--sight-gap', `${gap.toFixed(1)}px`)
+    setVar(this.crosshair, '--sight-alpha', (0.82 - this.ads * 0.22).toFixed(3))
+    setStyle(this.crosshair, 'opacity', locked && !scoped ? '1' : '0')
+    setClass(this.crosshair, 'fps-sight--ads', this.ads > 0.65)
+    setClass(this.crosshair, 'fps-sight--blocked', this.reloadT > 0 || this.boltT > 0.08)
     // Fade in whichever optic this weapon lays through — the plain reticle scope
     // for the sniper, the amber telescopic graticule for the gun.
     const opticAlpha = (p.scope || !!p.gunsight) && this.ads > 0.6 ? Math.min(1, (this.ads - 0.6) / 0.3) : 0
-    this.scopeEl.style.opacity = String(p.scope ? opticAlpha : 0)
-    this.gunsightEl.style.opacity = String(p.gunsight ? opticAlpha : 0)
-    this.binoEl.style.opacity = String(Math.min(1, Math.max(0, (this.binos - 0.25) / 0.4)))
+    setStyle(this.scopeEl, 'opacity', String(p.scope ? opticAlpha : 0))
+    setStyle(this.gunsightEl, 'opacity', String(p.gunsight ? opticAlpha : 0))
+    setStyle(this.binoEl, 'opacity', String(Math.min(1, Math.max(0, (this.binos - 0.25) / 0.4))))
 
-    this.hintEl.textContent = locked
+    setText(this.hintEl, locked
       ? `${s.name.first} ${s.name.last} · ${p.name} — M or Esc to return to command`
-      : 'Click to take up the weapon'
+      : 'Click to take up the weapon')
 
     // Ammo / status readout.
-    this.ammoEl.textContent = this.ammoReadout()
-    this.ammoLabelEl.textContent = p.ammoName.toUpperCase()
-    this.controlsEl.textContent = p.controlsHint.toUpperCase()
+    setText(this.ammoEl, this.ammoReadout())
+    setText(this.ammoLabelEl, p.ammoName.toUpperCase())
+    setText(this.controlsEl, p.controlsHint.toUpperCase())
 
     // Heat / fuel gauge.
     const showHeat = p.heat
     const showFuel = p.ammoKind === 'fuel'
-    this.gaugeWrap.style.display = showHeat || showFuel ? 'block' : 'none'
+    setStyle(this.gaugeWrap, 'display', showHeat || showFuel ? 'block' : 'none')
     if (showHeat) {
       // The local mirror, not u.heat — the gauge must not trail the trigger.
       const h = this.heat
-      this.gaugeLabel.textContent = this.venting ? 'JACKET VENTING — HOLD' : 'BARREL HEAT'
-      this.gaugeBar.style.background =
-        `linear-gradient(90deg, ${h > 0.8 ? '#d06a34' : h > 0.5 ? '#c9a53a' : '#7fae5a'} ${h * 100}%, rgba(255,255,255,0.12) ${h * 100}%)`
+      setText(this.gaugeLabel, this.venting ? 'JACKET VENTING — HOLD' : 'BARREL HEAT')
+      setStyle(this.gaugeBar, 'background',
+        `linear-gradient(90deg, ${h > 0.8 ? '#d06a34' : h > 0.5 ? '#c9a53a' : '#7fae5a'} ${h * 100}%, rgba(255,255,255,0.12) ${h * 100}%)`)
     } else if (showFuel) {
-      this.gaugeLabel.textContent = 'FUEL'
-      this.gaugeBar.style.background =
-        `linear-gradient(90deg, ${this.fuel > 0.25 ? '#c98a3a' : '#a04a3a'} ${this.fuel * 100}%, rgba(255,255,255,0.12) ${this.fuel * 100}%)`
+      setText(this.gaugeLabel, 'FUEL')
+      setStyle(this.gaugeBar, 'background',
+        `linear-gradient(90deg, ${this.fuel > 0.25 ? '#c98a3a' : '#a04a3a'} ${this.fuel * 100}%, rgba(255,255,255,0.12) ${this.fuel * 100}%)`)
     }
 
     // Stance (walking weapons only) + health.
-    this.stanceEl.style.display = p.emplaced ? 'none' : 'block'
-    this.stanceEl.textContent = this.stance === 'stand' ? '↑  STANDING' : this.stance === 'crouch' ? '⌄  CROUCHED' : '—  PRONE'
+    setStyle(this.stanceEl, 'display', p.emplaced ? 'none' : 'block')
+    setText(this.stanceEl, this.stance === 'stand' ? '↑  STANDING' : this.stance === 'crouch' ? '⌄  CROUCHED' : '—  PRONE')
     const hpFrac = Math.max(0, s.hp / s.maxHp)
-    this.healthEl.style.background =
-      `linear-gradient(90deg, ${hpFrac > 0.4 ? '#7fae5a' : '#a04a3a'} ${hpFrac * 100}%, rgba(255,255,255,0.12) ${hpFrac * 100}%)`
+    setStyle(this.healthEl, 'background',
+      `linear-gradient(90deg, ${hpFrac > 0.4 ? '#7fae5a' : '#a04a3a'} ${hpFrac * 100}%, rgba(255,255,255,0.12) ${hpFrac * 100}%)`)
   }
 
   private ammoReadout(): string {
