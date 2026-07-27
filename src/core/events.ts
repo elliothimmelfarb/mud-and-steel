@@ -14,6 +14,9 @@ export interface GameEvents {
   sectionRetaken: { sectionId: number }
   /** A GERMAN-home section changed hands (Big Push). */
   sectionCaptured: { sectionId: number; by: Team }
+  /** Big Push: a push went over the top / lost its nerve and came back. */
+  assaultBegan: { groupId: number; side: Team; men: number; targetSectionId: number }
+  assaultBroke: { groupId: number; side: Team; men: number }
   unitPlaced: { unitId: number }
   unitLost: { unitId: number; kind: string }
   soldierDied: { name: string; rank: string; kind: string; wave: number; deeds: number; wavesServed: number }

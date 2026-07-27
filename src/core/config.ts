@@ -238,6 +238,68 @@ export const DEFENCE_DEFS: Record<DefenceKindId, DefenceDef> = {
   },
 }
 
+/**
+ * Over the top — the player's assault, tuned around one rule: NO STATE HERE
+ * MAY EVER REDUCE A MAN'S SPEED TO ZERO. An assault that can stall forever is
+ * an order the player can never learn to use; one that is merely expensive is
+ * a decision. Suppression, wire and mud are taxes on the crossing, never walls.
+ */
+export const ASSAULT = {
+  rushSpeed: 3.6,             // m/s, the moving bound, up and running
+  crouchSpeed: 1.9,           // shaken: bent double, still going forward
+  crawlSpeed: 1.25,           // pinned: flat on his face, still gaining ground
+  boundSeconds: 3.2,          // one element's bound before it passes over
+  /** Bounding only starts inside this range of the objective — you do not
+   *  fire-and-move across empty ground, and an overwatch element beyond the
+   *  range its rifles are any good at is a halted element, not a covering one. */
+  boundContactRange: 70,
+  wireSlow: 0.35,             // caught in THEIR belt
+  ownWireSlow: 0.62,          // your own belt: known lanes, boards down first
+  wireBleedDps: 1.2,
+  cutDps: 4,                  // ~9 s for one man on a worn segment
+  cutDpsEngineer: 14,
+  /** Metres ahead sampled when weaving shell hole to shell hole under fire. */
+  coverProbe: 5,
+  /** The push breaks when this fraction of the men who went over are down… */
+  breakLossFraction: 0.6,
+  /** …or when the survivors' average morale falls this low. Deliberately the
+   *  same figure as COMBAT.moraleBreak: a push gives out when its men would
+   *  have given out anywhere else on the field, not a moment sooner. */
+  breakMorale: 0.22,
+  homeSpeed: 3.2,             // running back for your own parapet
+  occupyRadius: 1.2,
+} as const
+
+/**
+ * The creeping barrage — the assault's other half. It walks north at just
+ * under a man's pace so infantry ordered over the top behind it arrive as the
+ * curtain lifts off the parapet; get ahead of it and your own guns kill you.
+ * It is aimed at a FRONTAGE: the old shoot smeared 132 shells across the whole
+ * 210 m map, which suppressed nobody and cut nothing.
+ */
+export const CREEP = {
+  startZ: 58,             // just beyond your own belt
+  endZ: -86,              // just past their front trench
+  stepMetres: 4.6,
+  // 2.3 m/s, paired with safeLag below. Two things were measured and both cut
+  // against slowing it further: a curtain walking at the infantry's own pace
+  // makes the men lean on it the whole way, doubling their time in the open
+  // for worse results than no barrage at all; and the lag rule is what stops
+  // a fresh section sprinting into its own shells in the first minute. The
+  // cost of this speed is that the curtain lifts off the objective before the
+  // last men arrive — timing the whistle against it is the player's problem
+  // to solve, and worth revisiting once the mode has real play behind it.
+  interval: 2.0,
+  shellsPerVolley: 3,
+  frontage: 70,           // σ = frontage/2 about the aim point
+  /** Metres an assault holds behind the curtain. Blast reaches ~5.4 m, so
+   *  this is a real margin for the z-jitter, not a hair's breadth. */
+  safeLag: 22,
+  /** Morale floor for a push following its own curtain — comfortably clear of
+   *  ASSAULT.breakMorale, so the shoot cannot break the attack it supports. */
+  moraleFloor: 0.45,
+} as const
+
 export const WIRE_SEGMENT_LEN = 6
 export const MINE_DAMAGE = 90
 export const MINE_RADIUS = 3
@@ -334,7 +396,13 @@ export const COMBAT = {
   tracerLaunchLen: 30,
   ricochetChance: 0.3,        // odds a round sparks off armour / a shallow hard hit
   tracerTrailChance: 0.14,    // per-round-per-frame odds of a drifting smoke wisp
-  suppressDecay: 0.09,        // per second
+  // Per second. One MG 08 pours on ~1.0/s (0.67 from the burst, the rest from
+  // near misses striking the dirt), so at the old 0.09 nerve was a LATCH, not
+  // a state: anything a machine gun looked at stayed pinned until the gun died,
+  // however long that took. At 0.22 a man shakes it off in about a second of
+  // quiet, which is what makes counter-battery work worth doing — suppressing
+  // THEIR garrison now visibly unpins YOUR assault.
+  suppressDecay: 0.22,
   suppressCrouch: 0.5,        // above this: crouch, accuracy penalty
   suppressPin: 0.8,           // above this: pinned prone, cannot fire
   moraleBreak: 0.22,
