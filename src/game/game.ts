@@ -6,12 +6,18 @@
 import * as THREE from 'three'
 import type {
   BuildableId, CasualtyRecord, DefenceKindId, Difficulty, GameSettings,
-  Stance, TargetPriority, Team, Unit, UnitKindId, WavePlan,
+  Soldier, Stance, TargetPriority, Team, Unit, UnitKindId, WavePlan,
 } from '../core/types'
 import {
   BUILD_ORDER, DEEDS, DEFENCE_DEFS, ECONOMY, PLACEMENT, RANKS,
   SIM_DT, TRENCH, UNIT_DEFS, UPGRADE_DEFS, VET_XP, WORLD,
 } from '../core/config'
+
+/** Ground speed (m/s) that reads as a flat-out run in the stride animation. */
+const GAIT_FULL_SPEED = 3.4
+/** Stride-clock rate at a standstill (idle shuffle) and per m/s of real speed. */
+const GAIT_IDLE_RATE = 1.2
+const GAIT_RATE_PER_SPEED = 2.4
 import { EventBus } from '../core/events'
 import { forkRand, hashString, type Rand } from '../core/rng'
 import {
@@ -755,6 +761,16 @@ export class Game {
     })
     ev.on('thunder', () => this.audio.play('thunder', { gain: 0.7 }))
     ev.on('orderIssued', (p) => this.onOrderIssued(p.id as OrderId))
+    ev.on('assaultBegan', (p) => {
+      if (p.side !== this.mySide) return
+      const sec = this.ctx.s.sections.find((c) => c.id === p.targetSectionId)
+      const where = sec ? `${sec.line === 'front' ? 'the front line' : 'the support line'} at ${Math.round(sec.mid.x)}` : 'the objective'
+      this.hud?.toast(`OVER THE TOP — ${p.men} men away for ${where}.`, 'danger')
+    })
+    ev.on('assaultBroke', (p) => {
+      if (p.side !== this.mySide) return
+      this.audio.play('ui_error', { gain: 0.5 })
+    })
     ev.on('upgradeBought', (p) => {
       const def = UPGRADE_DEFS.find((u) => u.id === p.id)
       this.audio.play('upgrade', { gain: 0.7 })
@@ -1112,8 +1128,9 @@ export class Game {
   issueOrder(id: OrderId): void {
     if (this.mySide !== 'brit') return // British orders; the sim would drop them
     if (!this.orderReady(id)) { this.audio.play('ui_error', { gain: 0.4 }); return }
-    // Flare aims where the commander is looking; the sim clamps the throw.
-    const cmd: Cmd = id === 'flare'
+    // Flare and barrage aim where the commander is looking; the sim clamps
+    // both. A creeping barrage is a frontage, so its x is the whole aim.
+    const cmd: Cmd = id === 'flare' || id === 'barrage'
       ? { t: 'order', id, x: this.rig.target.x, z: this.rig.target.z }
       : { t: 'order', id }
     this.submit([cmd])
@@ -1189,7 +1206,11 @@ export class Game {
   /** Big Push: your selected front sections (the stretch going over the top). */
   selectedSections: number[] = []
   private assaultHintShown = false
+  /** Per-soldier measured gait (see gaitOf) — render-only, never hashed. */
+  private gait = new Map<number, { x: number; z: number; move: number; phase: number }>()
   private selRings: THREE.Mesh[] = []
+  /** Pooled rings marking the objective of every push still out. */
+  private objRings: THREE.Mesh[] = []
   /** Pooled rings marking posts that marching crews have claimed but not reached. */
   private destRings: THREE.Mesh[] = []
 
@@ -1308,6 +1329,44 @@ export class Game {
     this.warnRings.push({ mesh, t: seconds })
   }
 
+  /**
+   * Measured gait for one player soldier. Keeps his last drawn position and
+   * a render-local stride clock, so `moveAmount` is ground actually covered
+   * and the walk cycle advances only while he is covering it. Render-side by
+   * design: the sim hash never sees it, and it stays truthful for every
+   * behaviour — marching, rushing, crawling, pinned — without each of them
+   * having to remember to say so.
+   */
+  private gaitOf(c: Soldier, dt: number): { move: number; phase: number } {
+    let g = this.gait.get(c.id)
+    if (!g) {
+      g = { x: c.pos.x, z: c.pos.z, move: 0, phase: c.animPhase }
+      this.gait.set(c.id, g)
+      return g
+    }
+    if (dt > 0) {
+      const speed = Math.hypot(c.pos.x - g.x, c.pos.z - g.z) / dt
+      // Ease toward the measured speed so a 30 Hz sim read through a 60+ Hz
+      // render does not strobe the stride between frames.
+      const want = Math.min(1, speed / GAIT_FULL_SPEED)
+      g.move += (want - g.move) * Math.min(1, dt * 12)
+      g.phase += dt * (GAIT_IDLE_RATE + speed * GAIT_RATE_PER_SPEED)
+    }
+    g.x = c.pos.x; g.z = c.pos.z
+    return g
+  }
+
+  /** Drop gait entries for men who are gone, so the map cannot grow forever. */
+  private pruneGait(): void {
+    if (this.gait.size < 256) return
+    const live = new Set<number>()
+    for (const u of this.ctx.s.units) {
+      if (u.disbanded) continue
+      for (const c of u.crew) if (c.hp > 0) live.add(c.id)
+    }
+    for (const id of this.gait.keys()) if (!live.has(id)) this.gait.delete(id)
+  }
+
   /** Big Push: sound the recall for every group still out. */
   recallAllAssaults(): void {
     const cmds: Cmd[] = this.ctx.s.assaults
@@ -1366,6 +1425,36 @@ export class Game {
         0.35 + Math.abs(Math.sin(this.ctx.s.time * 3 + u.id)) * 0.25
     }
     for (let i = n; i < this.destRings.length; i++) this.destRings[i].visible = false
+  }
+
+  /**
+   * Where each push still out is headed. Without this the only way to tell an
+   * assault order took was to watch the men — and a stalled attack and a
+   * working one look the same from the map.
+   */
+  private syncObjectiveRings(): void {
+    const s = this.ctx.s
+    let n = 0
+    for (const g of s.assaults) {
+      if (g.side !== this.mySide || g.state !== 'advancing') continue
+      const sec = s.sections.find((c) => c.id === g.targetSectionId)
+      if (!sec) continue
+      if (n >= this.objRings.length) {
+        const geo = new THREE.TorusGeometry(9, 0.4, 6, 32)
+        geo.rotateX(Math.PI / 2)
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+          color: 0xb8452f, transparent: true, opacity: 0.5, depthWrite: false,
+        }))
+        this.renderer.scene.add(mesh)
+        this.objRings.push(mesh)
+      }
+      const ring = this.objRings[n++]
+      ring.visible = true
+      ring.position.set(sec.mid.x, this.terrain.heightAt(sec.mid.x, sec.mid.z) + 0.4, sec.mid.z)
+      ;(ring.material as THREE.MeshBasicMaterial).opacity =
+        0.3 + Math.abs(Math.sin(s.time * 2.5 + g.id)) * 0.35
+    }
+    for (let i = n; i < this.objRings.length; i++) this.objRings[i].visible = false
   }
 
   applySettings(st: GameSettings): void {
@@ -1600,7 +1689,6 @@ export class Game {
       x: 0, y: 0, z: 0, facing: 0, stance: 'stand', moveAmount: 0, animPhase: 0,
       aiming: false, recoil: 0, deadT: 0, deadSeed: 0, masked: false, team: 'brit', tint: 0, mounted: false,
     }
-    const charging = s.orders.bayonetT > 0
     for (const u of s.units) {
       if (u.disbanded) continue
       for (const c of u.crew) {
@@ -1610,8 +1698,17 @@ export class Game {
         pose.y = standY(c.pos.x, c.pos.z)
         pose.facing = c.facing
         pose.stance = c.stance
-        pose.moveAmount = u.fallenBack || charging || u.march !== null || u.assaultGroupId !== null ? 1 : 0
-        pose.animPhase = c.animPhase
+        // The gait is measured, never declared. This used to be a flag —
+        // anyone in an assault group rendered at a full run whether he was
+        // sprinting, lying on overwatch or pinned flat, which is exactly how
+        // a stalled attack came to look like a working one. Deriving both the
+        // stride amplitude and the clock from real ground covered means the
+        // animation cannot lie about the sim again.
+        const gait = this.gaitOf(c, dt)
+        pose.moveAmount = gait.move
+        pose.animPhase = gait.phase
+        // A man who has stopped moving is a man with the rifle up — the
+        // renderer's own `move < 0.5` gate now does that work honestly.
         pose.aiming = s.phase === 'assault' && !u.fallenBack && u.march === null
         pose.recoil = Math.max(0, 1 - c.cooldown * 4)
         pose.deadT = 0
@@ -1751,8 +1848,9 @@ export class Game {
       if (this.flareSprites[flareIdx]) this.flareSprites[flareIdx].visible = false
     }
 
-    if (s.mode === 'bigpush') this.syncSelectionRings()
+    if (s.mode === 'bigpush') { this.syncSelectionRings(); this.syncObjectiveRings() }
     this.syncDestinationRings()
+    this.pruneGait()
 
     // Warning rings pulse and expire.
     for (let i = this.warnRings.length - 1; i >= 0; i--) {

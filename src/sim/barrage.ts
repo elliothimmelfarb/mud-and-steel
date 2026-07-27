@@ -6,7 +6,7 @@
  * All barrage state lives on SimState (s.barrages / s.creeping) — never at
  * module level — so saves, twin sims and lockstep replays all see it.
  */
-import { WORLD } from '../core/config'
+import { CREEP, WORLD } from '../core/config'
 import { gauss } from '../core/rng'
 import { snd, type Ctx } from './sim'
 import { spawnBarrageShell } from './projectiles'
@@ -46,22 +46,38 @@ export function updateBarrages(ctx: Ctx, dt: number, elapsed: number): void {
   if (creeping) {
     creeping.t -= dt
     if (creeping.t <= 0) {
-      creeping.t = 1.7
+      creeping.t = CREEP.interval
       creeping.volleys++
-      for (let i = 0; i < 3; i++) {
-        const sx = (ctx.rand() - 0.5) * 210
+      for (let i = 0; i < CREEP.shellsPerVolley; i++) {
+        const sx = creeping.x + gauss(ctx.rand, 0, CREEP.frontage / 2)
         spawnBarrageShell(ctx, 'brit', sx, creeping.z + gauss(ctx.rand, 0, 4), 65, false)
       }
-      creeping.z -= 4.6
-      if (creeping.z < -150) s.creeping = null
+      creeping.z -= CREEP.stepMetres
+      if (creeping.z < CREEP.endZ) s.creeping = null
     }
   }
 }
 
-export function startCreepingBarrage(ctx: Ctx): void {
-  ctx.s.creeping = { z: 52, t: 0.2, volleys: 0 }
-  ctx.events.emit('toast', { text: 'Creeping barrage — walking north. Mind your wire.', kind: 'info' })
-  snd(ctx.s, { name: 'whistle_attack', x: 0, y: 2, z: 100, gain: 0.8 })
+/**
+ * The curtain. It starts just beyond your own wire and walks north at a man's
+ * pace, so an assault ordered behind it arrives at the enemy parapet as the
+ * last shells lift — that timing IS the mechanic. It is aimed at a FRONTAGE:
+ * a hundred and thirty shells smeared across the whole map suppressed nobody.
+ * It is also blind — it cuts your wire and theirs, and it will kill your own
+ * men if they get ahead of it.
+ */
+export function startCreepingBarrage(ctx: Ctx, centreX: number): void {
+  const x = Math.max(-WORLD.width / 2 + 20, Math.min(WORLD.width / 2 - 20, centreX))
+  ctx.s.creeping = { x, z: CREEP.startZ, t: 0.2, volleys: 0 }
+  ctx.events.emit('toast', {
+    text: 'Creeping barrage — walking north at a man\'s pace. Follow it in.', kind: 'info',
+  })
+  snd(ctx.s, { name: 'whistle_attack', x, y: 2, z: 100, gain: 0.8 })
+}
+
+/** Where the curtain stands right now, for the HUD's follow-the-barrage read. */
+export function creepingLineZ(ctx: Ctx): number | null {
+  return ctx.s.creeping ? ctx.s.creeping.z : null
 }
 
 export function barrageIncoming(ctx: Ctx): boolean {

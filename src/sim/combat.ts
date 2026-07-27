@@ -160,8 +160,15 @@ export function damageSoldier(
 ): void {
   if (target.hp <= 0) return
   target.hp -= dmg
-  target.morale = Math.max(0, target.morale - COMBAT.moraleHitPenalty)
-  target.suppression = Math.min(1, target.suppression + 0.15)
+  // Both psychological costs below MUST scale with the hurt. They are charged
+  // per CALL, and the continuous sources — wire, gas, flame — call this thirty
+  // times a second for a fraction of a point of damage each. Flat rates there
+  // came to +4.5 suppression/s and −2.4 morale/s: a man who so much as brushed
+  // the wire was pinned for good and his whole push broke on the spot, without
+  // a single casualty. A round through the sleeve should shake a man; a barb
+  // in the palm should not rout a battalion.
+  target.morale = Math.max(0, target.morale - Math.min(COMBAT.moraleHitPenalty, dmg * 0.006))
+  target.suppression = Math.min(1, target.suppression + Math.min(0.15, dmg * 0.015))
   // Director learns what kills its men.
   if (target.team === 'german' && sourceTeam === 'brit') {
     const d = ctx.s.director.dmgByCategory

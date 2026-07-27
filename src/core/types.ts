@@ -117,9 +117,12 @@ export interface AssaultGroup {
   side: Team
   unitIds: number[]
   targetSectionId: number
-  state: 'advancing' | 'recalled'
+  /** 'broken' = cohesion gone; the men are running for their own line unbidden. */
+  state: 'advancing' | 'recalled' | 'broken'
   moveElement: 0 | 1
   boundT: number
+  /** Living men at the whistle — the denominator for the break check. */
+  startMen: number
 }
 
 export type TargetPriority = 'nearest' | 'strongest' | 'officers' | 'armour'
@@ -247,6 +250,8 @@ export interface ActiveBarrage {
 }
 
 export interface CreepingBarrage {
+  /** Centre of the shoot in x — a barrage is a frontage, not the whole map. */
+  x: number
   z: number
   t: number
   volleys: number

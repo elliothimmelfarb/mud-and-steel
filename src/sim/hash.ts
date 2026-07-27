@@ -48,6 +48,7 @@ const BEHAVIOR_IDX = {
   advance: 0, rush: 1, takecover: 2, setup: 3, firing: 4, cutting: 5, melee: 6, rout: 7, mopup: 8, garrison: 9,
 } as const
 const TARGETING_IDX = { nearest: 0, strongest: 1, officers: 2, armour: 3 } as const
+const ASSAULT_STATE_IDX = { advancing: 0, recalled: 1, broken: 2 } as const
 
 export function hashSim(s: SimState): number {
   const h = new Hasher()
@@ -136,8 +137,8 @@ export function hashSim(s: SimState): number {
   h.u32(s.assaults.length)
   for (const g of s.assaults) {
     h.u32(g.id); h.byte(g.side === 'brit' ? 0 : 1)
-    h.u32(g.targetSectionId); h.byte(g.state === 'advancing' ? 0 : 1)
-    h.byte(g.moveElement); h.f64(g.boundT)
+    h.u32(g.targetSectionId); h.byte(ASSAULT_STATE_IDX[g.state])
+    h.byte(g.moveElement); h.f64(g.boundT); h.u32(g.startMen)
     for (const uid of g.unitIds) h.u32(uid)
   }
 
@@ -200,7 +201,7 @@ export function hashSim(s: SimState): number {
   for (const b of s.barrages) {
     h.f64(b.x); h.f64(b.z); h.u32(b.shellsLeft); h.bool(b.gas); h.f64(b.t)
   }
-  if (s.creeping) { h.bool(true); h.f64(s.creeping.z); h.f64(s.creeping.t); h.u32(s.creeping.volleys) } else h.bool(false)
+  if (s.creeping) { h.bool(true); h.f64(s.creeping.x); h.f64(s.creeping.z); h.f64(s.creeping.t); h.u32(s.creeping.volleys) } else h.bool(false)
 
   // Stats & director memory (sorted keys — object insertion order is
   // deterministic under lockstep, but sorting is free insurance).

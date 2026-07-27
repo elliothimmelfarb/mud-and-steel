@@ -192,7 +192,11 @@ export function upgradeAvailable(s: SimState, id: string): 'owned' | 'locked' | 
   const def = UPGRADE_DEFS.find((u) => u.id === id)
   if (!def) return 'locked'
   if (s.upgrades.has(id)) return 'owned'
-  if (s.wave < UPGRADE_TIER_WAVE[def.tier]) return 'locked'
+  // Big Push has no wave counter to unlock against — it is one continuous
+  // battle at wave 1 forever, which quietly locked the whole tier-2/3 shelf
+  // out of the mode, the creeping barrage among it. There, requisition is the
+  // gate: you buy doctrine with the same drip that buys men.
+  if (s.mode !== 'bigpush' && s.wave < UPGRADE_TIER_WAVE[def.tier]) return 'locked'
   if (def.requires && !s.upgrades.has(def.requires)) return 'locked'
   if (s.req < def.cost) return 'unaffordable'
   return 'buyable'
@@ -455,7 +459,7 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
         }
         case 'barrage':
           s.orders.cooldowns.barrage = def.cooldown
-          startCreepingBarrage(ctx)
+          startCreepingBarrage(ctx, cmd.x ?? 0)
           break
         case 'marktank':
           s.orders.cooldowns.marktank = def.cooldown
