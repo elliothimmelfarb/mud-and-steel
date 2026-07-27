@@ -25,6 +25,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.3.0',
+    date: '2026-07-27',
+    title: 'Over the top — an assault that arrives',
+    items: [
+      'Fixed: a push sent over the top could not cross no-man\'s-land. Men went to ground under fire and never got up again, while the animation had them running on the spot. They now crawl on, work the shell holes, answer the fire lying down, and get where they were sent.',
+      'Enemy wire is an obstacle with a price instead of a wall. Brushing it used to pin a man on the spot for good and break his whole section without a single casualty — now he lies in it and cuts, and engineers cut fastest.',
+      'Nerve is a state, not a latch: men shake off suppression in about a second of quiet, so putting fire on THEIR trench visibly lifts the weight off YOUR assault.',
+      'A push that loses its cohesion breaks and runs for its own parapet, instead of quietly dying in the mud where you cannot see it.',
+      'Your own belt now slows you on the way out — you know your lanes, but the boards still cost you tempo.',
+      'The creeping barrage is buyable in the Big Push at last (it was locked behind a wave counter the mode does not have). It is aimed where you are looking, walks a frontage rather than the whole map, and your men lean on it instead of sprinting into their own shells.',
+      'Sending men over the top now says so: a despatch naming the objective and the number away, a ring on the objective, and a reason whenever an order is refused.',
+      'Soldiers animate from the ground they actually cover — no more full-tilt sprinting on the spot.',
+    ],
+  },
+  {
     version: '1.2.1',
     date: '2026-07-19',
     title: 'A smoother war',
