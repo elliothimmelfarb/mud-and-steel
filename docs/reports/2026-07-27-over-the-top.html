@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — Over The Top: Why The Push Never Arrived · 27 Jul 1916 (2026)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+    --bad:#8c2f1e; --good:#4a6b33;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+      --bad:#d06a4f; --good:#8fb36a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+    --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+    --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+    --bad:#d06a4f; --good:#8fb36a;
+  }
+  :root[data-theme="light"]{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+    --bad:#8c2f1e; --good:#4a6b33;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:940px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.2rem;letter-spacing:.05em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.85;
+  }
+  .lede{max-width:68ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:.55rem 1rem;text-align:center;min-width:8.5rem}
+  .tally b{display:block;font-size:1.45rem;color:var(--brass)}
+  .tally span{font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.enemy{border-left-color:var(--blood)}
+  section.item.works{border-left-color:var(--steel)}
+  section.item.live{border-left-color:var(--wire)}
+  .kicker{font-size:.66rem;letter-spacing:.32em;text-transform:uppercase;color:var(--khaki);margin-bottom:.25rem}
+  h2{font-size:1.26rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.55rem}
+  h3{font-size:1rem;font-variant:small-caps;letter-spacing:.05em;margin:1.1rem 0 .4rem;color:var(--ink)}
+  .item p{margin:.5rem 0;color:var(--ink-soft)}
+  .item p strong{color:var(--ink)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem;color:var(--ink-soft)}
+  li strong{color:var(--ink)}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.85em;background:rgba(138,109,47,.13);padding:.08em .35em;border-radius:3px;color:var(--ink)}
+  pre{background:rgba(0,0,0,.06);border:1px solid var(--rule);border-radius:4px;padding:.8rem 1rem;overflow-x:auto;margin:.7rem 0}
+  pre code{background:none;padding:0;font-size:.82rem;line-height:1.5}
+  .scroll{overflow-x:auto;margin:.8rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.86rem;min-width:30rem}
+  th,td{padding:.42rem .7rem;text-align:left;border-bottom:1px solid var(--rule)}
+  th{font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--khaki);font-weight:normal}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.frozen td{color:var(--bad)}
+  tr.frozen td:first-child{font-weight:bold}
+  .win{color:var(--good);font-weight:bold}
+  .lose{color:var(--bad);font-weight:bold}
+  /* the crossing chart */
+  .chart{margin:1rem 0 .4rem}
+  .chart svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.72rem;color:var(--khaki);letter-spacing:.08em;text-transform:uppercase;margin-top:.5rem}
+  .legend i{display:inline-block;width:1.6rem;height:.2rem;vertical-align:middle;margin-right:.35rem;border-radius:2px}
+  .pull{border-left:3px solid var(--brass);padding:.2rem 0 .2rem 1rem;margin:.9rem 0;font-style:italic;color:var(--ink)}
+  footer{text-align:center;margin-top:2.5rem;padding-top:1.4rem;border-top:1px solid var(--rule);font-size:.72rem;letter-spacing:.2em;text-transform:uppercase;color:var(--khaki)}
+  footer a{color:var(--brass)}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="stamp">Closed</div>
+  <div class="crest">General Staff &middot; Operations Branch</div>
+  <h1>Over The Top</h1>
+  <div class="sub">Why the push never arrived, and what it takes to get it there &middot; 27 July 1916</div>
+</header>
+
+<p class="lede">
+  A push sent over the top could not cross no-man's-land. It went to ground under fire and
+  <strong>stayed there for the rest of the match</strong> &mdash; while the renderer animated every man in it
+  at a full-tilt run. Three separate faults compounded into one wall. This is what they were,
+  and how the assault was rebuilt around a single rule: <strong>nothing may ever stop a man completely.</strong>
+</p>
+
+<div class="tally">
+  <div><b>62 m</b><span>Reached, of 160</span></div>
+  <div><b>90 s</b><span>Frozen, unmoving</span></div>
+  <div><b>3</b><span>Compounding causes</span></div>
+  <div><b>119&ndash;163 s</b><span>Now: to capture</span></div>
+</div>
+
+<section class="item enemy">
+  <div class="kicker">The evidence</div>
+  <h2>An advance that stops dead and never restarts</h2>
+  <p>
+    Six sections ordered at a German front section, live enemy garrison, sampled every ten seconds.
+    <code>z&nbsp;=&nbsp;+80</code> is our own parapet; <code>z&nbsp;=&nbsp;&minus;80</code> is theirs.
+  </p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>t (s)</th><th class="num">avg z</th><th class="num">min z</th><th class="num">pinned</th><th class="num">avg suppression</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td class="num">78.4</td><td class="num">78.0</td><td class="num">0</td><td class="num">0.00</td></tr>
+      <tr><td>30</td><td class="num">41.9</td><td class="num">40.2</td><td class="num">0</td><td class="num">0.04</td></tr>
+      <tr><td>60</td><td class="num">21.6</td><td class="num">16.9</td><td class="num">3</td><td class="num">0.84</td></tr>
+      <tr class="frozen"><td>90</td><td class="num">18.5</td><td class="num">11.7</td><td class="num">3</td><td class="num">0.87</td></tr>
+      <tr class="frozen"><td>120</td><td class="num">16.7</td><td class="num">9.2</td><td class="num">2</td><td class="num">0.82</td></tr>
+      <tr class="frozen"><td>180</td><td class="num">16.2</td><td class="num">9.2</td><td class="num">4</td><td class="num">0.98</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="pull">
+    From t&nbsp;&asymp;&nbsp;90 the lead man does not move one metre in ninety seconds. Suppression is welded at 0.98.
+    They never reach the German wire, let alone the trench.
+  </p>
+</section>
+
+<section class="item">
+  <div class="kicker">The crossing, before and after</div>
+  <h2>Same order, same garrison</h2>
+  <div class="chart">
+    <svg viewBox="0 0 720 260" role="img" aria-label="Line chart: before the fix the advance flattens at z=16 and never moves again; after the fix it descends steadily from z=78 to the enemy trench at z=-80.">
+      <!-- bands -->
+      <rect x="52" y="26" width="640" height="18" fill="var(--rule)" opacity=".28"/>
+      <rect x="52" y="196" width="640" height="18" fill="var(--rule)" opacity=".28"/>
+      <text x="58" y="39" font-size="10" fill="var(--khaki)" font-family="Georgia,serif" letter-spacing="1.5">OUR PARAPET</text>
+      <text x="58" y="209" font-size="10" fill="var(--khaki)" font-family="Georgia,serif" letter-spacing="1.5">THEIR PARAPET</text>
+      <!-- wire belts -->
+      <line x1="52" y1="60" x2="692" y2="60" stroke="var(--khaki)" stroke-width="1" stroke-dasharray="3 5" opacity=".7"/>
+      <line x1="52" y1="180" x2="692" y2="180" stroke="var(--blood)" stroke-width="1" stroke-dasharray="3 5" opacity=".75"/>
+      <text x="600" y="56" font-size="9" fill="var(--khaki)" font-family="Georgia,serif">our wire</text>
+      <text x="592" y="176" font-size="9" fill="var(--blood)" font-family="Georgia,serif">their wire</text>
+      <!-- axes -->
+      <line x1="52" y1="26" x2="52" y2="232" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="52" y1="232" x2="692" y2="232" stroke="var(--rule)" stroke-width="1"/>
+      <text x="10" y="38" font-size="10" fill="var(--khaki)" font-family="Georgia,serif">+80</text>
+      <text x="14" y="132" font-size="10" fill="var(--khaki)" font-family="Georgia,serif">0</text>
+      <text x="10" y="212" font-size="10" fill="var(--khaki)" font-family="Georgia,serif">&minus;80</text>
+      <text x="330" y="252" font-size="10" fill="var(--khaki)" font-family="Georgia,serif" letter-spacing="2">SECONDS FROM THE WHISTLE</text>
+      <text x="52" y="248" font-size="9" fill="var(--khaki)" font-family="Georgia,serif">0</text>
+      <text x="672" y="248" font-size="9" fill="var(--khaki)" font-family="Georgia,serif">180</text>
+      <!-- BEFORE: 78,40,17,12,9,9,9 across t=0,30,60,90,120,150,180 -->
+      <polyline fill="none" stroke="var(--bad)" stroke-width="2.5" stroke-linejoin="round"
+        points="52,35 158,80 265,124 371,130 478,133 585,133 692,133"/>
+      <circle cx="692" cy="133" r="4" fill="var(--bad)"/>
+      <text x="600" y="120" font-size="11" fill="var(--bad)" font-family="Georgia,serif" font-style="italic">frozen</text>
+      <!-- AFTER: 78,44,18,-1,-32,-56,-79 -->
+      <polyline fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linejoin="round"
+        points="52,35 158,76 265,123 371,133 478,151 585,177 692,207"/>
+      <circle cx="692" cy="207" r="4" fill="var(--good)"/>
+      <text x="556" y="200" font-size="11" fill="var(--good)" font-family="Georgia,serif" font-style="italic">in the trench</text>
+    </svg>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--bad)"></i>Before &mdash; halts at 62 m</span>
+    <span><i style="background:var(--good)"></i>After &mdash; crosses, cuts the wire, fights in</span>
+  </div>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">Cause the first</div>
+  <h2>Flat psychological costs, billed thirty times a second</h2>
+  <p>
+    Every point of damage in the game runs through one function, and it charged a <strong>flat</strong>
+    <code>+0.15</code> suppression and <code>&minus;0.08</code> morale <em>per call</em> &mdash; regardless of how
+    badly the man was hurt.
+  </p>
+  <p>
+    That is fine for a rifle round. It is catastrophic for the <strong>continuous</strong> sources &mdash; wire,
+    gas, flame &mdash; which call it every tick for a fraction of a point of damage each. Standing in an
+    enemy belt therefore cost <strong>+4.5 suppression and &minus;2.4 morale per second</strong>.
+  </p>
+  <ul>
+    <li>A man who so much as brushed the wire was pinned <strong>permanently</strong>.</li>
+    <li>His whole push broke on the spot &mdash; measured, with <strong>zero casualties taken</strong>.</li>
+    <li>Enemy wire was not an obstacle. It was an impassable wall.</li>
+  </ul>
+  <p>Both costs now scale with the hurt, which leaves a bullet exactly where it was:</p>
+  <pre><code>target.morale      -= Math.min(COMBAT.moraleHitPenalty, dmg * 0.006)
+target.suppression += Math.min(0.15,                   dmg * 0.015)</code></pre>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">Cause the second</div>
+  <h2>The pin was a terminal state</h2>
+  <pre><code>if (c.suppression &gt; COMBAT.suppressPin) { c.stance = 'prone'; continue }</code></pre>
+  <p>
+    One line, and everything downstream of it unreachable. A pinned man could not crawl, could not
+    return fire, and <strong>could not cut the wire he was stuck in</strong> &mdash; because the cutting code sat
+    below the pin check.
+  </p>
+  <p>
+    The telling part: the enemy's own attack brain, which this was copied from, already solves all
+    of this. It has a take-cover state that resumes at <code>suppression &lt; 0.22</code>, a dedicated
+    wire-cutting state, and suppression that only ever scales speed to <code>0.45&times;</code> &mdash; never zero.
+    <strong>The player's copy dropped exactly the three mechanisms that make it work.</strong>
+  </p>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">Cause the third</div>
+  <h2>Nerve was a latch, not a state</h2>
+  <p>
+    Suppression drained at <code>0.09/s</code>. A single MG&nbsp;08 pours on roughly <strong>1.0/s</strong> &mdash;
+    two-thirds from the burst, the rest from near misses striking the dirt around the target.
+    An eleven-to-one ratio.
+  </p>
+  <p class="pull">
+    Anything a machine gun looked at stayed pinned until the gun died, however long that took.
+    There was no counterplay, because putting fire on their trench did nothing your men could feel.
+  </p>
+  <p>
+    At <code>0.22/s</code> a man shakes it off in about a second of quiet. That single number closes the
+    loop the mode was missing: <strong>suppressing their garrison now visibly unpins your assault.</strong>
+  </p>
+</section>
+
+<section class="item works">
+  <div class="kicker">The rebuild</div>
+  <h2>One rule, held everywhere</h2>
+  <p class="pull">
+    No state in an assault may reduce a man's speed to zero. An attack that can stall forever is an
+    order the player can never learn to use; one that is merely expensive is a decision.
+  </p>
+  <ul>
+    <li><strong>Pinned means crawling.</strong> Flat on his face at 1.25&nbsp;m/s, weaving crater to crater,
+      answering the fire lying down. Wire is resolved first and unconditionally, so the man in the
+      belt is the man cutting it &mdash; engineers fastest.</li>
+    <li><strong>Cover-seeking with no memory.</strong> Five headings sampled inside a 110&deg; fan, deepest
+      ground wins, biased back toward the objective. Nothing stored, so no cover target goes stale
+      when the next shell digs a better hole two seconds later &mdash; and it stays deterministic.</li>
+    <li><strong>Pushes break and run home.</strong> Lose 60% of the men or their nerve and the survivors go
+      back over their own parapet. Legible, diagnosable failure instead of an invisible stall.</li>
+    <li><strong>The bound only starts in range.</strong> Fire-and-movement inside 70&nbsp;m of the objective,
+      where the static element's rifles can actually reach the parapet they are keeping down &mdash; and
+      it lies <em>prone</em>, not crouched half-upright in the open.</li>
+    <li><strong>Silence is gone.</strong> Every refusal says why. The order announces the objective and the
+      number away. A ring marks each push still out.</li>
+  </ul>
+</section>
+
+<section class="item live">
+  <div class="kicker">The other half of the assault</div>
+  <h2>The barrage that was locked out of its own game mode</h2>
+  <p>
+    Creeping Barrage Doctrine is a tier-2 upgrade, gated on reaching <strong>wave 6</strong>. The Big Push
+    has no wave counter &mdash; it is one continuous battle that sits at wave 1 forever. The whole
+    tier-2 and tier-3 shelf was quietly unreachable in the mode, the barrage among it.
+  </p>
+  <p>So the assault had <strong>no preparation tool at all</strong>. Now:</p>
+  <ul>
+    <li>Buyable in the Big Push &mdash; there, requisition is the gate, the same drip that buys men.</li>
+    <li>Aimed where the commander is looking, and walking a <strong>70&nbsp;m frontage</strong> rather than smearing
+      132 shells uniformly across the whole 210&nbsp;m map, which suppressed nobody and cut nothing.</li>
+    <li>An assault <strong>leans on it</strong> instead of sprinting into its own shells &mdash; a fresh section runs at
+      3.6&nbsp;m/s and the curtain walks at 2.3, so without a lag rule the men overtake their own artillery
+      inside half a minute.</li>
+    <li>It steadies the men following it. The shells still kill &mdash; that cost stays &mdash; but they no
+      longer rout the attack they were sent to carry.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <div class="kicker">Your own wire</div>
+  <h2>The hedge in front of your parapet</h2>
+  <p>
+    Two staggered rows of worn British wire sit at <code>z&nbsp;&asymp;&nbsp;65&ndash;70</code>, ten to fourteen
+    metres out from the fire trench, with nine-metre sally ports on the communication-trench axes
+    and a couple of seeded blast gaps. It is real simulation wire, not scenery, and it does its job
+    against German counterattacks.
+  </p>
+  <p>
+    But your own assault <strong>skipped it entirely</strong> &mdash; British troops ghosted through the British
+    belt as though it were painted on. It now costs tempo (<code>0.62&times;</code>) without blood or cutting:
+    you know your lanes and the boards go down before the whistle, but a belt you walk through as if
+    it were not there is a belt that should not be drawn.
+  </p>
+</section>
+
+<section class="item works">
+  <div class="kicker">Proof</div>
+  <h2>Even odds, eighteen against eighteen</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Run</th><th>Outcome</th><th class="num">Survivors</th><th class="num">Wire cut</th></tr></thead>
+    <tbody>
+      <tr><td>No barrage, seed e1</td><td><span class="win">Section taken at 133 s</span></td><td class="num">13/18</td><td class="num">4</td></tr>
+      <tr><td>No barrage, seed e2</td><td><span class="win">Section taken at 119 s</span></td><td class="num">12/18</td><td class="num">3</td></tr>
+      <tr><td>Barrage, seed e1</td><td><span class="win">Section taken at 153 s</span></td><td class="num">14/18</td><td class="num">9</td></tr>
+      <tr><td>Barrage, seed e2</td><td><span class="lose">Broke at the parapet</span></td><td class="num">11/18</td><td class="num">10</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    That last row, traced tick by tick, is the system working rather than failing: a continuous
+    advance from <code>+78</code> to <code>&minus;75</code> over 130 seconds at full morale, then seven men
+    down in ten seconds at the trench, morale 0.84&nbsp;&rarr;&nbsp;0.09, the group breaks and the survivors
+    run home. A push that crossed intact and lost the close fight. That reads.
+  </p>
+  <p>
+    Classic mode re-checked end to end &mdash; five waves held, breach untouched at 100. Confirmed in the
+    running game too: an eighteen-man push crosses the whole of no-man's-land and fights at the
+    German parapet through a lane cut in their wire.
+  </p>
+  <h3>And the animation stopped lying</h3>
+  <p>
+    <code>moveAmount</code> was a boolean: anyone in an assault group rendered at a full run whether he
+    was sprinting, on overwatch, or lying pinned. That <em>is</em> the "running for a minute and going
+    nowhere" that was reported. It is now measured from ground actually covered, along with the
+    stride clock. Sampled live mid-assault, the gait values across one group spanned
+    <code>0</code> (holding), <code>0.27</code> (crawling) and <code>1</code> (running).
+  </p>
+</section>
+
+<section class="item">
+  <div class="kicker">Left open</div>
+  <h2>One soft spot, honestly</h2>
+  <p>
+    Barrage <strong>timing</strong> wants real play. At 2.3&nbsp;m/s the curtain lifts off the objective before
+    the last men arrive. Slowing it to match the infantry measured <em>worse</em>, because the men then
+    pace themselves to it and spend twice as long in the open. The shipped settings are the ones that
+    never produced a catastrophic result in probing &mdash; but that is a feel question two hand-built
+    seeds cannot settle.
+  </p>
+</section>
+
+<footer>
+  Issue #64 &middot; Pull request #65 &middot; Merged &middot; v1.3.0
+</footer>
+
+</div>
+</body>
+</html>
