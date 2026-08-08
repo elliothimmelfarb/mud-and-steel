@@ -613,7 +613,7 @@ function gasProjectorTick(ctx: Ctx, u: Unit, shooter: Soldier): void {
   if (bestCount <= 3) return
   shooter.cooldown = 1 / def.rof
   for (let i = 0; i < 6; i++) {
-    spawnGasShell(ctx, u.pos.x, u.pos.z, bestX + (ctx.rand() - 0.5) * 16, bestZ + (ctx.rand() - 0.5) * 16)
+    spawnGasShell(ctx, u.pos.x, u.pos.z, bestX + (ctx.rand() - 0.5) * 16, bestZ + (ctx.rand() - 0.5) * 16, u.side)
   }
   ctx.s.stats.gasClouds++
   snd(ctx.s, { name: 'gas_pop', x: u.pos.x, y: 1, z: u.pos.z })
@@ -678,7 +678,7 @@ function updateDefences(ctx: Ctx, dt: number): void {
         d.angle = 15
         // The star shell bursts out over no-man's-land, whichever way that is.
         const sign = d.side === 'brit' ? 1 : -1
-        spawnFlare(ctx, d.pos.x + (ctx.rand() - 0.5) * 20, d.pos.z - (45 + ctx.rand() * 30) * sign)
+        spawnFlare(ctx, d.pos.x + (ctx.rand() - 0.5) * 20, d.pos.z - (45 + ctx.rand() * 30) * sign, d.side)
       }
     }
   }

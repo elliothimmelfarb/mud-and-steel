@@ -79,13 +79,13 @@ function updateVehicle(ctx: Ctx, v: Vehicle, dt: number): void {
       d.hp = 0
       fx(s, { t: 'wiresnap', x: d.pos.x, y: ctx.terrain.heightAt(d.pos.x, d.pos.z) + 0.3, z: d.pos.z })
       ctx.flowDirty = true
-    } else if (d.kind === 'mine' && v.team === 'german' && dist2(d.pos.x, d.pos.z, v.pos.x, v.pos.z) < 2.6 * 2.6) {
+    } else if (d.kind === 'mine' && v.team !== d.side && dist2(d.pos.x, d.pos.z, v.pos.x, v.pos.z) < 2.6 * 2.6) {
       d.hp = 0
-      explode(ctx, d.pos.x, d.pos.z, MINE_RADIUS, MINE_DAMAGE, { team: 'brit', category: 'mine' })
+      explode(ctx, d.pos.x, d.pos.z, MINE_RADIUS, MINE_DAMAGE, { team: d.side, category: 'mine' })
       // A mine under the tracks cripples even a tank for a while.
       v.bogged = true
       v.boggedT = 9 + ctx.rand() * 6
-      damageVehicle(ctx, v, 160, 'mine', 'brit', -1)
+      damageVehicle(ctx, v, 160, 'mine', d.side, -1)
     }
   }
 

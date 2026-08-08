@@ -95,7 +95,7 @@ export function fireSmallArms(ctx: Ctx, spec: ShotSpec): void {
   let q = spec.accuracy
   if (spec.vetLevel) q *= 1 + spec.vetLevel * VET_ACC_BONUS
   q *= 1 - Math.min(0.6, sh.suppression * 0.65)
-  if (sh.masked) q *= ctx.mods.maskAccPenalty
+  if (sh.masked) q *= modsOf(ctx, spec.team).maskAccPenalty
   const w = ctx.weather.state
   if (w.night && !litAt(ctx, tx, tz)) q *= COMBAT.nightAccMult
   if (w.fog > 0.15) {
@@ -365,6 +365,9 @@ export function explode(ctx: Ctx, x: number, z: number, radius: number, damage: 
   const r2 = radius * radius
   for (const u of s.units) {
     if (u.disbanded) continue
+    // Heads-down is a standing order, and only the side that gave it benefits.
+    const orders = ordersOf(s, u.side)
+    const coverMult = orders.coverT > 0 ? 0.5 * modsOf(ctx, u.side).barrageCasualty : 1
     for (const c of u.crew) {
       if (c.hp <= 0) continue
       const d2 = dist2(c.pos.x, c.pos.z, x, z)
@@ -372,8 +375,8 @@ export function explode(ctx: Ctx, x: number, z: number, radius: number, damage: 
       let dmg = blastDamage(damage, Math.sqrt(d2), radius)
       if (dmg <= 0) continue
       dmg *= 1 - coverFor(ctx, c) * 0.75
-      if (s.orders.coverT > 0) dmg *= 0.5 * ctx.mods.barrageCasualty
-      damageSoldier(ctx, c, dmg, o.category, o.team, -1)
+      dmg *= coverMult
+      damageSoldier(ctx, c, dmg, o.category, o.team, o.shooterUnitId ?? -1)
     }
   }
   for (const e of s.enemies) {
@@ -459,9 +462,13 @@ function* alliesNear(ctx: Ctx, team: Team, x: number, z: number, radius: number)
  */
 export function soldierUpkeep(ctx: Ctx, sol: Soldier, dt: number, officerNear: boolean, medicNear: boolean, vet = 0): void {
   sol.suppression = Math.max(0, sol.suppression - COMBAT.suppressDecay * dt * (officerNear ? 1.6 : 1) * suppressResistMult(vet))
-  let regen = COMBAT.moraleRegen * (officerNear ? 2.2 : 1) * (medicNear ? 1.5 : 1) * rallyMult(vet) * ctx.mods.rallyRate
+  const mods = modsOf(ctx, sol.team)
+  let regen = COMBAT.moraleRegen * (officerNear ? 2.2 : 1) * (medicNear ? 1.5 : 1) * rallyMult(vet) * mods.rallyRate
   sol.morale = Math.min(1, sol.morale + regen * dt)
-  const floor = sol.team === 'brit' ? ctx.mods.moraleFloor : 0
+  // The rum ration steadies the men who were issued it. Loose enemy soldiers
+  // in classic mode have no stores of their own and get no floor.
+  const inUnit = ctx.s.units.some((u) => !u.disbanded && u.crew.includes(sol))
+  const floor = inUnit ? mods.moraleFloor : 0
   if (sol.morale < floor) sol.morale = floor
   if (sol.gasExposure > 0) {
     sol.gasExposure = Math.max(0, sol.gasExposure - dt * 0.5)

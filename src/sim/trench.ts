@@ -118,13 +118,15 @@ export function updateCapture(ctx: Ctx, dt: number): void {
   for (const sec of s.sections) {
     // Living presence per side near the section.
     let brit = 0
+    let german = 0
     for (const u of s.units) {
       if (u.disbanded || u.fallenBack) continue
       for (const c of u.crew) {
-        if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 8 * 8) brit++
+        if (c.hp <= 0 || dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) >= 8 * 8) continue
+        if (u.side === 'brit') brit++
+        else german++
       }
     }
-    let german = 0
     for (const e of s.enemies) {
       if (e.hp <= 0 || e.behavior === 'rout') continue
       if (dist2(e.pos.x, e.pos.z, sec.mid.x, sec.mid.z) < 7 * 7) german++

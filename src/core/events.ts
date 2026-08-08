@@ -20,7 +20,7 @@ export interface GameEvents {
   unitPlaced: { unitId: number; side: Team }
   unitLost: { unitId: number; kind: string; side: Team }
   soldierDied: { name: string; rank: string; kind: string; wave: number; deeds: number; wavesServed: number; side: Team }
-  gasAlarm: { incoming: boolean }
+  gasAlarm: { incoming: boolean; side: Team }
   barrageWarning: { x: number; z: number; seconds: number }
   tankSighted: Record<string, never>
   promoted: { unitId: number; vet: number }

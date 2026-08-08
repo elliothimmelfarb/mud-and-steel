@@ -488,7 +488,7 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
           // Star shells burst over no-man's-land in front of the firer.
           const sign = side === 'brit' ? 1 : -1
           const z = sign * Math.min(60, Math.max(-40, ((cmd.z ?? 0) * sign) - 60))
-          spawnFlare(ctx, x, z)
+          spawnFlare(ctx, x, z, side)
           break
         }
         case 'barrage':
