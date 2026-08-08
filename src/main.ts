@@ -297,8 +297,11 @@ function main(): void {
     document.getElementById('boot')?.classList.add('done')
     const p = new URLSearchParams(location.search)
     const len = p.get('len') as import('./core/types').MatchLength | null
+    // ?side=german takes the other chair; the AI commander takes the British
+    // one and plays exactly the same game.
+    const side = p.get('side') === 'german' ? 'german' as const : 'brit' as const
     game.startRun(p.get('seed') ?? 'the-big-push', 'front', null, 'bigpush',
-      len ? { matchLen: len } : undefined)
+      { ...(len ? { matchLen: len } : {}), side })
     return
   }
 

@@ -9,7 +9,7 @@
  * identical state, hash-for-hash. All randomness flows from forks of the run
  * seed; commands apply only at tick boundaries, in (tick, side, seq) order.
  */
-import type { DefenceKindId, Difficulty, MatchLength, Unit, UnitKindId } from '../core/types'
+import type { DefenceKindId, Difficulty, MatchLength, Team, Unit, UnitKindId } from '../core/types'
 import {
   BIGPUSH, COMBAT, DIRECTOR, ECONOMY, SCORE, SIM_DT, UNIT_DEFS, WORLD, XP_PER_WAVE,
 } from '../core/config'
@@ -56,8 +56,11 @@ export interface RunnerOpts {
   startReq?: number
   /** Big Push match length (default 'battle'). Ignored in classic. */
   matchLen?: MatchLength
-  /** Big Push: the German AI commander persona (null = no AI, e.g. MP human). */
+  /** Big Push: the AI commander persona (null = no AI, e.g. MP human). */
   aiPersona?: AiPersona | null
+  /** Big Push: which chair the AI takes. Defaults to the German one — pass
+   *  'brit' when the human commands the German side in singleplayer. */
+  aiSide?: Team
 }
 
 /** Run down one side's order durations and cooldowns by `dt`. */
@@ -88,7 +91,10 @@ export class SimRunner implements CmdHost {
   private draining = false
   /** Adopted mid-match (MP takeover): its envelopes ARE logged. */
   private aiAdopted = false
-  /** The German AI commander (Big Push SP; also the MP disconnect fallback). */
+  /** Which chair the AI commander sits in (Big Push SP: whichever the human
+   *  did not take; MP: the side whose human vanished). */
+  private aiSide: Team = 'german'
+  /** The AI commander (Big Push SP; also the MP disconnect fallback). */
   ai: AiCommander | null
 
   constructor(opts: RunnerOpts) {
@@ -202,8 +208,9 @@ export class SimRunner implements CmdHost {
 
     rebuildFlow(this.ctx)
 
+    this.aiSide = opts.aiSide ?? 'german'
     this.ai = mode === 'bigpush' && opts.aiPersona !== null
-      ? new AiCommander(opts.aiPersona ?? 'methodical', forkRand(seed, 'ai'))
+      ? new AiCommander(opts.aiPersona ?? 'methodical', forkRand(seed, 'ai'), this.aiSide)
       : null
   }
 
@@ -286,7 +293,7 @@ export class SimRunner implements CmdHost {
     // client that runs the same seed, so lockstep peers never disagree on it.
     if (this.ai && s.outcome === 'ongoing' && s.phase !== 'debrief') {
       const cmds = this.ai.think(ctx)
-      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: 'german', seq: this.aiSeq++, cmds, ai: this.aiAdopted ? undefined : true })
+      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: this.aiSide, seq: this.aiSeq++, cmds, ai: this.aiAdopted ? undefined : true })
     }
 
     // Commands apply only at the tick boundary — before anything moves.
@@ -586,10 +593,11 @@ export class SimRunner implements CmdHost {
    * envelopes ARE logged — a rejoiner cannot re-derive a takeover that
    * started at an arbitrary tick.
    */
-  adoptAi(persona: AiPersona): void {
+  adoptAi(persona: AiPersona, side: Team = 'german'): void {
     if (this.ai) return
     this.aiAdopted = true
-    this.ai = new AiCommander(persona, forkRand((this.ctx.s.seed ^ this.ctx.s.tick) >>> 0, 'ai-takeover'))
+    this.aiSide = side
+    this.ai = new AiCommander(persona, forkRand((this.ctx.s.seed ^ this.ctx.s.tick) >>> 0, 'ai-takeover'), side)
   }
 
   /** The absent human returned: the takeover AI stands down. */

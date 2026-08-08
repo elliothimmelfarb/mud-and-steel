@@ -1,9 +1,10 @@
 /**
- * The German AI commander.
+ * The AI commander — the German chair in every shipping configuration, but
+ * side-agnostic by construction.
  *
  * It is nothing but a COMMAND SOURCE: it reads the same fog-free state a human
- * would, holds the same purse (s.germanReq), and emits tick-stamped envelopes
- * through the exact queue a remote player uses. Because it is a pure function
+ * would, holds the same purse, and emits tick-stamped envelopes through the
+ * exact queue a remote player uses. Because it is a pure function
  * of (state, persona, seeded rand), both lockstep clients run it identically —
  * which is also how it takes over for a disconnected human.
  *
@@ -26,9 +27,6 @@ import { costOf, orderReady, upgradeAvailable, type Cmd, type OrderId } from './
 import { isAssaultKind } from './assault'
 
 export type AiPersona = 'methodical' | 'stosstrupp' | 'opportunist'
-
-/** The side this commander fights for. Only the German chair is automated. */
-const SIDE: Team = 'german'
 
 interface PersonaTuning {
   /** Keep this many living men per held front section before spending elsewhere. */
@@ -78,9 +76,14 @@ export class AiCommander {
   private lastAssaultAt = -999
   private lastWireAt = -999
 
-  constructor(readonly persona: AiPersona, private rand: Rand) {}
+  /**
+   * `side` is which chair this commander sits in. It is German in every
+   * shipping configuration today, but nothing below assumes it: the sides are
+   * symmetric, so the same brain plays either one.
+   */
+  constructor(readonly persona: AiPersona, private rand: Rand, readonly side: Team = 'german') {}
 
-  /** One decision pass. Returns the commands to enqueue (side 'german'). */
+  /** One decision pass. Returns the commands to enqueue for `this.side`. */
   think(ctx: Ctx): Cmd[] {
     const s = ctx.s
     const cmds: Cmd[] = []
@@ -92,16 +95,16 @@ export class AiCommander {
     // The purse is spent optimistically across this pass: every command is
     // re-validated at the tick boundary anyway, but tracking the balance here
     // stops it queueing five things it can only afford one of.
-    let purse = reqOf(s, SIDE)
-    const afford = (id: BuildableId): boolean => purse >= costOf(ctx, id, SIDE)
+    let purse = reqOf(s, this.side)
+    const afford = (id: BuildableId): boolean => purse >= costOf(ctx, id, this.side)
     const buy = (id: BuildableId, x: number, z: number, angle?: number): void => {
-      purse -= costOf(ctx, id, SIDE)
+      purse -= costOf(ctx, id, this.side)
       cmds.push({ t: 'buy', kind: id, x, z, angle })
     }
 
     // -- census ---------------------------------------------------------------
-    const ownFront = s.sections.filter((c) => c.home === SIDE && c.line === 'front')
-    const held = ownFront.filter((c) => c.owner === SIDE)
+    const ownFront = s.sections.filter((c) => c.home === this.side && c.line === 'front')
+    const held = ownFront.filter((c) => c.owner === this.side)
     if (held.length === 0) return cmds
 
     // -- 1) hold the line: keep every held section manned ----------------------
@@ -122,9 +125,9 @@ export class AiCommander {
     }
 
     // -- 2) counterattack lost ground sharpish --------------------------------
-    // Ground of his own in British hands is retaken before anything else is
+    // Ground of his own in enemy hands is retaken before anything else is
     // contemplated: it is cheaper to hold than to buy back.
-    const lost = ownFront.filter((c) => c.owner !== SIDE)
+    const lost = ownFront.filter((c) => c.owner !== this.side)
     if (lost.length > 0 && s.time - this.lastAssaultAt > 25) {
       const target = lost[Math.floor(this.rand() * lost.length)]
       const from = this.musterNear(ctx, target, t.minAssaultMen * 0.6)
@@ -136,11 +139,12 @@ export class AiCommander {
     }
 
     // -- 3) works: wire the approaches, then emplace the heavy weapons ---------
+    // Forward is toward the other trench; rearward is toward his own billets.
+    const fwd = this.side === 'brit' ? -1 : 1
     if (purse > 140 && s.time - this.lastWireAt > 20 && afford('wire')) {
       this.lastWireAt = s.time
       const sec = held[Math.floor(this.rand() * held.length)]
-      // His wire goes out in front of his own parapet, which is toward +z.
-      const z = sec.mid.z + 9 + this.rand() * 5
+      const z = sec.mid.z + (9 + this.rand() * 5) * fwd
       buy('wire', sec.mid.x + (this.rand() - 0.5) * 26, z, (this.rand() - 0.5) * 0.3)
     }
     if (purse > t.assaultBudget * 0.7) {
@@ -148,15 +152,15 @@ export class AiCommander {
         if (!afford(kind)) continue
         if (this.countKind(ctx, kind) >= 2) continue
         const sec = held[Math.floor(this.rand() * held.length)]
-        // Gun pads sit behind his own line — deeper into the north half.
-        buy(kind, sec.mid.x + (this.rand() - 0.5) * 30, sec.mid.z - 22 - this.rand() * 14)
+        // Gun pads sit behind his own line.
+        buy(kind, sec.mid.x + (this.rand() - 0.5) * 30, sec.mid.z - (22 + this.rand() * 14) * fwd)
         break
       }
     }
 
     // -- 4) doctrine ----------------------------------------------------------
     for (const id of t.upgradePlan) {
-      if (upgradeAvailable(s, id, SIDE) !== 'buyable') continue
+      if (upgradeAvailable(s, id, this.side) !== 'buyable') continue
       // Never let the stores eat the war chest he is saving for the push.
       const spare = purse - t.assaultBudget * 0.5
       if (spare <= 0) break
@@ -166,7 +170,7 @@ export class AiCommander {
 
     // -- 5) the push: save up, then send them over ----------------------------
     if (purse >= t.assaultBudget && s.time - this.lastAssaultAt > 40) {
-      const enemyFront = s.sections.filter((c) => c.line === 'front' && c.owner !== SIDE && c.home !== SIDE)
+      const enemyFront = s.sections.filter((c) => c.line === 'front' && c.owner !== this.side && c.home !== this.side)
       if (enemyFront.length === 0) return cmds
       const target = this.pickObjective(ctx, enemyFront)
       const from = this.musterNear(ctx, target, t.minAssaultMen)
@@ -174,10 +178,10 @@ export class AiCommander {
         this.lastAssaultAt = s.time
         // The guns first, then the whistle — the curtain walks at a man's pace
         // and the men lean on it, exactly as they do for the other commander.
-        if (t.creeping && orderReady(s, 'barrage', SIDE)) {
+        if (t.creeping && orderReady(s, 'barrage', this.side)) {
           cmds.push({ t: 'order', id: 'barrage', x: target.mid.x, z: target.mid.z })
         }
-        if (orderReady(s, 'rapidfire' as OrderId, SIDE)) {
+        if (orderReady(s, 'rapidfire' as OrderId, this.side)) {
           cmds.push({ t: 'order', id: 'rapidfire' })
         }
         cmds.push({ t: 'assault', sections: from, targetSection: target.id })
@@ -185,8 +189,8 @@ export class AiCommander {
     }
 
     // -- 6) heads down under a barrage ----------------------------------------
-    if (s.barrages.some((b) => b.t > -3) || s.creepings.some((c) => c.side !== SIDE)) {
-      if (orderReady(s, 'takecover' as OrderId, SIDE)) cmds.push({ t: 'order', id: 'takecover' })
+    if (s.barrages.some((b) => b.t > -3) || s.creepings.some((c) => c.side !== this.side)) {
+      if (orderReady(s, 'takecover' as OrderId, this.side)) cmds.push({ t: 'order', id: 'takecover' })
     }
 
     return cmds
@@ -201,7 +205,7 @@ export class AiCommander {
     let n = 0
     const r2 = r * r
     for (const u of ctx.s.units) {
-      if (u.disbanded || u.side !== SIDE) continue
+      if (u.disbanded || u.side !== this.side) continue
       for (const c of u.crew) {
         if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < r2) n++
       }
@@ -217,7 +221,7 @@ export class AiCommander {
   private musterNear(ctx: Ctx, target: TrenchSection, wantMen: number): number[] {
     const s = ctx.s
     const held = s.sections
-      .filter((c) => c.owner === SIDE && c.line === 'front')
+      .filter((c) => c.owner === this.side && c.line === 'front')
       .sort((a, b) => dist2(a.mid.x, a.mid.z, target.mid.x, target.mid.z) -
         dist2(b.mid.x, b.mid.z, target.mid.x, target.mid.z))
     const picked: number[] = []
@@ -237,7 +241,7 @@ export class AiCommander {
   private assaultMenNear(ctx: Ctx, sec: TrenchSection): number {
     let n = 0
     for (const u of ctx.s.units) {
-      if (u.disbanded || u.side !== SIDE) continue
+      if (u.disbanded || u.side !== this.side) continue
       if (u.march || u.assaultGroupId !== null || !isAssaultKind(u.kind)) continue
       if (dist2(u.pos.x, u.pos.z, sec.mid.x, sec.mid.z) > (BIGPUSH.laneHalfWidth + 12) ** 2) continue
       for (const c of u.crew) if (c.hp > 0) n++
@@ -254,7 +258,7 @@ export class AiCommander {
       for (const sec of candidates) {
         let n = 0
         for (const u of ctx.s.units) {
-          if (u.disbanded || u.side === SIDE || u.fallenBack) continue
+          if (u.disbanded || u.side === this.side || u.fallenBack) continue
           for (const c of u.crew) {
             if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 16 * 16) n++
           }
@@ -266,7 +270,7 @@ export class AiCommander {
       let bestD = Infinity
       for (const sec of candidates) {
         for (const g of ctx.s.sections) {
-          if (g.owner !== SIDE || g.line !== 'front') continue
+          if (g.owner !== this.side || g.line !== 'front') continue
           const d = dist2(sec.mid.x, sec.mid.z, g.mid.x, g.mid.z)
           if (d < bestD) { bestD = d; target = sec }
         }
@@ -299,7 +303,7 @@ export class AiCommander {
   private countKind(ctx: Ctx, kind: UnitKindId): number {
     let n = 0
     for (const u of ctx.s.units) {
-      if (!u.disbanded && u.side === SIDE && u.kind === kind) n++
+      if (!u.disbanded && u.side === this.side && u.kind === kind) n++
     }
     return n
   }

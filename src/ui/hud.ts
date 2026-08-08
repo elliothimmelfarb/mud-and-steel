@@ -30,6 +30,35 @@ function countHostiles(s: SimState, mine: Team): number {
   return n
 }
 
+/**
+ * The same roster, in the other army's words. Symmetric rosters were a
+ * deliberate v1 decision (national asymmetry is a later push), so nothing here
+ * changes a single stat — a "Maxim MG 08" is a Vickers with a different label
+ * on the card. It matters anyway: a commander should not be buying Lewis guns
+ * for the Kaiser. Anything unlisted keeps its British name.
+ */
+const GERMAN_NAMES: Partial<Record<BuildableId, string>> = {
+  rifleman: 'Musketier', lewis: 'MG 08/15 Gunner', vickers: 'Maxim MG 08',
+  sniper: 'Scharfschütze', grenadier: 'Handgranatenwerfer', mortar: 'Minenwerfer',
+  fieldgun: '7.7 cm Feldkanone', flamer: 'Flammenwerfer', medic: 'Sanitäter',
+  officer: 'Leutnant', engineer: 'Pionier', gasproj: 'Gaswerfer',
+  wire: 'Drahtverhau', mine: 'Tretmine', sandbags: 'Sandsackbrustwehr',
+  tanktrap: 'Panzersperre', searchlight: 'Scheinwerfer', flarepost: 'Leuchtpistolenposten',
+}
+
+/** How this commander's staff name a card, and what his money is called. */
+function buildName(id: BuildableId, side: Team): string {
+  const def = id in UNIT_DEFS
+    ? UNIT_DEFS[id as UnitKindId]
+    : DEFENCE_DEFS[id as DefenceKindId]
+  return side === 'german' ? GERMAN_NAMES[id] ?? def.name : def.name
+}
+
+/** Requisition, priced in the commander's own currency. */
+function money(n: number, side: Team): string {
+  return side === 'german' ? `${n} Rm` : `£${n}`
+}
+
 const BUILD_ICONS: Record<BuildableId, string> = {
   rifleman: 'R', lewis: 'LG', vickers: 'MG', sniper: 'SN', grenadier: 'GR', mortar: 'MT',
   fieldgun: '18', flamer: 'FP', medic: '+', officer: 'OF', engineer: 'SP', gasproj: 'GS',
@@ -52,7 +81,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 export class Hud implements HudBridge {
   private root: HTMLDivElement
   private topInfo!: { req: HTMLElement; wave: HTMLElement; date: HTMLElement; enemies: HTMLElement; timerBtn: HTMLButtonElement; breach: HTMLElement; breachBar: HTMLElement; weather: HTMLElement; vane: HTMLElement; needle: HTMLElement; windCap: HTMLElement; fps: HTMLElement; speedBtns: HTMLButtonElement[]; pauseBtn: HTMLButtonElement }
-  private cards = new Map<BuildableId, { root: HTMLButtonElement; cost: HTMLElement }>()
+  private cards = new Map<BuildableId, { root: HTMLButtonElement; cost: HTMLElement; name: HTMLElement }>()
   private orderBtns = new Map<OrderId, { root: HTMLButtonElement; fill: HTMLElement }>()
   private unitPanel!: HTMLElement
   private toastBox!: HTMLElement
@@ -241,10 +270,11 @@ export class Hud implements HudBridge {
         const def = this.game.isUnitKind(id) ? UNIT_DEFS[id as UnitKindId] : DEFENCE_DEFS[id as DefenceKindId]
         const card = el('button', 'hud-card')
         const action: Action = i < 12 ? (`build${i + 1}` as Action) : (`buildD${i - 11}` as Action)
-        card.setAttribute('aria-label', `${def.name}, £${def.cost}`)
+        const side = this.game.mySide
+        card.setAttribute('aria-label', `${buildName(id, side)}, ${money(def.cost, side)}`)
         const icon = el('span', 'hud-card__icon', BUILD_ICONS[id])
-        const name = el('span', 'hud-card__name', def.name)
-        const cost = el('span', 'hud-card__cost', `£${this.game.costOf(id)}`)
+        const name = el('span', 'hud-card__name', buildName(id, side))
+        const cost = el('span', 'hud-card__cost', money(this.game.costOf(id), side))
         const kbd = el('span', 'ms-kbd', keyLabel(this.game.input.bindFor(action)))
         card.append(icon, name, cost, kbd)
         card.addEventListener('click', () => {
@@ -253,7 +283,7 @@ export class Hud implements HudBridge {
         })
         this.attachTip(card, () => this.buildTip(id))
         row.appendChild(card)
-        this.cards.set(id, { root: card, cost })
+        this.cards.set(id, { root: card, cost, name })
       }
       group.appendChild(row)
       bar.appendChild(group)
@@ -275,15 +305,16 @@ export class Hud implements HudBridge {
       if (def.range >= 20 && def.damage > 0) stats.push(['Reach', reachLabel(def.range)])
       if (def.crew > 1) stats.push(['Crew', `${def.crew} men`])
       if (def.aoe > 0) stats.push(['Effect', 'area blast'])
-      const node = tipCard(def.name, cost, def.blurb, stats)
-      this.appendAffordNote(node, id, cost, s.req, false)
+      const node = tipCard(buildName(id, g.mySide), cost, def.blurb, stats, g.mySide)
+      this.appendAffordNote(node, id, cost, g.req, false)
       return node
     }
     const def = DEFENCE_DEFS[id as DefenceKindId]
     stats.push(['Lay in', placementLabel(def.placement)])
     const fieldLocked = def.placement === 'field' && !g.fieldBuildAllowed()
-    const node = tipCard(def.name, cost, def.blurb, stats)
-    this.appendAffordNote(node, id, cost, s.req, fieldLocked)
+    const node = tipCard(buildName(id, g.mySide), cost, def.blurb, stats, g.mySide)
+    this.appendAffordNote(node, id, cost, g.req, fieldLocked)
+    void s
     return node
   }
 
@@ -291,7 +322,7 @@ export class Hud implements HudBridge {
     if (fieldLocked) {
       node.appendChild(el('div', 'tip__note', 'Laid in no-man\'s-land — between waves only.'))
     } else if (req < cost) {
-      node.appendChild(el('div', 'tip__note tip__note--warn', `Short by £${cost - req}.`))
+      node.appendChild(el('div', 'tip__note tip__note--warn', `Short by ${money(cost - req, this.game.mySide)}.`))
     }
   }
 
@@ -316,7 +347,7 @@ export class Hud implements HudBridge {
     const mine = g.mySide
     const theirs = g.theirSide
     const purse = Math.floor(reqOf(s, mine))
-    t.req.textContent = mine === 'german' ? `${purse} Req` : `£${purse}`
+    t.req.textContent = money(purse, mine)
     t.wave.textContent = `WAVE ${s.wave}`
     t.date.textContent = fieldDateShort(s.wave)
     t.enemies.textContent = s.phase === 'assault'
@@ -362,7 +393,8 @@ export class Hud implements HudBridge {
     // Build cards — distinguish "can't afford yet" from "wrong phase to lay".
     for (const [id, card] of this.cards) {
       const cost = g.costOf(id)
-      card.cost.textContent = `£${cost}`
+      card.cost.textContent = money(cost, mine)
+      card.name.textContent = buildName(id, mine)
       const fieldLocked = !g.isUnitKind(id) &&
         DEFENCE_DEFS[id as DefenceKindId].placement === 'field' && !g.fieldBuildAllowed()
       const poor = !fieldLocked && purse < cost
@@ -462,7 +494,7 @@ export class Hud implements HudBridge {
         b.addEventListener('click', () => { this.game.setTargeting(p); b.blur() })
         targRow.appendChild(b)
       }
-      const sellBtn = el('button', 'ms-btn ms-btn--danger ms-btn--small unit-sell', `Disband (£${sel.sellValue})`)
+      const sellBtn = el('button', 'ms-btn ms-btn--danger ms-btn--small unit-sell', `Disband (${money(sel.sellValue, this.game.mySide)})`)
       sellBtn.title = `Refund ${Math.round(ECONOMY.sellRefund * 100)}% (${keyLabel(this.game.input.bindFor('sell'))})`
       sellBtn.addEventListener('click', () => { this.game.sellSelected(); sellBtn.blur() })
       this.unitPanel.append(head, sub, svc, deeds, status, bars, targLabel, targRow, sellBtn)
@@ -656,7 +688,7 @@ export class Hud implements HudBridge {
         card.style.cssText = 'display:block;width:100%;text-align:left;margin:4px 0;'
         if (state === 'owned') card.classList.add('ms-card--selected')
         if (state === 'locked' || state === 'unaffordable') card.classList.add('ms-card--disabled')
-        const title = el('div', undefined, `${up.name} ${state === 'owned' ? '✓' : `— £${up.cost}`}`)
+        const title = el('div', undefined, `${up.name} ${state === 'owned' ? '✓' : `— ${money(up.cost, g.mySide)}`}`)
         title.style.fontWeight = 'bold'
         const desc = el('div', undefined, state === 'locked' && s.wave < 99
           ? (up.requires && !upgradesOf(s, g.mySide).has(up.requires)
@@ -772,11 +804,12 @@ function reachLabel(range: number): string {
 /** Build the shared tooltip body: title + cost, role blurb, stat chips. */
 function tipCard(
   name: string, cost: number | null, blurb: string, stats: Array<[string, string]>,
+  side: Team = 'brit',
 ): HTMLElement {
   const wrap = el('div', 'tip')
   const head = el('div', 'tip__head')
   head.appendChild(el('span', 'tip__name', name))
-  if (cost !== null) head.appendChild(el('span', 'tip__cost', `£${cost}`))
+  if (cost !== null) head.appendChild(el('span', 'tip__cost', money(cost, side)))
   wrap.appendChild(head)
   if (blurb) wrap.appendChild(el('div', 'tip__blurb', blurb))
   if (stats.length) {

@@ -65,6 +65,9 @@ export interface ReplayRecord {
   /** From-start AI persona to re-derive (SP), or null (MP — adopted-AI
    *  envelopes are in the log). */
   persona: import('../sim/ai').AiPersona | null
+  /** Which chair the recording was fought from — playback must sit in it or
+   *  the AI ends up on the wrong side of the wire. */
+  side?: import('../core/types').Team
   envs: import('../sim/commands').Envelope[]
   /** The player embodied someone: first-person actions are not yet in the
    *  command stream, so playback may diverge from the battle as fought. */
@@ -195,11 +198,12 @@ export class Game {
   seedStr = ''
   difficulty: Difficulty = 'front'
   private runRand: Rand = Math.random
-  /** Local command sink. All player actions route through here. */
+  /** Local command sink. All player actions route through here, stamped with
+   *  the chair this machine occupies — never a hardcoded side. */
   private submit(cmds: Cmd[]): void {
     if (this.replayMode) return // the war diary is already written
     if (this.net) this.net.submit(cmds)
-    else this.runner?.submit('brit', cmds)
+    else this.runner?.submit(this.mySide, cmds)
   }
 
   /** FPS embodiment enters/leaves through the command stream (#41 item 2). */
@@ -485,7 +489,7 @@ export class Game {
   // Run lifecycle
   // -------------------------------------------------------------------------
 
-  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; net?: { transport: Transport; side: Team; isCreator: boolean; catchUp?: boolean }; replay?: ReplayRecord }): void {
+  startRun(seedStr: string, difficulty: Difficulty, resume: RunSave | null = null, mode: 'classic' | 'bigpush' = 'classic', bigpush?: { matchLen?: import('../core/types').MatchLength; persona?: import('../sim/ai').AiPersona; side?: Team; net?: { transport: Transport; side: Team; isCreator: boolean; catchUp?: boolean }; replay?: ReplayRecord }): void {
     this.seedStr = seedStr
     this.difficulty = difficulty
     // Presentation-only randomness (regiments, letters, epitaphs, intel fudge).
@@ -545,26 +549,19 @@ export class Game {
           onDesync: () => this.hud?.toast('Signals crossed — resynchronising with the other commander…', 'warn'),
           onResynced: () => this.hud?.toast('Back in step with the other commander.', 'info'),
           onPeerLost: () => {
-            if (this.theirSide === 'german') {
-              this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn')
-              this.onNetPeerLost?.()
-            } else {
-              // No AI can command Britain yet (#41): the German human wins
-              // by walkover. The peer is gone, so ending locally is safe.
-              this.hud?.toast('The British commander has quit the field — the day is yours.', 'warn')
-              const s = this.ctx.s
-              if (s.outcome === 'ongoing') {
-                s.outcome = 'defeat' // British defeat: outcomes are brit-POV
-                this.events.emit('gameOver', { victory: false })
-              }
-            }
+            // Either chair can be taken over now, so a disconnect never ends
+            // the battle by walkover — their staff pick up the telephone.
+            this.hud?.toast('The other commander has gone silent — their staff (AI) assume command.', 'warn')
+            this.onNetPeerLost?.()
           },
         },
         () => new SimRunner({ seedStr, difficulty, mode, events: this.events, matchLen: bigpush?.matchLen, aiPersona: null }),
       )
       this.runner = this.net.runner
     } else {
-      this.mySide = 'brit'
+      // Singleplayer Big Push: take either chair. The AI commander sits in the
+      // other one and plays the same game with the same roster.
+      this.mySide = mode === 'bigpush' ? (bigpush?.replay?.side ?? bigpush?.side ?? 'brit') : 'brit'
       // Replays re-derive the from-start AI from the seed, so the persona
       // must match the recording exactly — including null for MP diaries
       // (their adopted-AI envelopes travel in the log instead).
@@ -572,7 +569,10 @@ export class Game {
         : bigpush?.replay ? bigpush.replay.persona
         : (bigpush?.persona ?? 'methodical')
       this.runPersona = persona
-      this.runner = new SimRunner({ seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen, aiPersona: persona })
+      this.runner = new SimRunner({
+        seedStr, difficulty, mode, resume, events: this.events, matchLen: bigpush?.matchLen,
+        aiPersona: persona, aiSide: this.theirSide,
+      })
     }
     this.leashZ = this.mySide === 'german' ? -(WORLD.frontTrenchZ - 12) : WORLD.frontTrenchZ - 12
     this.terrain = this.runner.terrain
@@ -717,7 +717,7 @@ export class Game {
     ev.on('promoted', (p) => {
       const u = this.ctx.s.units.find((x) => x.id === p.unitId)
       const lead = u ? leadCrew(u) : null
-      if (u && lead) {
+      if (u && lead && u.side === this.mySide) {
         this.hud?.toast(`${lead.name.last} promoted — ${RANKS[u.vet]}`, 'good')
         this.audio.play('upgrade', { gain: 0.5 })
       }
@@ -725,7 +725,7 @@ export class Game {
     ev.on('deed', (p) => {
       const u = this.ctx.s.units.find((x) => x.id === p.unitId)
       const lead = u ? leadCrew(u) : null
-      if (lead) {
+      if (lead && u!.side === this.mySide) {
         this.hud?.toast(`${RANKS[u!.vet]} ${lead.name.last} mentioned in despatches — ${p.cite}`, 'good')
         this.audio.play('upgrade', { gain: 0.35 })
       }
@@ -768,6 +768,7 @@ export class Game {
           const rec: ReplayRecord = {
             v: 1, seedStr: this.seedStr, matchLen: s.matchLen,
             persona: this.net ? null : this.runPersona,
+            side: this.mySide,
             envs: this.runner.log,
             embodied: this.embodiedThisRun || undefined,
           }
@@ -788,7 +789,7 @@ export class Game {
       this.hud?.gameOver(won, s.mode === 'classic' && won)
     })
     ev.on('thunder', () => this.audio.play('thunder', { gain: 0.7 }))
-    ev.on('orderIssued', (p) => this.onOrderIssued(p.id as OrderId))
+    ev.on('orderIssued', (p) => { if (p.side === this.mySide) this.onOrderIssued(p.id as OrderId) })
     ev.on('assaultBegan', (p) => {
       if (p.side !== this.mySide) return
       const sec = this.ctx.s.sections.find((c) => c.id === p.targetSectionId)
@@ -800,6 +801,8 @@ export class Game {
       this.audio.play('ui_error', { gain: 0.5 })
     })
     ev.on('upgradeBought', (p) => {
+      // The other commander's stores are not your news.
+      if (p.side !== this.mySide) return
       const def = UPGRADE_DEFS.find((u) => u.id === p.id)
       this.audio.play('upgrade', { gain: 0.7 })
       if (def) this.hud?.toast(`${def.name} — issued to all ranks`, 'good')
@@ -817,10 +820,12 @@ export class Game {
         this.audio.play('whistle_attack', { gain: 0.9 })
         this.hud?.toast('OVER THE TOP!', 'danger')
         break
-      case 'masks':
-        this.audio.setMuffled(s.masksOn ? 0.4 : 0)
-        this.hud?.toast(s.masksOn ? 'Masks on.' : 'Masks off.', 'info')
+      case 'masks': {
+        const on = this.mySide === 'brit' ? s.masksOn : s.germanMasksOn
+        this.audio.setMuffled(on ? 0.4 : 0)
+        this.hud?.toast(on ? 'Masks on.' : 'Masks off.', 'info')
         break
+      }
       case 'marktank':
         this.hud?.toast('Mark IV moving up — it will crush wire in its path', 'warn')
         break
@@ -1253,7 +1258,7 @@ export class Game {
       return
     }
     const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
-    if (!u) return
+    if (!u || u.side !== this.mySide) return // your own men's rifles, not theirs
     const c = u.crew.find((s) => s.hp > 0)
     if (!c) return
     this.fpsMode.enter(u, c)

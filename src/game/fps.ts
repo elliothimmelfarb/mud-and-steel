@@ -19,7 +19,7 @@ import type { Bullet, Soldier, Stance, Unit, UnitKindId } from '../core/types'
 import { COMBAT, WORLD } from '../core/config'
 import { standSurface } from '../sim/ballistics'
 import { sectionAt } from '../sim/trench'
-import { dist2 } from '../sim/sim'
+import { dist2, modsOf } from '../sim/sim'
 import {
   WEAPON_PROFILES, presentDischarge, groundHit, clampToBand,
   type WeaponProfile, type Viewmodel, type GroundHit, type FireParams,
@@ -604,7 +604,7 @@ export class FpsMode {
     this.game.submitFpsFire(params)
     // The jacket mirror warms locally (it reaches the sim via fpspose).
     if (this.profile.heat) {
-      this.heat = Math.min(1, this.heat + COMBAT.vickersHeatPerShot * this.game.ctx.mods.heatRate)
+      this.heat = Math.min(1, this.heat + COMBAT.vickersHeatPerShot * modsOf(this.game.ctx, this.game.mySide).heatRate)
       if (this.heat >= 1) this.game.audio.play('steam_vent', { x: u.pos.x, y: 1, z: u.pos.z })
     }
 
@@ -836,7 +836,7 @@ export class FpsMode {
     } else {
       // Engineer: parapet first, then torn wire — same priorities as the AI.
       const sec = sectionAt(g.ctx.s.sections, px, pz)
-      if (sec && sec.owner === 'brit' && sec.parapetHp < sec.parapetMax) {
+      if (sec && sec.owner === this.game.mySide && sec.parapetHp < sec.parapetMax) {
         this.accumulateTool('parapet', sec.id, dt)
         this.toolProgress = sec.parapetHp / sec.parapetMax
         if (Math.random() < dt * 0.6) g.audio.play('build', { x: px, y: 1, z: pz, gain: 0.35 })
