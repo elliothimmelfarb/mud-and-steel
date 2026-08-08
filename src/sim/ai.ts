@@ -1,58 +1,82 @@
 /**
- * The German AI commander — the first network peer we ship.
+ * The German AI commander.
  *
- * It is nothing but a COMMAND SOURCE: it reads the same fog-free state a
- * human would, holds a purse (s.germanReq, drip-fed by the runner), and emits
- * tick-stamped envelopes through the exact queue a remote player will use in
- * M5. Because it is a pure function of (state, persona, seeded rand), both
- * lockstep clients run it identically — which is also how it takes over for
- * a disconnected human.
+ * It is nothing but a COMMAND SOURCE: it reads the same fog-free state a human
+ * would, holds the same purse (s.germanReq), and emits tick-stamped envelopes
+ * through the exact queue a remote player uses. Because it is a pure function
+ * of (state, persona, seeded rand), both lockstep clients run it identically —
+ * which is also how it takes over for a disconnected human.
+ *
+ * It plays the game the human next to it is playing: it buys from the SAME
+ * roster, posts men on its own fire step, digs its own wire, buys its own
+ * doctrine and sends its own sections over the top. Anything it can do, the
+ * player on that side can do, and vice versa — which is the point. If a
+ * command here would be refused for a human, it is refused for the AI too,
+ * because it goes through the same `applyCmd`.
  *
  * Personas (spec §3): Methodical fortifies and probes; Stosstrupp hoards for
- * big pushes behind box barrages; Opportunist hits whichever section is
+ * big pushes behind a creeping barrage; Opportunist hits whichever section is
  * thinnest.
  */
-import type { EnemyKindId } from '../core/types'
+import type { BuildableId, Team, TrenchSection, UnitKindId } from '../core/types'
+import { BIGPUSH } from '../core/config'
 import type { Rand } from '../core/rng'
-import { dist2, type Ctx } from './sim'
-import type { Cmd } from './commands'
+import { dist2, reqOf, type Ctx } from './sim'
+import { costOf, orderReady, upgradeAvailable, type Cmd, type OrderId } from './commands'
+import { isAssaultKind } from './assault'
 
 export type AiPersona = 'methodical' | 'stosstrupp' | 'opportunist'
 
+/** The side this commander fights for. Only the German chair is automated. */
+const SIDE: Team = 'german'
+
 interface PersonaTuning {
-  /** Keep this many living defenders per german-held front section. */
+  /** Keep this many living men per held front section before spending elsewhere. */
   garrisonPerSection: number
-  /** Purse threshold before launching an assault. */
+  /** Purse threshold before launching a deliberate attack. */
   assaultBudget: number
-  /** Assault party composition (drawn until budget is spent). */
-  assaultKinds: EnemyKindId[]
-  /** Precede the assault with a box barrage on the objective? */
-  boxBarrage: boolean
+  /** What it posts on the line, in the order it wants them. */
+  garrisonKinds: readonly UnitKindId[]
+  /** Support weapons it emplaces behind the line once the garrison is up. */
+  supportKinds: readonly UnitKindId[]
+  /** Doctrine it saves for, in order. */
+  upgradePlan: readonly string[]
+  /** Walk a creeping barrage in front of the attack? */
+  creeping: boolean
   /** Seconds between decision passes. */
   cadence: number
+  /** Minimum men on a frontage before it is worth sending them over. */
+  minAssaultMen: number
 }
 
 const TUNING: Record<AiPersona, PersonaTuning> = {
   methodical: {
-    garrisonPerSection: 2.2, assaultBudget: 260,
-    assaultKinds: ['einf', 'einf', 'einf', 'einf', 'eofficer', 'emg'],
-    boxBarrage: false, cadence: 3,
+    garrisonPerSection: 4, assaultBudget: 300,
+    garrisonKinds: ['rifleman', 'rifleman', 'lewis', 'officer', 'vickers'],
+    supportKinds: ['mortar', 'medic', 'engineer', 'fieldgun'],
+    upgradePlan: ['spades', 'smle', 'dugouts', 'concrete', 'maskph'],
+    creeping: false, cadence: 3, minAssaultMen: 8,
   },
   stosstrupp: {
-    garrisonPerSection: 1.2, assaultBudget: 420,
-    assaultKinds: ['estorm', 'estorm', 'estorm', 'estorm', 'eofficer', 'eflamer', 'epioneer'],
-    boxBarrage: true, cadence: 4,
+    garrisonPerSection: 2, assaultBudget: 460,
+    garrisonKinds: ['rifleman', 'grenadier', 'lewis', 'officer'],
+    supportKinds: ['flamer', 'engineer', 'mortar', 'medic'],
+    upgradePlan: ['mills', 'creepingdoctrine', 'rum', 'smle'],
+    creeping: true, cadence: 4, minAssaultMen: 10,
   },
   opportunist: {
-    garrisonPerSection: 1.6, assaultBudget: 200,
-    assaultKinds: ['einf', 'einf', 'estorm', 'estorm', 'eofficer'],
-    boxBarrage: false, cadence: 2,
+    garrisonPerSection: 3, assaultBudget: 220,
+    garrisonKinds: ['rifleman', 'rifleman', 'grenadier', 'lewis'],
+    supportKinds: ['sniper', 'mortar', 'medic', 'engineer'],
+    upgradePlan: ['quartermaster', 'scopes', 'smle', 'rum'],
+    creeping: false, cadence: 2, minAssaultMen: 6,
   },
 }
 
 export class AiCommander {
   private nextThink = 0
   private lastAssaultAt = -999
+  private lastWireAt = -999
 
   constructor(readonly persona: AiPersona, private rand: Rand) {}
 
@@ -60,104 +84,223 @@ export class AiCommander {
   think(ctx: Ctx): Cmd[] {
     const s = ctx.s
     const cmds: Cmd[] = []
-    if (s.outcome !== 'ongoing') return cmds
+    if (s.outcome !== 'ongoing' || s.mode !== 'bigpush') return cmds
     const t = TUNING[this.persona]
     if (s.time < this.nextThink) return cmds
     this.nextThink = s.time + t.cadence
 
+    // The purse is spent optimistically across this pass: every command is
+    // re-validated at the tick boundary anyway, but tracking the balance here
+    // stops it queueing five things it can only afford one of.
+    let purse = reqOf(s, SIDE)
+    const afford = (id: BuildableId): boolean => purse >= costOf(ctx, id, SIDE)
+    const buy = (id: BuildableId, x: number, z: number, angle?: number): void => {
+      purse -= costOf(ctx, id, SIDE)
+      cmds.push({ t: 'buy', kind: id, x, z, angle })
+    }
+
     // -- census ---------------------------------------------------------------
-    const gerFront = s.sections.filter((c) => c.home === 'german' && c.line === 'front')
-    const held = gerFront.filter((c) => c.owner === 'german')
-    let garrison = 0
-    for (const e of s.enemies) {
-      if (e.hp > 0 && (e.behavior === 'garrison' || e.behavior === 'melee') && e.pos.z < 0) garrison++
-    }
+    const ownFront = s.sections.filter((c) => c.home === SIDE && c.line === 'front')
+    const held = ownFront.filter((c) => c.owner === SIDE)
+    if (held.length === 0) return cmds
 
-    // -- 1) hold the line: keep the front garrisoned ---------------------------
-    const wantGarrison = Math.round(held.length * t.garrisonPerSection)
-    if (garrison < wantGarrison && s.germanReq >= 40) {
-      // Reinforce the emptiest held section.
-      let best: typeof held[number] | null = null
-      let bestCount = Infinity
-      for (const sec of held) {
-        let n = 0
-        for (const e of s.enemies) {
-          if (e.hp > 0 && dist2(e.pos.x, e.pos.z, sec.mid.x, sec.mid.z) < 12 * 12) n++
-        }
-        if (n < bestCount) { bestCount = n; best = sec }
-      }
-      if (best) {
-        const kinds: EnemyKindId[] = this.persona === 'methodical' && this.rand() < 0.3
-          ? ['einf', 'einf', 'emg']
-          : ['einf', 'einf', 'einf']
-        cmds.push({ t: 'spawnsquad', kinds, x: best.mid.x, role: 'garrison', targetSection: best.id })
+    // -- 1) hold the line: keep every held section manned ----------------------
+    // The thinnest stretch gets the next man. A section with nobody on it is
+    // a section that changes hands for free.
+    let thinnest: TrenchSection | null = null
+    let thinnestMen = Infinity
+    for (const sec of held) {
+      const men = this.menNear(ctx, sec, 14)
+      if (men < thinnestMen) { thinnestMen = men; thinnest = sec }
+    }
+    if (thinnest && thinnestMen < t.garrisonPerSection) {
+      const kind = t.garrisonKinds[Math.floor(this.rand() * t.garrisonKinds.length)]
+      if (afford(kind)) {
+        const spot = this.alongSection(thinnest)
+        buy(kind, spot.x, spot.z)
       }
     }
 
-    // -- 2) counterattack lost ground sharpish ---------------------------------
-    const lost = gerFront.filter((c) => c.owner === 'brit')
-    if (lost.length > 0 && s.germanReq >= 140 && s.time - this.lastAssaultAt > 25) {
-      this.lastAssaultAt = s.time
+    // -- 2) counterattack lost ground sharpish --------------------------------
+    // Ground of his own in British hands is retaken before anything else is
+    // contemplated: it is cheaper to hold than to buy back.
+    const lost = ownFront.filter((c) => c.owner !== SIDE)
+    if (lost.length > 0 && s.time - this.lastAssaultAt > 25) {
       const target = lost[Math.floor(this.rand() * lost.length)]
-      cmds.push({
-        t: 'spawnsquad', kinds: ['estorm', 'estorm', 'einf', 'einf'],
-        x: target.mid.x, role: 'assault', targetSection: target.id,
-      })
-      return cmds
+      const from = this.musterNear(ctx, target, t.minAssaultMen * 0.6)
+      if (from.length > 0) {
+        this.lastAssaultAt = s.time
+        cmds.push({ t: 'assault', sections: from, targetSection: target.id })
+        return cmds
+      }
     }
 
-    // -- 3) the push: save up, then hit the chosen section ---------------------
-    if (s.germanReq >= t.assaultBudget && s.time - this.lastAssaultAt > 40) {
-      const britFront = s.sections.filter((c) => c.home === 'brit' && c.line === 'front' && c.owner === 'brit')
-      if (britFront.length === 0) return cmds
-      let target = britFront[0]
-      if (this.persona === 'opportunist') {
-        // The thinnest stretch: fewest living defenders near it.
-        let bestN = Infinity
-        for (const sec of britFront) {
-          let n = 0
-          for (const u of s.units) {
-            if (u.disbanded || u.fallenBack) continue
-            for (const c of u.crew) {
-              if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 16 * 16) n++
-            }
-          }
-          if (n < bestN) { bestN = n; target = sec }
-        }
-      } else if (this.persona === 'methodical') {
-        // The section nearest our farthest forward hold — bite and hold.
-        let bestD = Infinity
-        for (const sec of britFront) {
-          for (const g of gerFront) {
-            if (g.owner !== 'german') continue
-            const d = dist2(sec.mid.x, sec.mid.z, g.mid.x, g.mid.z)
-            if (d < bestD) { bestD = d; target = sec }
-          }
-        }
-      } else {
-        // Stosstrupp: centre mass, biggest party, behind a box barrage.
-        let bestAbs = Infinity
-        for (const sec of britFront) {
-          if (Math.abs(sec.mid.x) < bestAbs) { bestAbs = Math.abs(sec.mid.x); target = sec }
-        }
+    // -- 3) works: wire the approaches, then emplace the heavy weapons ---------
+    if (purse > 140 && s.time - this.lastWireAt > 20 && afford('wire')) {
+      this.lastWireAt = s.time
+      const sec = held[Math.floor(this.rand() * held.length)]
+      // His wire goes out in front of his own parapet, which is toward +z.
+      const z = sec.mid.z + 9 + this.rand() * 5
+      buy('wire', sec.mid.x + (this.rand() - 0.5) * 26, z, (this.rand() - 0.5) * 0.3)
+    }
+    if (purse > t.assaultBudget * 0.7) {
+      for (const kind of t.supportKinds) {
+        if (!afford(kind)) continue
+        if (this.countKind(ctx, kind) >= 2) continue
+        const sec = held[Math.floor(this.rand() * held.length)]
+        // Gun pads sit behind his own line — deeper into the north half.
+        buy(kind, sec.mid.x + (this.rand() - 0.5) * 30, sec.mid.z - 22 - this.rand() * 14)
+        break
       }
-      this.lastAssaultAt = s.time
-      if (t.boxBarrage) {
-        cmds.push({ t: 'gbarrage', x: target.mid.x, z: target.mid.z, shells: 14, gas: false })
+    }
+
+    // -- 4) doctrine ----------------------------------------------------------
+    for (const id of t.upgradePlan) {
+      if (upgradeAvailable(s, id, SIDE) !== 'buyable') continue
+      // Never let the stores eat the war chest he is saving for the push.
+      const spare = purse - t.assaultBudget * 0.5
+      if (spare <= 0) break
+      cmds.push({ t: 'upgrade', id })
+      break
+    }
+
+    // -- 5) the push: save up, then send them over ----------------------------
+    if (purse >= t.assaultBudget && s.time - this.lastAssaultAt > 40) {
+      const enemyFront = s.sections.filter((c) => c.line === 'front' && c.owner !== SIDE && c.home !== SIDE)
+      if (enemyFront.length === 0) return cmds
+      const target = this.pickObjective(ctx, enemyFront)
+      const from = this.musterNear(ctx, target, t.minAssaultMen)
+      if (from.length > 0) {
+        this.lastAssaultAt = s.time
+        // The guns first, then the whistle — the curtain walks at a man's pace
+        // and the men lean on it, exactly as they do for the other commander.
+        if (t.creeping && orderReady(s, 'barrage', SIDE)) {
+          cmds.push({ t: 'order', id: 'barrage', x: target.mid.x, z: target.mid.z })
+        }
+        if (orderReady(s, 'rapidfire' as OrderId, SIDE)) {
+          cmds.push({ t: 'order', id: 'rapidfire' })
+        }
+        cmds.push({ t: 'assault', sections: from, targetSection: target.id })
       }
-      cmds.push({
-        t: 'spawnsquad', kinds: [...t.assaultKinds],
-        x: target.mid.x + (this.rand() - 0.5) * 20, role: 'assault', targetSection: target.id,
-      })
-      // Opportunist doubles down with a second, smaller party on a flank.
-      if (this.persona === 'opportunist' && s.germanReq >= t.assaultBudget + 120) {
-        cmds.push({
-          t: 'spawnsquad', kinds: ['einf', 'einf', 'einf'],
-          x: target.mid.x + (this.rand() < 0.5 ? -26 : 26), role: 'assault', targetSection: target.id,
-        })
-      }
+    }
+
+    // -- 6) heads down under a barrage ----------------------------------------
+    if (s.barrages.some((b) => b.t > -3) || s.creepings.some((c) => c.side !== SIDE)) {
+      if (orderReady(s, 'takecover' as OrderId, SIDE)) cmds.push({ t: 'order', id: 'takecover' })
     }
 
     return cmds
+  }
+
+  // -------------------------------------------------------------------------
+  // Reading the ground
+  // -------------------------------------------------------------------------
+
+  /** Living men of this commander's within `r` of a section's midpoint. */
+  private menNear(ctx: Ctx, sec: TrenchSection, r: number): number {
+    let n = 0
+    const r2 = r * r
+    for (const u of ctx.s.units) {
+      if (u.disbanded || u.side !== SIDE) continue
+      for (const c of u.crew) {
+        if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < r2) n++
+      }
+    }
+    return n
+  }
+
+  /**
+   * The held sections closest to `target` that between them can put at least
+   * `wantMen` rifles over the parapet. Empty when the attack would be a
+   * gesture — an assault of three men achieves nothing but three casualties.
+   */
+  private musterNear(ctx: Ctx, target: TrenchSection, wantMen: number): number[] {
+    const s = ctx.s
+    const held = s.sections
+      .filter((c) => c.owner === SIDE && c.line === 'front')
+      .sort((a, b) => dist2(a.mid.x, a.mid.z, target.mid.x, target.mid.z) -
+        dist2(b.mid.x, b.mid.z, target.mid.x, target.mid.z))
+    const picked: number[] = []
+    let men = 0
+    for (const sec of held) {
+      if (picked.length >= 6) break
+      const n = this.assaultMenNear(ctx, sec)
+      if (n === 0) continue
+      picked.push(sec.id)
+      men += n
+      if (men >= wantMen) return picked
+    }
+    return men >= Math.ceil(wantMen * 0.6) ? picked : []
+  }
+
+  /** Men on a section who could actually go over: infantry, formed up, free. */
+  private assaultMenNear(ctx: Ctx, sec: TrenchSection): number {
+    let n = 0
+    for (const u of ctx.s.units) {
+      if (u.disbanded || u.side !== SIDE) continue
+      if (u.march || u.assaultGroupId !== null || !isAssaultKind(u.kind)) continue
+      if (dist2(u.pos.x, u.pos.z, sec.mid.x, sec.mid.z) > (BIGPUSH.laneHalfWidth + 12) ** 2) continue
+      for (const c of u.crew) if (c.hp > 0) n++
+    }
+    return n
+  }
+
+  /** Which enemy stretch this persona wants. */
+  private pickObjective(ctx: Ctx, candidates: TrenchSection[]): TrenchSection {
+    let target = candidates[0]
+    if (this.persona === 'opportunist') {
+      // The thinnest stretch: fewest living defenders near it.
+      let bestN = Infinity
+      for (const sec of candidates) {
+        let n = 0
+        for (const u of ctx.s.units) {
+          if (u.disbanded || u.side === SIDE || u.fallenBack) continue
+          for (const c of u.crew) {
+            if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 16 * 16) n++
+          }
+        }
+        if (n < bestN) { bestN = n; target = sec }
+      }
+    } else if (this.persona === 'methodical') {
+      // The section nearest his farthest-forward hold — bite and hold.
+      let bestD = Infinity
+      for (const sec of candidates) {
+        for (const g of ctx.s.sections) {
+          if (g.owner !== SIDE || g.line !== 'front') continue
+          const d = dist2(sec.mid.x, sec.mid.z, g.mid.x, g.mid.z)
+          if (d < bestD) { bestD = d; target = sec }
+        }
+      }
+    } else {
+      // Stosstrupp: centre mass, everything behind it.
+      let bestAbs = Infinity
+      for (const sec of candidates) {
+        if (Math.abs(sec.mid.x) < bestAbs) { bestAbs = Math.abs(sec.mid.x); target = sec }
+      }
+    }
+    return target
+  }
+
+  /**
+   * A point somewhere along a section's trace. Posting every man at the exact
+   * midpoint fails the placement spacing rule after the second one, so the
+   * commander spreads them down the bay the way a human dragging the cursor
+   * along it would.
+   */
+  private alongSection(sec: TrenchSection): { x: number; z: number } {
+    const f = 0.15 + this.rand() * 0.7
+    return {
+      x: sec.a.x + (sec.b.x - sec.a.x) * f,
+      z: sec.a.z + (sec.b.z - sec.a.z) * f,
+    }
+  }
+
+  /** How many positions of this kind he already holds. */
+  private countKind(ctx: Ctx, kind: UnitKindId): number {
+    let n = 0
+    for (const u of ctx.s.units) {
+      if (!u.disbanded && u.side === SIDE && u.kind === kind) n++
+    }
+    return n
   }
 }

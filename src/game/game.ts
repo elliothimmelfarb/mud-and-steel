@@ -35,7 +35,7 @@ import { Scenery } from '../render/scenery'
 import { EffectsSystem, type EmitterHandle } from '../render/effects'
 import { RoundRenderer } from '../render/roundRenderer'
 import type { AudioEngine, SfxName } from '../audio/audio'
-import type { Ctx } from '../sim/sim'
+import { reqOf as simReqOf, type Ctx } from '../sim/sim'
 import { Mods } from '../sim/mods'
 import { projectToFireStep, sectionAt } from '../sim/trench'
 import { leadCrew } from '../sim/veterancy'
@@ -45,8 +45,6 @@ import { collectGasBlobs } from '../sim/gas'
 import { SimRunner } from '../sim/runner'
 import { LockstepSession } from '../net/lockstep'
 import type { Transport } from '../net/transport'
-import { ENEMY_DEFS } from '../core/config'
-import type { EnemyKindId } from '../core/types'
 import {
   costOf as cmdCostOf, createUnit as simCreateUnit, fieldBuildAllowed as simFieldBuildAllowed,
   isUnitKind as simIsUnitKind, marchPathLength, MARCH_SPEED, orderReady as simOrderReady,
@@ -186,6 +184,14 @@ export class Game {
    *  into the replay so playback re-derives the same AI from the seed. */
   private runPersona: import('../sim/ai').AiPersona | null = null
   get theirSide(): Team { return this.mySide === 'brit' ? 'german' : 'brit' }
+  /**
+   * The LOCAL commander's purse. Everything the HUD prices, every affordability
+   * check and every ghost reads this rather than `s.req`, so player two is
+   * spending his own requisition instead of watching player one's.
+   */
+  get req(): number {
+    return this.runner ? simReqOf(this.ctx.s, this.mySide) : 0
+  }
   seedStr = ''
   difficulty: Difficulty = 'front'
   private runRand: Rand = Math.random
@@ -634,12 +640,15 @@ export class Game {
   private subscribeEvents(): void {
     const ev = this.events
     ev.on('soldierDied', (p) => {
+      // Both peers run the same sim and see every death; a commander mourns
+      // only his own battalion.
+      if (p.side !== this.mySide) return
       const cites = deedCitations(p.deeds)
       // The sim already recorded him (combat.ts pushes the roster entry —
       // #41 item 3); we only write the epitaph, which is presentation.
       const rec: CasualtyRecord = this.ctx.s.casualties[this.ctx.s.casualties.length - 1] ?? {
         name: { first: p.name.split(' ')[0] ?? '', last: p.name.split(' ')[1] ?? '' },
-        rank: p.rank, kind: p.kind as UnitKindId, wave: p.wave,
+        rank: p.rank, kind: p.kind as UnitKindId, side: p.side, wave: p.wave,
         epitaph: '', deeds: p.deeds, wavesServed: p.wavesServed,
       }
       rec.epitaph = makeEpitaph(this.runRand, p.name, UNIT_DEFS[p.kind as UnitKindId]?.name ?? p.kind, p.wave, {
@@ -656,6 +665,7 @@ export class Game {
       void p
     })
     ev.on('unitPlaced', (p) => {
+      if (p.side !== this.mySide) return
       // Big Push: the buy despatches a column — tell the commander when it lands.
       const u = this.ctx.s.units.find((x) => x.id === p.unitId)
       if (u?.march) {
@@ -668,24 +678,42 @@ export class Game {
       this.hud?.toast('Tank! Armour advancing on the line!', 'danger')
       this.audio.play('gas_gong', { gain: 0.5, rate: 1.4 })
     })
-    ev.on('gasAlarm', () => {
+    ev.on('gasAlarm', (p) => {
+      if (p.side !== this.mySide) return
       this.sawGas = true
       this.hud?.toast('GAS! GAS! Masks on!', 'danger')
     })
     // Capture flips change where trench cards may go — keep the ribbon honest.
+    // These two events are phrased from the British chair (they predate the
+    // Big Push); read from the German chair they mean the opposite.
     ev.on('sectionLost', () => {
-      this.hud?.toast('Trench section overrun!', 'danger')
+      this.hud?.toast(this.mySide === 'brit'
+        ? 'Trench section overrun!'
+        : 'Their line has given — a section is ours.', this.mySide === 'brit' ? 'danger' : 'good')
       this.refreshPlacementZones()
     })
     ev.on('sectionRetaken', () => {
-      this.hud?.toast('Section retaken. Good work.', 'good')
+      this.hud?.toast(this.mySide === 'brit'
+        ? 'Section retaken. Good work.'
+        : 'They have taken that section back.', this.mySide === 'brit' ? 'good' : 'warn')
+      this.refreshPlacementZones()
+    })
+    ev.on('sectionCaptured', (p) => {
+      this.hud?.toast(p.by === this.mySide
+        ? 'Section captured — get men onto it before they come back.'
+        : 'They have taken a stretch of our line.', p.by === this.mySide ? 'good' : 'danger')
       this.refreshPlacementZones()
     })
     ev.on('barrageWarning', (p) => {
+      // Only the side being shelled hears the whistles and gets the ring.
+      const sign = this.mySide === 'brit' ? 1 : -1
+      if (p.z * sign < 0) return
       this.hud?.toast('Incoming barrage — take cover!', 'warn')
       this.addWarnRing(p.x, p.z, p.seconds)
     })
-    ev.on('toast', (p) => this.hud?.toast(p.text, p.kind))
+    // A despatch with no addressee is for everyone; one addressed to the other
+    // commander is his business, not ours.
+    ev.on('toast', (p) => { if (!p.side || p.side === this.mySide) this.hud?.toast(p.text, p.kind) })
     ev.on('promoted', (p) => {
       const u = this.ctx.s.units.find((x) => x.id === p.unitId)
       const lead = u ? leadCrew(u) : null
@@ -929,7 +957,9 @@ export class Game {
   private preRunMods = new Mods()
 
   costOf(id: BuildableId): number {
-    return this.runner ? cmdCostOf(this.ctx, id) : cmdCostOf({ mods: this.preRunMods } as Ctx, id)
+    return this.runner
+      ? cmdCostOf(this.ctx, id, this.mySide)
+      : cmdCostOf({ mods: this.preRunMods, modsGerman: this.preRunMods } as Ctx, id)
   }
 
   isUnitKind(id: BuildableId): id is UnitKindId { return simIsUnitKind(id) }
@@ -959,33 +989,35 @@ export class Game {
 
     if (id === 'sandbags') {
       const sec = sectionAt(s.sections, x, z)
-      if (sec && sec.owner === 'brit' && sec.home === 'brit') {
+      if (sec && sec.owner === this.mySide && sec.home === this.mySide) {
         gx = sec.mid.x; gz = sec.mid.z
         valid = !s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)
       }
     } else if (placement === 'trench') {
       // Anywhere along an uncaptured fighting line: the cursor projects onto
       // the nearest fire step; a taken stretch shows the ghost there in red.
-      const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist)
+      const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist, this.mySide)
       if (post) {
         gx = post.x; gz = post.z
         valid = simUnitClearance(s, gx, gz) >= PLACEMENT.trenchSpacing
       }
     } else if (placement === 'pad') {
-      // Anywhere on open ground behind the front line.
-      valid = simPadSpotValid(this.ctx, x, z)
+      // Anywhere on open ground behind your OWN front line.
+      valid = simPadSpotValid(this.ctx, x, z, this.mySide)
     } else {
-      // Field placement: forward of the front line, not in a trench, build phase only.
+      // Field placement: forward of your own front line, not in a trench,
+      // build phase only. Read in the commander's own frame.
+      const forward = z * (this.mySide === 'brit' ? 1 : -1)
       const zMin = id === 'flarepost' ? 20 : -60
       const zMax = WORLD.frontTrenchZ - 5
       valid = this.fieldBuildAllowed() &&
-        z > zMin && z < zMax &&
+        forward > zMin && forward < zMax &&
         Math.abs(x) < WORLD.width / 2 - 6 &&
         this.terrain.trenchAt(x, z) < 0.25
     }
 
     const cost = this.costOf(id)
-    if (s.req < cost) valid = false
+    if (this.req < cost) valid = false
     this.ghostValid = valid
     this.ghostPos.set(gx, this.terrain.heightAt(gx, gz) + 0.2, gz)
     this.ghost.position.copy(this.ghostPos)
@@ -997,13 +1029,12 @@ export class Game {
   }
 
   confirmPlace(): boolean {
-    if (this.mySide !== 'brit') return false // the sim would drop it anyway
     const id = this.buildSelection
     if (!id || !this.ghostValid) {
       if (id) this.audio.play('ui_error', { gain: 0.5 })
       return false
     }
-    if (this.ctx.s.req < this.costOf(id)) return false
+    if (this.req < this.costOf(id)) return false
 
     // The buy is a command — the sim re-validates and spends at the next tick
     // boundary. Local sound is the instant acknowledgement.
@@ -1048,7 +1079,7 @@ export class Game {
     }
     let best = -1, bestD = 5 * 5
     for (const u of s.units) {
-      if (u.disbanded) continue
+      if (u.disbanded || u.side !== this.mySide) continue
       const d = (u.pos.x - x) ** 2 + (u.pos.z - z) ** 2
       if (d < bestD) { bestD = d; best = u.id }
     }
@@ -1096,9 +1127,8 @@ export class Game {
   }
 
   sellSelected(): void {
-    if (this.mySide !== 'brit') return // those are the other fellow's men
     const u = this.ctx.s.units.find((x) => x.id === this.selectedUnitId && !x.disbanded)
-    if (!u) return
+    if (!u || u.side !== this.mySide) return // those are the other fellow's men
     this.submit([{ t: 'sell', unitId: u.id }])
     this.audio.play('sell', { gain: 0.6 })
     this.selectedUnitId = -1
@@ -1109,7 +1139,7 @@ export class Game {
   }
 
   cycleSelection(): void {
-    const live = this.ctx.s.units.filter((u) => !u.disbanded)
+    const live = this.ctx.s.units.filter((u) => !u.disbanded && u.side === this.mySide)
     if (live.length === 0) return
     const idx = live.findIndex((u) => u.id === this.selectedUnitId)
     const next = live[(idx + 1) % live.length]
@@ -1122,11 +1152,10 @@ export class Game {
   // -------------------------------------------------------------------------
 
   orderReady(id: OrderId): boolean {
-    return this.runner ? simOrderReady(this.ctx.s, id) : false
+    return this.runner ? simOrderReady(this.ctx.s, id, this.mySide) : false
   }
 
   issueOrder(id: OrderId): void {
-    if (this.mySide !== 'brit') return // British orders; the sim would drop them
     if (!this.orderReady(id)) { this.audio.play('ui_error', { gain: 0.4 }); return }
     // Flare and barrage aim where the commander is looking; the sim clamps
     // both. A creeping barrage is a frontage, so its x is the whole aim.
@@ -1137,11 +1166,10 @@ export class Game {
   }
 
   upgradeAvailable(id: string): 'owned' | 'locked' | 'unaffordable' | 'buyable' {
-    return this.runner ? simUpgradeAvailable(this.ctx.s, id) : 'locked'
+    return this.runner ? simUpgradeAvailable(this.ctx.s, id, this.mySide) : 'locked'
   }
 
   buyUpgrade(id: string): void {
-    if (this.mySide !== 'brit') return
     if (this.upgradeAvailable(id) !== 'buyable') { this.audio.play('ui_error', { gain: 0.4 }); return }
     this.submit([{ t: 'upgrade', id }])
   }
@@ -1213,36 +1241,6 @@ export class Game {
   private objRings: THREE.Mesh[] = []
   /** Pooled rings marking posts that marching crews have claimed but not reached. */
   private destRings: THREE.Mesh[] = []
-
-  /**
-   * German commander's minimal spend UI (MP v1): hotkeys 1–4 despatch a squad
-   * to the first selected own section (or the centre of the line). The sim
-   * re-validates cost and target — this is a request, not a bank transfer.
-   */
-  private static readonly GERMAN_KITS: Array<{ name: string; kinds: EnemyKindId[] }> = [
-    { name: 'Rifle squad', kinds: ['einf', 'einf', 'einf'] },
-    { name: 'MG team', kinds: ['emg', 'einf'] },
-    { name: 'Stosstruppen', kinds: ['estorm', 'estorm', 'einf'] },
-    { name: 'Pioneers', kinds: ['epioneer', 'einf', 'einf'] },
-  ]
-
-  private germanSpawn(kit: number): void {
-    const preset = Game.GERMAN_KITS[kit]
-    if (!preset) return
-    const s = this.ctx.s
-    const own = s.sections.filter((c) => c.home === 'german' && c.owner === 'german')
-    if (own.length === 0) return
-    const selected = own.find((c) => this.selectedSections.includes(c.id))
-    const target = selected ?? own.find((c) => c.line === 'front') ?? own[0]
-    const cost = preset.kinds.reduce((a, k) => a + ENEMY_DEFS[k].cost, 0)
-    if (s.germanReq < cost) {
-      this.hud?.toast(`${preset.name}: short by ${cost - Math.floor(s.germanReq)} req.`, 'warn')
-      return
-    }
-    this.submit([{ t: 'spawnsquad', kinds: preset.kinds, x: target.mid.x, role: 'garrison', targetSection: target.id }])
-    this.hud?.toast(`${preset.name} despatched to the line (${cost} req).`, 'info')
-    this.audio.play('ui_click', { gain: 0.5 })
-  }
 
   /** Step into the boots of the selected unit's senior surviving man. */
   possessSelected(): void {
@@ -1370,7 +1368,7 @@ export class Game {
   /** Big Push: sound the recall for every group still out. */
   recallAllAssaults(): void {
     const cmds: Cmd[] = this.ctx.s.assaults
-      .filter((g) => g.side === 'brit' && g.state === 'advancing')
+      .filter((g) => g.side === this.mySide && g.state === 'advancing')
       .map((g) => ({ t: 'recall', groupId: g.id }))
     if (cmds.length === 0) return
     this.submit(cmds)
@@ -1408,7 +1406,7 @@ export class Game {
   private syncDestinationRings(): void {
     let n = 0
     for (const u of this.ctx.s.units) {
-      if (u.march === null || u.disbanded) continue
+      if (u.march === null || u.disbanded || u.side !== this.mySide) continue
       if (n >= this.destRings.length) {
         const geo = new THREE.TorusGeometry(1.6, 0.12, 6, 24)
         geo.rotateX(Math.PI / 2)
@@ -1610,12 +1608,11 @@ export class Game {
     if (input.consume('orderFlare')) this.issueOrder('flare')
     if (input.consume('orderBarrage')) this.issueOrder('barrage')
     if (input.consume('orderTank')) this.issueOrder('marktank')
-    // Build hotkeys. The German commander's 1–4 despatch squads instead.
+    // Build hotkeys — the same roster on the same keys for both commanders.
     for (let i = 0; i < BUILD_ORDER.length; i++) {
       const action = (i < 12 ? `build${i + 1}` : `buildD${i - 11}`) as import('../render/controls').Action
       if (input.consume(action)) {
-        if (this.mySide === 'german') { if (i < 4) this.germanSpawn(i) }
-        else this.setBuildSelection(this.buildSelection === BUILD_ORDER[i] ? null : BUILD_ORDER[i])
+        this.setBuildSelection(this.buildSelection === BUILD_ORDER[i] ? null : BUILD_ORDER[i])
       }
     }
   }
@@ -1714,7 +1711,7 @@ export class Game {
         pose.deadT = 0
         pose.deadSeed = c.id * 0.37
         pose.masked = c.masked
-        pose.team = 'brit'
+        pose.team = u.side
         pose.tint = (c.id % 7) / 7
         pose.mounted = false
         this.soldiers.push(pose)
@@ -1775,15 +1772,22 @@ export class Game {
       if (!v || v.burnT <= 0) { h.stop(); this.burnEmitters.delete(id) }
     }
 
-    // Colour-assist chevrons.
-    if (this.settings.colorAssist && s.enemies.length > 0) {
+    // Colour-assist chevrons over whoever is hostile to THIS commander.
+    if (this.settings.colorAssist) {
       const m = new THREE.Matrix4()
       let n = 0
       const bob = Math.sin(s.time * 4) * 0.15
-      for (const e of s.enemies) {
-        if (e.hp <= 0 || n >= 300) continue
-        m.setPosition(e.pos.x, standY(e.pos.x, e.pos.z) + 2.5 + bob, e.pos.z)
+      const mark = (px: number, pz: number) => {
+        if (n >= 300) return
+        m.setPosition(px, standY(px, pz) + 2.5 + bob, pz)
         this.chevrons.setMatrixAt(n++, m)
+      }
+      for (const e of s.enemies) {
+        if (e.hp > 0 && this.mySide === 'brit') mark(e.pos.x, e.pos.z)
+      }
+      for (const u of s.units) {
+        if (u.disbanded || u.side === this.mySide) continue
+        for (const c of u.crew) if (c.hp > 0) mark(c.pos.x, c.pos.z)
       }
       this.chevrons.count = n
       this.chevrons.instanceMatrix.needsUpdate = true
@@ -1800,7 +1804,7 @@ export class Game {
       const cap = 180
       if (!this.fpsMode.active) {
         for (const u of s.units) {
-          if (u.disbanded || u.vet <= 0) continue
+          if (u.disbanded || u.vet <= 0 || u.side !== this.mySide) continue
           const lead = leadCrew(u)
           if (!lead || lead.hp <= 0) continue
           const baseY = standY(lead.pos.x, lead.pos.z) + 2.15
