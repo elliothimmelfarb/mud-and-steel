@@ -381,13 +381,20 @@ export class Game {
 
   private zoneBoundsFor(id: BuildableId, placement: 'pad' | 'field'): { x0: number; x1: number; z0: number; z1: number } {
     const xLim = WORLD.width / 2 - 6
+    // The band is drawn in the commander's own frame and then flipped through
+    // z = 0 for the German chair, so the guide always matches the rule the
+    // sim will actually apply (resolvePlacement takes the same `sign`).
+    const sign = this.mySide === 'brit' ? 1 : -1
+    const flip = (z0: number, z1: number) => sign === 1
+      ? { x0: -xLim, x1: xLim, z0, z1 }
+      : { x0: -xLim, x1: xLim, z0: -z1, z1: -z0 }
     if (placement === 'pad') {
-      return { x0: -xLim, x1: xLim, z0: WORLD.frontTrenchZ + PLACEMENT.padMarginZ, z1: WORLD.depth / 2 - 10 }
+      return flip(WORLD.frontTrenchZ + PLACEMENT.padMarginZ, WORLD.depth / 2 - 10)
     }
-    return { x0: -xLim, x1: xLim, z0: id === 'flarepost' ? 20 : -60, z1: WORLD.frontTrenchZ - 5 }
+    return flip(id === 'flarepost' ? 20 : -60, WORLD.frontTrenchZ - 5)
   }
 
-  /** Brass ribbons along every uncaptured section's fire step. */
+  /** Brass ribbons along every fire step this commander may post men on. */
   private showTrenchRibbon(show: boolean): void {
     if (!show) {
       if (this.zoneRibbon) this.zoneRibbon.visible = false
@@ -403,7 +410,7 @@ export class Game {
     const idx: number[] = []
     const HALF = 0.55
     for (const sec of this.ctx.s.sections) {
-      if (sec.owner !== 'brit') continue
+      if (sec.owner !== this.mySide) continue
       const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
       const segLen = Math.hypot(abx, abz) || 1
       let nx = -abz / segLen, nz = abx / segLen
