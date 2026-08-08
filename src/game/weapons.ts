@@ -16,7 +16,7 @@ import {
   spawnGrenade, spawnMortarBombAt, spawnDirectShell, spawnGasShell,
 } from '../sim/projectiles'
 import { flameCone } from '../sim/soldiers'
-import type { Ctx } from '../sim/sim'
+import { modsOf, type Ctx } from '../sim/sim'
 import type { SfxName } from '../audio/audio'
 import type { Game } from './game'
 
@@ -1399,9 +1399,10 @@ function fireBulletShot(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: S
   spread *= 1 + soldier.suppression * 1.6
   if (profile.heat) spread *= 1 + unit.heat * 0.6 // a boiling Vickers walks its group
 
+  const mods = modsOf(ctx, unit.side)
   let damage = def.damage
-  if (profile.id === 'rifleman' || profile.id === 'lewis') damage *= ctx.mods.rifleDmg
-  if (profile.id === 'sniper' && ctx.rand() < ctx.mods.sniperCrit) damage *= 3
+  if (profile.id === 'rifleman' || profile.id === 'lewis') damage *= mods.rifleDmg
+  if (profile.id === 'sniper' && ctx.rand() < mods.sniperCrit) damage *= 3
 
   const from: Vec3 = {
     x: f.camPos.x + f.dir.x * 0.7,
@@ -1409,7 +1410,7 @@ function fireBulletShot(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: S
     z: f.camPos.z + f.dir.z * 0.7,
   }
   fireBullet(ctx, {
-    team: 'brit', from, dir: { x: f.dir.x, y: f.dir.y, z: f.dir.z }, speed: COMBAT.bulletSpeed,
+    team: unit.side, from, dir: { x: f.dir.x, y: f.dir.y, z: f.dir.z }, speed: COMBAT.bulletSpeed,
     damage, spread, category: profile.category, shooterUnitId: unit.id, shooterId: soldier.id,
     tracer: ctx.rand() < profile.tracerChance,
     // Ballistics ride the boresight `from` (aim-true); the visible barrel tip is
@@ -1428,8 +1429,9 @@ function throwGrenade(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Sol
   if (!g) return
   const p = clampToBand(soldier.pos.x, soldier.pos.z, g.x, g.z, profile.minRange, profile.maxRange)
   soldier.facing = f.yaw
-  spawnGrenade(ctx, soldier, p.x, p.z, UNIT_DEFS.grenadier.damage * ctx.mods.grenDmg,
-    UNIT_DEFS.grenadier.aoe + ctx.mods.grenAoe, unit.id)
+  const mods = modsOf(ctx, unit.side)
+  spawnGrenade(ctx, soldier, p.x, p.z, UNIT_DEFS.grenadier.damage * mods.grenDmg,
+    UNIT_DEFS.grenadier.aoe + mods.grenAoe, unit.id)
 }
 
 function lobBomb(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier, f: FireParams): void {
@@ -1439,12 +1441,12 @@ function lobBomb(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier,
   const fromY = standSurface(ctx, soldier.pos.x, soldier.pos.z) + 0.8
   if (profile.id === 'gasproj') {
     for (let i = 0; i < 6; i++) {
-      spawnGasShell(ctx, soldier.pos.x, soldier.pos.z, p.x + (ctx.rand() - 0.5) * 14, p.z + (ctx.rand() - 0.5) * 14)
+      spawnGasShell(ctx, soldier.pos.x, soldier.pos.z, p.x + (ctx.rand() - 0.5) * 14, p.z + (ctx.rand() - 0.5) * 14, unit.side)
     }
     ctx.s.stats.gasClouds++
   } else {
     spawnMortarBombAt(ctx, soldier.pos.x, soldier.pos.z, fromY, p.x, p.z,
-      UNIT_DEFS.mortar.damage, UNIT_DEFS.mortar.aoe, unit.id)
+      UNIT_DEFS.mortar.damage, UNIT_DEFS.mortar.aoe, unit.id, unit.side)
     ctx.s.stats.shellsFired++
   }
 }
@@ -1456,7 +1458,7 @@ function fireGun(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldier,
     z: f.camPos.z + f.dir.z * 1.1,
   }
   spawnDirectShell(ctx, from.x, from.y, from.z, f.dir.x, f.dir.y, f.dir.z, 260,
-    UNIT_DEFS.fieldgun.damage, UNIT_DEFS.fieldgun.aoe, unit.id)
+    UNIT_DEFS.fieldgun.damage, UNIT_DEFS.fieldgun.aoe, unit.id, unit.side)
   ctx.s.stats.shellsFired++
   soldier.facing = f.yaw
   void profile
@@ -1466,7 +1468,7 @@ function sprayFlame(profile: WeaponProfile, ctx: Ctx, unit: Unit, soldier: Soldi
   soldier.facing = f.yaw
   // The cone is instant-area; we call it in short puffs, so scale the bite to
   // roughly a satisfying close-range DPS without vaporising the whole wave.
-  flameCone(ctx, soldier, 'brit', profile.maxRange, UNIT_DEFS.flamer.damage * 0.42, unit.id)
+  flameCone(ctx, soldier, unit.side, profile.maxRange, UNIT_DEFS.flamer.damage * 0.42, unit.id)
 }
 
 /**

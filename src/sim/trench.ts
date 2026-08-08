@@ -40,20 +40,24 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
 }
 
 /**
- * Project a cursor point onto the nearest fighting post: any point along an
- * uncaptured front/support section, pushed onto the fire step carved into the
+ * Project a cursor point onto the nearest fighting post: any point along a
+ * section `side` currently OWNS, pushed onto the fire step carved into the
  * enemy wall — the man plants his feet on that real bench instead of floating
  * over the deep floor. Placement is continuous along the line, not a handful
  * of pre-dug slots. Returns null when the cursor is farther than `maxDist`
  * from every candidate.
+ *
+ * Ownership, not home ground, is the test: a stretch you have taken and
+ * consolidated is a stretch you may garrison, and a stretch you have lost is
+ * one you may not reinforce. That reads identically from either trench.
  */
 export function projectToFireStep(
-  sections: TrenchSection[], x: number, z: number, maxDist: number,
+  sections: TrenchSection[], x: number, z: number, maxDist: number, side: Team = 'brit',
 ): { x: number; z: number; sectionId: number } | null {
   let best: { x: number; z: number; sectionId: number } | null = null
   let bestD = maxDist * maxDist
   for (const sec of sections) {
-    if (sec.captured) continue
+    if (sec.owner !== side) continue
     const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
     const len2 = abx * abx + abz * abz
     if (len2 <= 0) continue
@@ -114,13 +118,15 @@ export function updateCapture(ctx: Ctx, dt: number): void {
   for (const sec of s.sections) {
     // Living presence per side near the section.
     let brit = 0
+    let german = 0
     for (const u of s.units) {
       if (u.disbanded || u.fallenBack) continue
       for (const c of u.crew) {
-        if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 8 * 8) brit++
+        if (c.hp <= 0 || dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) >= 8 * 8) continue
+        if (u.side === 'brit') brit++
+        else german++
       }
     }
-    let german = 0
     for (const e of s.enemies) {
       if (e.hp <= 0 || e.behavior === 'rout') continue
       if (dist2(e.pos.x, e.pos.z, sec.mid.x, sec.mid.z) < 7 * 7) german++

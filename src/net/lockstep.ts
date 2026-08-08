@@ -237,17 +237,12 @@ export class LockstepSession {
     this.desyncedAt = null
     this.resyncing = false
     this.resyncBuffer.length = 0
-    // The remaining human's machine adopts the ABSENT side with the AI.
-    // Only the German side has an AI commander today: if the BRITISH
-    // commander vanished, the game layer declares a walkover instead
-    // (the onPeerLost handler checks which side is absent).
+    // The remaining human's machine adopts the ABSENT side with the AI. Now
+    // that both sides play the same game, the commander can hold either chair
+    // — the match goes on either way instead of ending in a walkover.
     const absent: Team = this.side === 'brit' ? 'german' : 'brit'
-    if (absent === 'german') {
-      this.runner.adoptAi('methodical')
-      this.ev.onStatus?.('peer lost — the AI takes their side')
-    } else {
-      this.ev.onStatus?.('peer lost — the British commander has quit the field')
-    }
+    this.runner.adoptAi('methodical', absent)
+    this.ev.onStatus?.('peer lost — the AI takes their side')
     this.ev.onPeerLost?.()
   }
 

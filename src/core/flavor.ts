@@ -227,6 +227,49 @@ export function makeSoldierName(rand: () => number): { first: string; last: stri
   return { first: pick(rand, FIRST_NAMES), last: pick(rand, SURNAMES) };
 }
 
+// The men in the other trench. In the Big Push the German commander posts the
+// same crewed units the British commander does, and his soldiers are named,
+// mourned and cited the same way — so they need names of their own.
+const GERMAN_FIRST_NAMES: readonly string[] = [
+  'Adolf', 'Albrecht', 'Alfred', 'Anton', 'August', 'Bernhard', 'Bruno',
+  'Christoph', 'Claus', 'Conrad', 'Dieter', 'Eberhard', 'Emil', 'Erich',
+  'Ernst', 'Ferdinand', 'Franz', 'Friedrich', 'Fritz', 'Georg', 'Gerhard',
+  'Gottfried', 'Gunther', 'Gustav', 'Hans', 'Heinrich', 'Heinz', 'Helmut',
+  'Herbert', 'Hermann', 'Horst', 'Hubert', 'Jakob', 'Johann', 'Josef',
+  'Jurgen', 'Karl', 'Klaus', 'Konrad', 'Kurt', 'Leopold', 'Ludwig', 'Manfred',
+  'Martin', 'Matthias', 'Max', 'Nikolaus', 'Otto', 'Paul', 'Peter', 'Rainer',
+  'Reinhold', 'Richard', 'Rudolf', 'Rupert', 'Sebastian', 'Siegfried',
+  'Stefan', 'Theodor', 'Ulrich', 'Viktor', 'Waldemar', 'Walter', 'Werner',
+  'Wilhelm', 'Wolfgang',
+];
+
+const GERMAN_SURNAMES: readonly string[] = [
+  'Abendroth', 'Achterberg', 'Ackermann', 'Bachmeier', 'Baumgartner', 'Becker',
+  'Behrens', 'Bergmann', 'Beyer', 'Bischoff', 'Bloch', 'Brandt', 'Braun',
+  'Breitner', 'Brenner', 'Buchholz', 'Burkhardt', 'Dahlmann', 'Dietrich',
+  'Dorfmann', 'Eberlein', 'Eichhorn', 'Engelhardt', 'Fassbender', 'Faust',
+  'Feldmann', 'Fischer', 'Fleischer', 'Frank', 'Freitag', 'Frueh', 'Gerber',
+  'Gerlach', 'Giesler', 'Goldschmidt', 'Graf', 'Grunwald', 'Haas',
+  'Hafner', 'Hartmann', 'Hauser', 'Heilmann', 'Heinemann', 'Hellwig',
+  'Herzog', 'Hildebrandt', 'Hofmann', 'Holzer', 'Huber', 'Jaeger', 'Kaiser',
+  'Kastner', 'Kaufmann', 'Keller', 'Kern', 'Kessler', 'Kirchner', 'Klein',
+  'Koehler', 'Konig', 'Krause', 'Kruger', 'Kuhn', 'Lang', 'Lehmann',
+  'Leitner', 'Lindner', 'Lorenz', 'Ludwig', 'Maier', 'Mandel', 'Mauer',
+  'Meier', 'Mendel', 'Metzger', 'Moser', 'Muller', 'Nagel', 'Neumann',
+  'Oswald', 'Pfeiffer', 'Probst', 'Rademacher', 'Reinhardt', 'Richter',
+  'Riedel', 'Ritter', 'Rosenberg', 'Sattler', 'Schaefer', 'Scheler',
+  'Schindler', 'Schlosser', 'Schmidt', 'Schneider', 'Scholz', 'Schreiber',
+  'Schroeder', 'Schulte', 'Schulz', 'Schuster', 'Schwarz', 'Seidel',
+  'Siegel', 'Sommer', 'Sonnenberg', 'Specht', 'Stahl', 'Stein', 'Steiner',
+  'Stern', 'Straub', 'Thalberg', 'Vogel', 'Vogt', 'Wagner', 'Walther',
+  'Weber', 'Wegener', 'Weigand', 'Weiss', 'Wenzel', 'Werner', 'Wieland',
+  'Winkler', 'Wolf', 'Zeller', 'Ziegler', 'Zimmermann',
+];
+
+export function makeGermanSoldierName(rand: () => number): { first: string; last: string } {
+  return { first: pick(rand, GERMAN_FIRST_NAMES), last: pick(rand, GERMAN_SURNAMES) };
+}
+
 const SHIRES: readonly string[] = [
   'Loamshire', 'Barsetshire', 'Glebeshire', 'Wintonshire', 'Marshbrook',
   'Netherdale', 'Kingscote', 'Ashcombe', 'Harfield', 'Redemoor', 'Fenshire',

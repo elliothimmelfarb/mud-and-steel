@@ -72,6 +72,13 @@ export type DeedMask = number
 export interface Unit {
   id: number
   kind: UnitKindId
+  /**
+   * Whose position this is. Classic wave-defence only ever has British units
+   * (the attackers are loose `Enemy` soldiers); in the Big Push BOTH
+   * commanders post units from the same roster, so every faction test in the
+   * sim reads this rather than assuming a unit is British.
+   */
+  side: Team
   /** The unit's post: where it was placed and where the crew forms up. */
   pos: Vec2
   crew: Soldier[]
@@ -250,6 +257,8 @@ export interface ActiveBarrage {
 }
 
 export interface CreepingBarrage {
+  /** Whose guns are firing it — and therefore which way the curtain walks. */
+  side: Team
   /** Centre of the shoot in x — a barrage is a frontage, not the whole map. */
   x: number
   z: number
@@ -509,6 +518,8 @@ export interface CasualtyRecord {
   name: SoldierName
   rank: string
   kind: UnitKindId
+  /** Which battalion lost him — each commander mourns his own. */
+  side: Team
   wave: number
   epitaph: string
   /** Bitmask of the deeds he was cited for (DeedMask); 0 if none. */

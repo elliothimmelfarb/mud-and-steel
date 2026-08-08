@@ -422,6 +422,15 @@ export const COMBAT = {
   vickersCoolRate: 0.06,
   vickersVentTime: 6,
   meleeDps: 26,
+  /**
+   * What killing one man of a CREWED position pays the side that killed him,
+   * as a fraction of what the whole position cost to raise (then split across
+   * its crew). Wiping a Vickers team is worth roughly a third of a new one —
+   * enough that pressing an attack home funds the next, not so much that
+   * trading men is a business model. Loose enemy soldiers keep their own
+   * per-kind bounty; this is the equivalent for units.
+   */
+  crewBountyFraction: 0.32,
   captureSeconds: 10,         // enemies holding an empty section flip it
   breachMax: 100,             // breach meter; leak past support line drains it
   breachPerEnemy: 4,          // per enemy crossing breachZ

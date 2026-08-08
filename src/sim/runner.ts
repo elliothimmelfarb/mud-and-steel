@@ -9,7 +9,7 @@
  * identical state, hash-for-hash. All randomness flows from forks of the run
  * seed; commands apply only at tick boundaries, in (tick, side, seq) order.
  */
-import type { DefenceKindId, Difficulty, MatchLength, Unit, UnitKindId } from '../core/types'
+import type { DefenceKindId, Difficulty, MatchLength, Team, Unit, UnitKindId } from '../core/types'
 import {
   BIGPUSH, COMBAT, DIRECTOR, ECONOMY, SCORE, SIM_DT, UNIT_DEFS, WORLD, XP_PER_WAVE,
 } from '../core/config'
@@ -22,7 +22,7 @@ import { Weather } from '../world/weather'
 import { FlowField } from './pathfind'
 import { Mods } from './mods'
 import {
-  makeDirector, makeOrders, makeStats, type Ctx, type SimState,
+  makeDirector, makeOrders, makeStats, type ActiveOrders, type Ctx, type SimState,
 } from './sim'
 import { buildSections } from './trench'
 import { awardXp } from './veterancy'
@@ -56,8 +56,23 @@ export interface RunnerOpts {
   startReq?: number
   /** Big Push match length (default 'battle'). Ignored in classic. */
   matchLen?: MatchLength
-  /** Big Push: the German AI commander persona (null = no AI, e.g. MP human). */
+  /** Big Push: the AI commander persona (null = no AI, e.g. MP human). */
   aiPersona?: AiPersona | null
+  /** Big Push: which chair the AI takes. Defaults to the German one — pass
+   *  'brit' when the human commands the German side in singleplayer. */
+  aiSide?: Team
+}
+
+/** Run down one side's order durations and cooldowns by `dt`. */
+function tickOrders(o: ActiveOrders, dt: number): void {
+  o.coverT = Math.max(0, o.coverT - dt)
+  o.rapidT = Math.max(0, o.rapidT - dt)
+  o.bayonetT = Math.max(0, o.bayonetT - dt)
+  // for-in over the fixed key set — no per-tick Object.keys array.
+  for (const k in o.cooldowns) {
+    const key = k as keyof typeof o.cooldowns
+    o.cooldowns[key] = Math.max(0, o.cooldowns[key] - dt)
+  }
 }
 
 export class SimRunner implements CmdHost {
@@ -76,7 +91,10 @@ export class SimRunner implements CmdHost {
   private draining = false
   /** Adopted mid-match (MP takeover): its envelopes ARE logged. */
   private aiAdopted = false
-  /** The German AI commander (Big Push SP; also the MP disconnect fallback). */
+  /** Which chair the AI commander sits in (Big Push SP: whichever the human
+   *  did not take; MP: the side whose human vanished). */
+  private aiSide: Team = 'german'
+  /** The AI commander (Big Push SP; also the MP disconnect fallback). */
   ai: AiCommander | null
 
   constructor(opts: RunnerOpts) {
@@ -89,6 +107,11 @@ export class SimRunner implements CmdHost {
     const mods = new Mods()
     const upgrades = new Set<string>(resume?.upgrades ?? [])
     mods.recompute(upgrades)
+    // The German commander buys from the same shelf and starts, like the
+    // British commander, with nothing on it.
+    const germanUpgrades = new Set<string>()
+    const modsGerman = new Mods()
+    modsGerman.recompute(germanUpgrades)
 
     const mode = opts.mode ?? 'classic'
     this.terrain = new Terrain(seed, mode === 'bigpush' ? 'bigpush' : 'classic')
@@ -109,9 +132,12 @@ export class SimRunner implements CmdHost {
       req: opts.startReq ?? resume?.req ?? Math.round(mode === 'bigpush' ? BIGPUSH.startReq : ECONOMY.startReq[opts.difficulty]),
       breach: resume?.breach ?? COMBAT.breachMax,
       masksOn: resume?.masksOn ?? false,
+      germanMasksOn: false,
       possessedSoldierId: -1, possessedUnitId: -1,
       earlyCallBonus: 0,
       germanReq: mode === 'bigpush' ? BIGPUSH.startReq : 0,
+      germanUpgrades,
+      germanOrders: makeOrders(),
       strength: { brit: BIGPUSH.strengthStart, german: BIGPUSH.strengthStart },
       matchLen: opts.matchLen ?? 'battle',
       timeLimit: mode === 'bigpush' ? BIGPUSH.matchSeconds[opts.matchLen ?? 'battle'] : 0,
@@ -127,7 +153,7 @@ export class SimRunner implements CmdHost {
       stats: resume?.stats ?? makeStats(),
       casualties: resume?.casualties ?? [],
       plan: null, planCursor: 0, planBarrageCursor: 0, waveStartTime: 0,
-      barrages: [], creeping: null,
+      barrages: [], creepings: [],
       gasAlarmCooldown: 0,
       wetnessTimer: 0,
       lastFlowRebuild: 0,
@@ -148,7 +174,7 @@ export class SimRunner implements CmdHost {
       s, terrain: this.terrain, weather: this.weather,
       flowInf, flowVeh,
       events: this.events, rand: forkRand(seed, 'combat'),
-      mods, flowDirty: true, night: false,
+      mods, modsGerman, flowDirty: true, night: false,
       fpsInvincible: false,
       fpsFeedback: [],
     }
@@ -182,8 +208,9 @@ export class SimRunner implements CmdHost {
 
     rebuildFlow(this.ctx)
 
+    this.aiSide = opts.aiSide ?? 'german'
     this.ai = mode === 'bigpush' && opts.aiPersona !== null
-      ? new AiCommander(opts.aiPersona ?? 'methodical', forkRand(seed, 'ai'))
+      ? new AiCommander(opts.aiPersona ?? 'methodical', forkRand(seed, 'ai'), this.aiSide)
       : null
   }
 
@@ -266,7 +293,7 @@ export class SimRunner implements CmdHost {
     // client that runs the same seed, so lockstep peers never disagree on it.
     if (this.ai && s.outcome === 'ongoing' && s.phase !== 'debrief') {
       const cmds = this.ai.think(ctx)
-      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: 'german', seq: this.aiSeq++, cmds, ai: this.aiAdopted ? undefined : true })
+      if (cmds.length > 0) this.enqueue({ tick: s.tick, side: this.aiSide, seq: this.aiSeq++, cmds, ai: this.aiAdopted ? undefined : true })
     }
 
     // Commands apply only at the tick boundary — before anything moves.
@@ -285,16 +312,9 @@ export class SimRunner implements CmdHost {
       this.terrain.setWetness(this.weather.state.wetness)
     }
 
-    // Orders tick.
-    const o = s.orders
-    o.coverT = Math.max(0, o.coverT - dt)
-    o.rapidT = Math.max(0, o.rapidT - dt)
-    o.bayonetT = Math.max(0, o.bayonetT - dt)
-    // for-in over the fixed key set — no per-tick Object.keys array.
-    for (const k in o.cooldowns) {
-      const key = k as keyof typeof o.cooldowns
-      o.cooldowns[key] = Math.max(0, o.cooldowns[key] - dt)
-    }
+    // Orders tick — each commander's own durations and cooldowns.
+    tickOrders(s.orders, dt)
+    if (s.mode === 'bigpush') tickOrders(s.germanOrders, dt)
 
     if (s.mode === 'bigpush') {
       this.tickBigPush(dt)
@@ -347,13 +367,15 @@ export class SimRunner implements CmdHost {
   private updateAdvance(): void {
     const s = this.ctx.s
     let brit: number = WORLD.frontTrenchZ
+    let ger: number = -WORLD.frontTrenchZ
     for (const u of s.units) {
       if (u.disbanded) continue
       for (const c of u.crew) {
-        if (c.hp > 0 && c.pos.z < brit) brit = c.pos.z
+        if (c.hp <= 0) continue
+        if (u.side === 'brit') { if (c.pos.z < brit) brit = c.pos.z }
+        else if (c.pos.z > ger) ger = c.pos.z
       }
     }
-    let ger: number = -WORLD.frontTrenchZ
     for (const e of s.enemies) {
       if (e.hp > 0 && e.pos.z > ger) ger = e.pos.z
     }
@@ -370,7 +392,7 @@ export class SimRunner implements CmdHost {
     const s = ctx.s
     s.phase = 'debrief'
     s.barrages.length = 0
-    s.creeping = null
+    s.creepings.length = 0
     noteWireDensity(ctx)
     const plan = planWave(ctx, s.wave, s.difficulty, this.waveRand)
     plan.name = waveName(s.wave, plan.name || 'probe', this.waveRand)
@@ -486,9 +508,13 @@ export class SimRunner implements CmdHost {
     britMul += britCaps * BIGPUSH.capturedSectionBonus
     gerMul += gerCaps * BIGPUSH.capturedSectionBonus
     const oldReq = Math.floor(s.req)
+    const oldGerReq = Math.floor(s.germanReq)
     s.req += BIGPUSH.dripPerSecond * britMul * dt
     s.germanReq += BIGPUSH.dripPerSecond * gerMul * dt
-    if (Math.floor(s.req) !== oldReq) ctx.events.emit('reqChanged', { req: Math.floor(s.req) })
+    if (Math.floor(s.req) !== oldReq) ctx.events.emit('reqChanged', { req: Math.floor(s.req), side: 'brit' })
+    if (Math.floor(s.germanReq) !== oldGerReq) {
+      ctx.events.emit('reqChanged', { req: Math.floor(s.germanReq), side: 'german' })
+    }
 
     // Strength break ends it outright.
     if (s.strength.brit <= 0 || s.strength.german <= 0) {
@@ -527,7 +553,9 @@ export class SimRunner implements CmdHost {
     for (const u of s.units) {
       if (u.disbanded) continue
       for (const c of u.crew) {
-        if (c.hp > 0 && Math.abs(c.pos.z) < BIGPUSH.laneHalfWidth) brit++
+        if (c.hp <= 0 || Math.abs(c.pos.z) >= BIGPUSH.laneHalfWidth) continue
+        if (u.side === 'brit') brit++
+        else german++
       }
     }
     for (const e of s.enemies) {
@@ -565,10 +593,11 @@ export class SimRunner implements CmdHost {
    * envelopes ARE logged — a rejoiner cannot re-derive a takeover that
    * started at an arbitrary tick.
    */
-  adoptAi(persona: AiPersona): void {
+  adoptAi(persona: AiPersona, side: Team = 'german'): void {
     if (this.ai) return
     this.aiAdopted = true
-    this.ai = new AiCommander(persona, forkRand((this.ctx.s.seed ^ this.ctx.s.tick) >>> 0, 'ai-takeover'))
+    this.aiSide = side
+    this.ai = new AiCommander(persona, forkRand((this.ctx.s.seed ^ this.ctx.s.tick) >>> 0, 'ai-takeover'), side)
   }
 
   /** The absent human returned: the takeover AI stands down. */
@@ -586,10 +615,15 @@ export class SimRunner implements CmdHost {
    * the render layer holds references to them.
    */
   adoptState(fresh: SimRunner): void {
-    const ctx = this.ctx as { s: typeof fresh.ctx.s; rand: typeof fresh.ctx.rand; mods: typeof fresh.ctx.mods; flowInf: typeof fresh.ctx.flowInf; flowVeh: typeof fresh.ctx.flowVeh; flowDirty: boolean }
+    const ctx = this.ctx as {
+      s: typeof fresh.ctx.s; rand: typeof fresh.ctx.rand
+      mods: typeof fresh.ctx.mods; modsGerman: typeof fresh.ctx.modsGerman
+      flowInf: typeof fresh.ctx.flowInf; flowVeh: typeof fresh.ctx.flowVeh; flowDirty: boolean
+    }
     ctx.s = fresh.ctx.s
     ctx.rand = fresh.ctx.rand
     ctx.mods = fresh.ctx.mods
+    ctx.modsGerman = fresh.ctx.modsGerman
     ctx.flowInf = fresh.ctx.flowInf
     ctx.flowVeh = fresh.ctx.flowVeh
     // Verbatim, NOT forced true: the rebuild cadence is part of the sim

@@ -5,7 +5,7 @@
  */
 import type { GasCloud, Soldier, Team } from '../core/types'
 import { COMBAT } from '../core/config'
-import { snd, type Ctx } from './sim'
+import { modsOf, opposing, snd, type Ctx } from './sim'
 import { killSoldier } from './combat'
 
 export function createGasCloud(ctx: Ctx, x: number, z: number, team: Team): void {
@@ -38,14 +38,20 @@ export function updateGas(ctx: Ctx, dt: number): void {
     }
     if (maxC > 0.06) s.clouds[writeIdx++] = cloud
 
-    // Gas alarm: an enemy cloud drifting onto the position.
-    if (cloud.team === 'german' && s.gasAlarmCooldown <= 0) {
+    // Gas alarm: a hostile cloud drifting onto a position. Each side's gongs
+    // sound over its own parapet — 45m behind the front line, in its frame.
+    if (s.gasAlarmCooldown <= 0) {
+      const threatened: Team = cloud.team === 'german' ? 'brit' : 'german'
+      const sign = threatened === 'brit' ? 1 : -1
       for (const b of cloud.blobs) {
-        if (b.z > 45 && b.c > 0.2) {
+        if (b.z * sign > 45 && b.c > 0.2) {
           s.gasAlarmCooldown = 25
-          snd(s, { name: 'gas_gong', x: 0, y: 2, z: 90, gain: 1 })
-          ctx.events.emit('gasAlarm', { incoming: true })
-          if (ctx.mods.autoMasks) s.masksOn = true
+          snd(s, { name: 'gas_gong', x: 0, y: 2, z: 90 * sign, gain: 1 })
+          ctx.events.emit('gasAlarm', { incoming: true, side: threatened })
+          if (modsOf(ctx, threatened).autoMasks) {
+            if (threatened === 'brit') s.masksOn = true
+            else s.germanMasksOn = true
+          }
           break
         }
       }
@@ -67,24 +73,27 @@ function gasTick(ctx: Ctx, sol: Soldier, dt: number): void {
   const concGer = concentrationAt(ctx, sol.pos.x, sol.pos.z, 'german')
   const conc = concBrit + concGer
   if (conc <= 0.02) return
-  let mult: number
-  if (sol.team === 'brit') {
-    mult = sol.masked ? ctx.mods.gasResistMasked : 1
-  } else {
-    mult = sol.masked ? 0.15 : 1
-  }
+  // A respirator is only as good as the side's own stores. Loose enemy
+  // soldiers in classic mode wear their issue pattern at a fixed 0.15.
+  const inUnit = ctx.s.units.some((u) => !u.disbanded && u.crew.includes(sol))
+  const masked = inUnit ? modsOf(ctx, sol.team).gasResistMasked : 0.15
+  const mult = sol.masked ? masked : 1
   const dmg = conc * COMBAT.gasDps * mult * dt
   sol.gasExposure = Math.min(3, sol.gasExposure + conc * dt * 2)
   sol.morale = Math.max(0, sol.morale - conc * dt * (sol.masked ? 0.01 : 0.06))
   sol.hp -= dmg
   if (sol.hp <= 0) {
-    // Only the player's own gas earns bounty/ledger credit; a German gassed
-    // by his own drifting barrage is the Kaiser's problem, not your kill.
-    const playerGas = sol.team === 'german' && concBrit >= concGer
-    if (playerGas) {
-      killSoldier(ctx, sol, 'brit', -1)
-      const d = ctx.s.director.dmgByCategory
-      d.gas = (d.gas ?? 0) + 40
+    // Only the ENEMY's gas earns him credit; a man choked by his own side's
+    // drifting barrage is his own commander's loss, not the other's kill.
+    const foe = opposing(sol.team)
+    const foeConc = foe === 'brit' ? concBrit : concGer
+    const ownConc = foe === 'brit' ? concGer : concBrit
+    if (foeConc >= ownConc) {
+      killSoldier(ctx, sol, foe, -1)
+      if (sol.team === 'german') {
+        const d = ctx.s.director.dmgByCategory
+        d.gas = (d.gas ?? 0) + 40
+      }
     } else {
       // Die without crediting the opposing ledger.
       killSoldier(ctx, sol, sol.team, -1)

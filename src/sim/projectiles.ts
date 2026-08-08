@@ -5,7 +5,7 @@
  */
 import type { Projectile, ProjectileKind, Soldier, Team, Unit, Vec3 } from '../core/types'
 import { WORLD } from '../core/config'
-import { fx, snd, type Ctx } from './sim'
+import { fx, modsOf, snd, type Ctx } from './sim'
 import { explode } from './combat'
 import { G, terrainNormal } from './ballistics'
 import type { Target } from './soldiers'
@@ -54,14 +54,14 @@ export function spawnGrenade(ctx: Ctx, thrower: Soldier, tx: number, tz: number,
 
 export function spawnMortarBomb(ctx: Ctx, u: Unit, target: Target, damage: number, aoe: number, unitId: number): void {
   const tp = target.ref.pos
-  const scatter = (4 + ctx.rand() * 6) * ctx.mods.indirectScatter
+  const scatter = (4 + ctx.rand() * 6) * modsOf(ctx, u.side).indirectScatter
   const ang = ctx.rand() * Math.PI * 2
   const tx = tp.x + Math.cos(ang) * scatter
   const tz = tp.z + Math.sin(ang) * scatter
   const d = Math.hypot(tx - u.pos.x, tz - u.pos.z)
   const T = 2.4 + d * 0.012
   const y = ctx.terrain.heightAt(u.pos.x, u.pos.z) + 0.8
-  lob(ctx, 'mortarbomb', 'brit', u.pos.x, u.pos.z, y, tx, tz, T, aoe, damage, unitId)
+  lob(ctx, 'mortarbomb', u.side, u.pos.x, u.pos.z, y, tx, tz, T, aoe, damage, unitId)
   snd(ctx.s, { name: 'mortar_launch', x: u.pos.x, y, z: u.pos.z })
   snd(ctx.s, { name: 'shell_whistle', x: tx, y: 30, z: tz, dur: T * 0.85, gain: 0.5 })
   fx(ctx.s, { t: 'smokepuff', x: u.pos.x, y: y + 0.6, z: u.pos.z, size: 1.2 })
@@ -70,13 +70,15 @@ export function spawnMortarBomb(ctx: Ctx, u: Unit, target: Target, damage: numbe
 export function spawnShell(ctx: Ctx, u: Unit, target: Target, damage: number, aoe: number, unitId: number): void {
   const tp = target.ref.pos
   const lead = target.kind === 'vehicle' ? 1.5 : 0.5
-  const scatter = 2.5 * ctx.mods.indirectScatter
+  const scatter = 2.5 * modsOf(ctx, u.side).indirectScatter
   const tx = tp.x + (ctx.rand() - 0.5) * scatter
-  const tz = tp.z + (ctx.rand() - 0.5) * scatter + lead // enemies advance toward +z
+  // Lead the target along its axis of advance — which is +z for the men
+  // coming at the British gun and -z for those coming at the German one.
+  const tz = tp.z + (ctx.rand() - 0.5) * scatter + lead * (u.side === 'brit' ? 1 : -1)
   const d = Math.hypot(tx - u.pos.x, tz - u.pos.z)
   const T = Math.max(0.5, d / 160) // flat, fast
   const y = ctx.terrain.heightAt(u.pos.x, u.pos.z) + 1.1
-  lob(ctx, 'shell', 'brit', u.pos.x, u.pos.z, y, tx, tz, T, aoe, damage, unitId)
+  lob(ctx, 'shell', u.side, u.pos.x, u.pos.z, y, tx, tz, T, aoe, damage, unitId)
 }
 
 /**
@@ -86,11 +88,11 @@ export function spawnShell(ctx: Ctx, u: Unit, target: Target, damage: number, ao
  */
 export function spawnMortarBombAt(
   ctx: Ctx, fromX: number, fromZ: number, fromY: number,
-  tx: number, tz: number, damage: number, aoe: number, unitId: number,
+  tx: number, tz: number, damage: number, aoe: number, unitId: number, team: Team = 'brit',
 ): void {
   const d = Math.hypot(tx - fromX, tz - fromZ)
   const T = 2.4 + d * 0.012
-  lob(ctx, 'mortarbomb', 'brit', fromX, fromZ, fromY, tx, tz, T, aoe, damage, unitId)
+  lob(ctx, 'mortarbomb', team, fromX, fromZ, fromY, tx, tz, T, aoe, damage, unitId)
   snd(ctx.s, { name: 'mortar_launch', x: fromX, y: fromY, z: fromZ })
   snd(ctx.s, { name: 'shell_whistle', x: tx, y: 30, z: tz, dur: T * 0.85, gain: 0.5 })
   fx(ctx.s, { t: 'smokepuff', x: fromX, y: fromY + 0.6, z: fromZ, size: 1.2 })
@@ -105,10 +107,10 @@ export function spawnMortarBombAt(
 export function spawnDirectShell(
   ctx: Ctx, fromX: number, fromY: number, fromZ: number,
   dirX: number, dirY: number, dirZ: number, speed: number,
-  damage: number, aoe: number, unitId: number,
+  damage: number, aoe: number, unitId: number, team: Team = 'brit',
 ): void {
   push(ctx, {
-    kind: 'shell', team: 'brit',
+    kind: 'shell', team,
     pos: { x: fromX, y: fromY, z: fromZ },
     vel: { x: dirX * speed, y: dirY * speed, z: dirZ * speed },
     radius: aoe, damage, timer: 0, sourceUnitId: unitId,
@@ -123,11 +125,13 @@ export function spawnTankShell(ctx: Ctx, team: Team, fromX: number, fromZ: numbe
   snd(ctx.s, { name: 'fieldgun', x: fromX, y, z: fromZ, gain: 0.8, rate: 1.15 })
 }
 
-export function spawnGasShell(ctx: Ctx, fromX: number, fromZ: number, tx: number, tz: number): void {
+export function spawnGasShell(
+  ctx: Ctx, fromX: number, fromZ: number, tx: number, tz: number, team: Team = 'brit',
+): void {
   const d = Math.hypot(tx - fromX, tz - fromZ)
   const T = 2.6 + d * 0.012
   const y = ctx.terrain.heightAt(fromX, fromZ) + 0.5
-  lob(ctx, 'gasshell', 'brit', fromX, fromZ, y, tx, tz, T, 0, 0, -1)
+  lob(ctx, 'gasshell', team, fromX, fromZ, y, tx, tz, T, 0, 0, -1)
   snd(ctx.s, { name: 'mortar_launch', x: fromX, y, z: fromZ, rate: 0.8, gain: 0.7 })
 }
 
@@ -149,10 +153,10 @@ export function spawnBarrageShell(ctx: Ctx, team: Team, tx: number, tz: number, 
   snd(ctx.s, { name: 'shell_whistle', x: tx, y: ty + 40, z: tz, dur: T, gain: 0.9 })
 }
 
-export function spawnFlare(ctx: Ctx, x: number, z: number): void {
+export function spawnFlare(ctx: Ctx, x: number, z: number, team: Team = 'brit'): void {
   const y = ctx.terrain.heightAt(x, z)
   push(ctx, {
-    kind: 'flare', team: 'brit',
+    kind: 'flare', team,
     pos: { x, y: y + 1, z },
     vel: { x: (ctx.rand() - 0.5) * 3, y: 42, z: (ctx.rand() - 0.5) * 3 },
     radius: 0, damage: 0,

@@ -507,14 +507,30 @@ export async function runLockstepProbe(opts: { seed?: string; simSeconds?: numbe
     const cmds = britBot.think(sa)
     if (cmds.length > 0) a.submit(cmds)
 
-    // German human (scripted) on B — until we murder his browser.
+    // German human (scripted) on B — until we murder his browser. He plays the
+    // SAME command surface the British human does: buy a man onto his own fire
+    // step, and once he has a frontage, send it over the top. That is the whole
+    // point of the symmetric-sides work, so the probe has to exercise it.
     if (!killed && b.runner.ctx.s.time >= germanNext) {
       germanNext += 12
       const sb = b.runner.ctx.s
       const held = sb.sections.filter((c) => c.home === 'german' && c.line === 'front' && c.owner === 'german')
       if (held.length > 0 && sb.germanReq >= 120) {
-        const sec = held[Math.floor(sb.time / 12) % held.length]
-        b.submit([{ t: 'spawnsquad', kinds: ['einf', 'einf', 'einf'], x: sec.mid.x, role: 'garrison', targetSection: sec.id }])
+        const step = Math.floor(sb.time / 12)
+        const sec = held[step % held.length]
+        // Walk along the bay so successive posts clear the spacing rule.
+        const f = 0.2 + ((step * 7) % 5) * 0.15
+        b.submit([{
+          t: 'buy', kind: step % 4 === 3 ? 'lewis' : 'rifleman',
+          x: sec.a.x + (sec.b.x - sec.a.x) * f,
+          z: sec.a.z + (sec.b.z - sec.a.z) * f,
+        }])
+        if (step % 5 === 4) {
+          const enemy = sb.sections.filter((c) => c.line === 'front' && c.home === 'brit' && c.owner === 'brit')
+          if (enemy.length > 0) {
+            b.submit([{ t: 'assault', sections: [sec.id], targetSection: enemy[step % enemy.length].id }])
+          }
+        }
       }
     }
 
