@@ -16,8 +16,10 @@ import {
   UPGRADE_TIER_WAVE, WIRE_SEGMENT_LEN, WORLD,
 } from '../core/config'
 import { forkRand } from '../core/rng'
-import { makeSoldierName } from '../core/flavor'
-import { dist2, type Ctx, type SimState } from './sim'
+import { makeGermanSoldierName, makeSoldierName } from '../core/flavor'
+import {
+  addReq, dist2, modsOf, opposing, ordersOf, reqOf, upgradesOf, type Ctx, type SimState,
+} from './sim'
 // Layering note: the weapon profiles (and the sim half of a discharge) live
 // with the viewmodels in game/weapons.ts. Importing them here pulls no cycle —
 // weapons.ts only imports sim leaf modules — and keeps the ballistic numbers
@@ -106,9 +108,9 @@ export interface CmdHost {
 // the UI (advisory, for the placement ghost / button states).
 // ---------------------------------------------------------------------------
 
-export function costOf(ctx: Ctx, id: BuildableId): number {
+export function costOf(ctx: Ctx, id: BuildableId, side: Team = 'brit'): number {
   const base = (UNIT_DEFS as Record<string, { cost: number }>)[id]?.cost ?? DEFENCE_DEFS[id as DefenceKindId].cost
-  return Math.round(base * ctx.mods.costMult)
+  return Math.round(base * modsOf(ctx, side).costMult)
 }
 
 export function isUnitKind(id: BuildableId): id is UnitKindId {
@@ -126,10 +128,16 @@ export function unitClearance(s: SimState, x: number, z: number): number {
   return Math.sqrt(best)
 }
 
-/** Open ground behind the front line, off the trenches, clear of other units. */
-export function padSpotValid(ctx: Ctx, x: number, z: number): boolean {
+/**
+ * Open ground behind YOUR front line, off the trenches, clear of other units.
+ * `side` flips the depth band through z = 0: the German commander's back area
+ * is the north half of the map, and his gun pads sit in it.
+ */
+export function padSpotValid(ctx: Ctx, x: number, z: number, side: Team = 'brit'): boolean {
   if (Math.abs(x) > WORLD.width / 2 - 6) return false
-  if (z < WORLD.frontTrenchZ + PLACEMENT.padMarginZ || z > WORLD.depth / 2 - 10) return false
+  const sign = side === 'brit' ? 1 : -1
+  const behind = z * sign
+  if (behind < WORLD.frontTrenchZ + PLACEMENT.padMarginZ || behind > WORLD.depth / 2 - 10) return false
   if (unitClearance(ctx.s, x, z) < PLACEMENT.padSpacing) return false
   // The whole pad must be open ground — the dig skips trench cells, so a
   // gun straddling a corridor would hang over the void.
@@ -148,57 +156,68 @@ export function fieldBuildAllowed(s: SimState): boolean {
 
 /**
  * Resolve a requested placement to a snapped position, or null when invalid.
- * This is the single validity rule for both the ghost and the applied command.
+ * This is the single validity rule for both the ghost and the applied command,
+ * for BOTH commanders: every z test is taken in the placing side's own frame
+ * (`z * sign`), so the German rules are the British rules seen from the north.
  */
-export function resolvePlacement(ctx: Ctx, id: BuildableId, x: number, z: number): { x: number; z: number } | null {
+export function resolvePlacement(
+  ctx: Ctx, id: BuildableId, x: number, z: number, side: Team = 'brit',
+): { x: number; z: number } | null {
   const s = ctx.s
   const placement = isUnitKind(id) ? UNIT_DEFS[id].placement : DEFENCE_DEFS[id as DefenceKindId].placement
+  const sign = side === 'brit' ? 1 : -1
 
   if (id === 'sandbags') {
     const sec = sectionAt(s.sections, x, z)
-    if (!sec || sec.owner !== 'brit' || sec.home !== 'brit') return null
+    if (!sec || sec.owner !== side || sec.home !== side) return null
     const gx = sec.mid.x, gz = sec.mid.z
     if (s.defences.some((d) => d.kind === 'sandbags' && Math.hypot(d.pos.x - gx, d.pos.z - gz) < 3)) return null
     return { x: gx, z: gz }
   }
   if (placement === 'trench') {
-    const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist)
+    const post = projectToFireStep(s.sections, x, z, PLACEMENT.trenchSnapDist, side)
     if (!post) return null
     if (unitClearance(s, post.x, post.z) < PLACEMENT.trenchSpacing) return null
     return { x: post.x, z: post.z }
   }
   if (placement === 'pad') {
-    return padSpotValid(ctx, x, z) ? { x, z } : null
+    return padSpotValid(ctx, x, z, side) ? { x, z } : null
   }
-  // Field placement: forward of the front line, not in a trench, build phase only.
+  // Field placement: forward of your own front line, not in a trench, and not
+  // while the assault is running.
+  const forward = z * sign
   const zMin = id === 'flarepost' ? 20 : -60
   const zMax = WORLD.frontTrenchZ - 5
   const ok = fieldBuildAllowed(s) &&
-    z > zMin && z < zMax &&
+    forward > zMin && forward < zMax &&
     Math.abs(x) < WORLD.width / 2 - 6 &&
     ctx.terrain.trenchAt(x, z) < 0.25
   return ok ? { x, z } : null
 }
 
-export function orderReady(s: SimState, id: OrderId): boolean {
+export function orderReady(s: SimState, id: OrderId, side: Team = 'brit'): boolean {
   const def = ORDER_DEFS[id]
-  if (def.needsUpgrade && !s.upgrades.has(def.needsUpgrade)) return false
+  if (def.needsUpgrade && !upgradesOf(s, side).has(def.needsUpgrade)) return false
   if (id === 'masks') return true
-  const cd = s.orders.cooldowns[id as keyof typeof s.orders.cooldowns]
-  return cd <= 0 && s.req >= def.cost
+  const orders = ordersOf(s, side)
+  const cd = orders.cooldowns[id as keyof typeof orders.cooldowns]
+  return cd <= 0 && reqOf(s, side) >= def.cost
 }
 
-export function upgradeAvailable(s: SimState, id: string): 'owned' | 'locked' | 'unaffordable' | 'buyable' {
+export function upgradeAvailable(
+  s: SimState, id: string, side: Team = 'brit',
+): 'owned' | 'locked' | 'unaffordable' | 'buyable' {
   const def = UPGRADE_DEFS.find((u) => u.id === id)
   if (!def) return 'locked'
-  if (s.upgrades.has(id)) return 'owned'
+  const owned = upgradesOf(s, side)
+  if (owned.has(id)) return 'owned'
   // Big Push has no wave counter to unlock against — it is one continuous
   // battle at wave 1 forever, which quietly locked the whole tier-2/3 shelf
   // out of the mode, the creeping barrage among it. There, requisition is the
   // gate: you buy doctrine with the same drip that buys men.
   if (s.mode !== 'bigpush' && s.wave < UPGRADE_TIER_WAVE[def.tier]) return 'locked'
-  if (def.requires && !s.upgrades.has(def.requires)) return 'locked'
-  if (s.req < def.cost) return 'unaffordable'
+  if (def.requires && !owned.has(def.requires)) return 'locked'
+  if (reqOf(s, side) < def.cost) return 'unaffordable'
   return 'buyable'
 }
 
@@ -257,40 +276,45 @@ export function marchPathLength(path: { x: number; z: number }[]): number {
 
 export function createUnit(
   ctx: Ctx, kind: UnitKindId, x: number, z: number, announce: boolean,
-  opts?: { marchIn?: boolean },
+  opts?: { marchIn?: boolean; side?: Team },
 ): Unit {
   const s = ctx.s
   const def = UNIT_DEFS[kind]
+  const side = opts?.side ?? 'brit'
   const u: Unit = {
-    id: s.nextId++, kind, pos: { x, z },
+    id: s.nextId++, kind, side, pos: { x, z },
     crew: [], heat: 0, venting: false, ammo: kind === 'lewis' ? 6 : -1,
     xp: 0, vet: 0, deeds: 0, wavesServed: 0,
     targeting: def.targeting, fallenBack: false, disbanded: false,
     march: null,
     assaultGroupId: null, assaultElement: 0, coverSectionId: null, coverT: 0,
   }
-  const hpMult = def.placement === 'pad' ? ctx.mods.emplacementHp : 1
+  const hpMult = def.placement === 'pad' ? modsOf(ctx, side).emplacementHp : 1
 
   // Big Push: men ARRIVE, they do not appear. The crew spawns in single file
-  // at the rear edge and walks the communication trench up to its post.
-  const march = opts?.marchIn ? buildMarchPath(ctx, 'brit', { x, z }) : null
+  // at their OWN rear edge and walks their own communication trench up.
+  const march = opts?.marchIn ? buildMarchPath(ctx, side, { x, z }) : null
+  // Facing on arrival: down the boyau while marching, otherwise over the
+  // parapet — which is -z for the British and +z for the Germans.
+  const restFacing = side === 'brit' ? 0 : Math.PI
+  const marchFacing = side === 'brit' ? Math.PI : 0
 
   for (let i = 0; i < def.crew; i++) {
     const spawn = march
-      ? { x: march[0].x + (ctx.rand() - 0.5) * 0.6, z: march[0].z + i * 1.7 }
+      ? { x: march[0].x + (ctx.rand() - 0.5) * 0.6, z: march[0].z + (side === 'brit' ? i * 1.7 : -i * 1.7) }
       : { x: x + (i % 2) * 1.1 - 0.5, z: z + Math.floor(i / 2) }
     u.crew.push({
-      id: s.nextId++, team: 'brit',
+      id: s.nextId++, team: side,
       pos: spawn,
-      facing: march ? Math.PI : 0, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
+      facing: march ? marchFacing : restFacing, hp: def.hp * hpMult, maxHp: def.hp * hpMult,
       stance: 'stand', suppression: 0, morale: 1, masked: s.masksOn, gasExposure: 0,
       animPhase: ctx.rand() * 10, cooldown: ctx.rand(),
-      name: makeSoldierName(ctx.rand), kills: 0,
+      name: side === 'brit' ? makeSoldierName(ctx.rand) : makeGermanSoldierName(ctx.rand), kills: 0,
     })
   }
   if (march) u.march = { path: march, idx: u.crew.map(() => 0) }
   s.units.push(u)
-  if (announce) ctx.events.emit('unitPlaced', { unitId: u.id })
+  if (announce) ctx.events.emit('unitPlaced', { unitId: u.id, side })
   return u
 }
 
@@ -305,8 +329,9 @@ export function createDefence(ctx: Ctx, kind: DefenceKindId, x: number, z: numbe
   if (kind === 'sandbags') {
     const sec = sectionAt(s.sections, x, z)
     if (sec) {
-      sec.parapetMax += 80 * ctx.mods.parapetMult
-      sec.parapetHp += 80 * ctx.mods.parapetMult
+      const mult = modsOf(ctx, side).parapetMult
+      sec.parapetMax += 80 * mult
+      sec.parapetHp += 80 * mult
     }
   }
 }
@@ -384,20 +409,24 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
   // an endless continue (unit never fires, soldier never posed).
   if (s.outcome !== 'ongoing' && cmd.t !== 'continueendless' && cmd.t !== 'release') return
 
-  // The classic command surface belongs to the BRITISH commander (v1: the
-  // host side). A german envelope carrying these is dropped identically on
-  // every client.
-  const britOnly = cmd.t === 'buy' || cmd.t === 'sell' || cmd.t === 'order' || cmd.t === 'upgrade' ||
-    cmd.t === 'targeting' || cmd.t === 'callwave' || cmd.t === 'beginwave' || cmd.t === 'continueendless' ||
-    cmd.t === 'possess' || cmd.t === 'release' ||
-    cmd.t === 'fpspose' || cmd.t === 'fpsfire' || cmd.t === 'fpstool'
-  if (britOnly && side !== 'brit') return
+  // The command surface is the SAME for both commanders: buy, sell, order,
+  // upgrade, re-target, go over the top. What separates them is whose purse
+  // pays and whose men move, and every case below reads `side` for that.
+  //
+  // What stays British is the classic wave-defence lifecycle only — there is
+  // one wave clock and it belongs to the defender. In the Big Push nobody
+  // sends these; they are dropped identically on every client.
+  const waveLifecycle = cmd.t === 'callwave' || cmd.t === 'beginwave' || cmd.t === 'continueendless'
+  if (waveLifecycle && side !== 'brit') return
+  // Classic mode has exactly one commander. A German envelope there could
+  // only come from a confused AI or a hostile peer — drop the lot.
+  if (s.mode !== 'bigpush' && side !== 'brit' && cmd.t !== 'spawnsquad' && cmd.t !== 'gbarrage') return
 
   switch (cmd.t) {
     case 'buy': {
-      const cost = costOf(ctx, cmd.kind)
-      if (s.req < cost) return
-      const spot = resolvePlacement(ctx, cmd.kind, cmd.x, cmd.z)
+      const cost = costOf(ctx, cmd.kind, side)
+      if (reqOf(s, side) < cost) return
+      const spot = resolvePlacement(ctx, cmd.kind, cmd.x, cmd.z, side)
       if (!spot) return
       if (isUnitKind(cmd.kind)) {
         // An emplacement crew digs in: level a pad under the gun first so it
@@ -405,89 +434,97 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
         if (UNIT_DEFS[cmd.kind].placement === 'pad') {
           ctx.terrain.digPad(spot.x, spot.z, PLACEMENT.padRadius)
         }
-        createUnit(ctx, cmd.kind, spot.x, spot.z, true, { marchIn: s.mode === 'bigpush' })
+        createUnit(ctx, cmd.kind, spot.x, spot.z, true, { marchIn: s.mode === 'bigpush', side })
       } else {
-        createDefence(ctx, cmd.kind as DefenceKindId, spot.x, spot.z, cmd.angle ?? 0)
+        createDefence(ctx, cmd.kind as DefenceKindId, spot.x, spot.z, cmd.angle ?? 0, side)
       }
-      s.req -= cost
-      ctx.events.emit('reqChanged', { req: s.req })
+      addReq(ctx, side, -cost)
       ctx.flowDirty = true
       break
     }
 
     case 'sell': {
       const u = s.units.find((x) => x.id === cmd.unitId && !x.disbanded)
-      if (!u) return
+      // You may only strike your OWN position off the strength.
+      if (!u || u.side !== side) return
       u.disbanded = true
-      s.req += Math.round(costOf(ctx, u.kind) * ECONOMY.sellRefund)
-      ctx.events.emit('reqChanged', { req: s.req })
+      addReq(ctx, side, Math.round(costOf(ctx, u.kind, side) * ECONOMY.sellRefund))
       break
     }
 
     case 'targeting': {
       const u = s.units.find((x) => x.id === cmd.unitId)
-      if (u) u.targeting = cmd.p
+      if (u && u.side === side) u.targeting = cmd.p
       break
     }
 
     case 'order': {
-      if (!orderReady(s, cmd.id)) return
+      if (!orderReady(s, cmd.id, side)) return
       const def = ORDER_DEFS[cmd.id]
-      s.req -= def.cost
+      const orders = ordersOf(s, side)
+      addReq(ctx, side, -def.cost)
       switch (cmd.id) {
         case 'takecover':
-          s.orders.coverT = def.duration
-          s.orders.cooldowns.takecover = def.cooldown
+          orders.coverT = def.duration
+          orders.cooldowns.takecover = def.cooldown
           break
         case 'rapidfire':
-          s.orders.rapidT = def.duration
-          s.orders.cooldowns.rapidfire = def.cooldown
+          orders.rapidT = def.duration
+          orders.cooldowns.rapidfire = def.cooldown
           break
         case 'bayonets':
-          s.orders.bayonetT = def.duration
-          s.orders.cooldowns.bayonets = def.cooldown
+          orders.bayonetT = def.duration
+          orders.cooldowns.bayonets = def.cooldown
           break
         case 'masks':
-          s.masksOn = !s.masksOn
+          // Respirators are a per-side order; classic mode keeps the single
+          // British flag it always had.
+          if (side === 'brit') s.masksOn = !s.masksOn
+          else s.germanMasksOn = !s.germanMasksOn
           break
         case 'flare': {
-          s.orders.cooldowns.flare = def.cooldown
+          orders.cooldowns.flare = def.cooldown
           const x = cmd.x ?? 0
-          const z = Math.min(60, Math.max(-40, (cmd.z ?? 0) - 60))
+          // Star shells burst over no-man's-land in front of the firer.
+          const sign = side === 'brit' ? 1 : -1
+          const z = sign * Math.min(60, Math.max(-40, ((cmd.z ?? 0) * sign) - 60))
           spawnFlare(ctx, x, z)
           break
         }
         case 'barrage':
-          s.orders.cooldowns.barrage = def.cooldown
-          startCreepingBarrage(ctx, cmd.x ?? 0)
+          orders.cooldowns.barrage = def.cooldown
+          startCreepingBarrage(ctx, cmd.x ?? 0, side)
           break
         case 'marktank':
-          s.orders.cooldowns.marktank = def.cooldown
-          spawnVehicle(ctx, 'friendlytank', (ctx.rand() - 0.5) * 60, WORLD.supportTrenchZ + 25)
+          orders.cooldowns.marktank = def.cooldown
+          spawnVehicle(ctx, side === 'brit' ? 'friendlytank' : 'etank',
+            (ctx.rand() - 0.5) * 60, (side === 'brit' ? 1 : -1) * (WORLD.supportTrenchZ + 25))
           break
       }
       ctx.events.emit('orderIssued', { id: cmd.id, side })
-      ctx.events.emit('reqChanged', { req: s.req })
       break
     }
 
     case 'upgrade': {
-      if (upgradeAvailable(s, cmd.id) !== 'buyable') return
+      if (upgradeAvailable(s, cmd.id, side) !== 'buyable') return
       const def = UPGRADE_DEFS.find((u) => u.id === cmd.id)
       if (!def) return
-      s.req -= def.cost
-      s.upgrades.add(cmd.id)
-      const oldParapet = ctx.mods.parapetMult
-      ctx.mods.recompute(s.upgrades)
-      if (ctx.mods.parapetMult !== oldParapet) {
-        const scale = ctx.mods.parapetMult / oldParapet
+      addReq(ctx, side, -def.cost)
+      const owned = upgradesOf(s, side)
+      const mods = modsOf(ctx, side)
+      owned.add(cmd.id)
+      const oldParapet = mods.parapetMult
+      mods.recompute(owned)
+      // Deeper revetting thickens YOUR parapets — the sections you hold.
+      if (mods.parapetMult !== oldParapet) {
+        const scale = mods.parapetMult / oldParapet
         for (const sec of s.sections) {
+          if (s.mode === 'bigpush' && sec.owner !== side) continue
           sec.parapetMax *= scale
           sec.parapetHp *= scale
         }
       }
       ctx.events.emit('upgradeBought', { id: cmd.id, side })
-      ctx.events.emit('reqChanged', { req: s.req })
       break
     }
 
@@ -529,7 +566,8 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
     case 'possess': {
       const u = s.units.find((x) => x.id === cmd.unitId && !x.disbanded)
       const c = u?.crew.find((x) => x.id === cmd.soldierId && x.hp > 0)
-      if (!u || !c) return
+      // You take your own men's rifles, never the other fellow's.
+      if (!u || !c || u.side !== side) return
       s.possessedUnitId = u.id
       s.possessedSoldierId = c.id
       break
@@ -579,29 +617,30 @@ export function applyCmd(host: CmdHost, side: Team, cmd: Cmd): void {
       // trail the predictor by a step, so reach gets a little slack on top.
       const secs = Math.min(0.4, Math.max(0, cmd.amount))
       if (secs <= 0) return
+      const mods = modsOf(ctx, p.unit.side)
       const reach2 = (profile.maxRange + 3) ** 2
       if (cmd.tool === 'heal') {
         for (const u of s.units) {
-          if (u.disbanded) continue
+          if (u.disbanded || u.side !== p.unit.side) continue // your own wounded
           const w = u.crew.find((x) => x.id === cmd.targetId)
           if (!w) continue
           // A medic cannot dress his own wounds (parity with the old rule).
           if (w.id === c.id) return
           if (w.hp <= 0 || dist2(w.pos.x, w.pos.z, c.pos.x, c.pos.z) > reach2) return
-          w.hp = Math.min(w.maxHp, w.hp + 14 * ctx.mods.healRate * secs)
+          w.hp = Math.min(w.maxHp, w.hp + 14 * mods.healRate * secs)
           return
         }
       } else if (cmd.tool === 'parapet') {
         // Same rule as the by-hand loop: the sapper shores the section he
-        // stands in, no other.
+        // stands in, no other — and only one his side holds.
         const sec = sectionAt(s.sections, c.pos.x, c.pos.z)
-        if (!sec || sec.id !== cmd.targetId || sec.owner !== 'brit') return
-        sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 18 * ctx.mods.repairRate * secs)
+        if (!sec || sec.id !== cmd.targetId || sec.owner !== p.unit.side) return
+        sec.parapetHp = Math.min(sec.parapetMax, sec.parapetHp + 18 * mods.repairRate * secs)
       } else {
         const w = s.defences.find((x) => x.id === cmd.targetId)
-        if (!w || w.kind !== 'wire' || w.hp <= 0) return
+        if (!w || w.kind !== 'wire' || w.hp <= 0 || w.side !== p.unit.side) return
         if (dist2(w.pos.x, w.pos.z, c.pos.x, c.pos.z) > reach2) return
-        w.hp = Math.min(w.maxHp, w.hp + 14 * ctx.mods.repairRate * secs)
+        w.hp = Math.min(w.maxHp, w.hp + 14 * mods.repairRate * secs)
         w.wear = Math.max(0, w.wear - 0.2 * secs)
       }
       break

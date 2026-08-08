@@ -17,17 +17,23 @@ export interface GameEvents {
   /** Big Push: a push went over the top / lost its nerve and came back. */
   assaultBegan: { groupId: number; side: Team; men: number; targetSectionId: number }
   assaultBroke: { groupId: number; side: Team; men: number }
-  unitPlaced: { unitId: number }
-  unitLost: { unitId: number; kind: string }
-  soldierDied: { name: string; rank: string; kind: string; wave: number; deeds: number; wavesServed: number }
+  unitPlaced: { unitId: number; side: Team }
+  unitLost: { unitId: number; kind: string; side: Team }
+  soldierDied: { name: string; rank: string; kind: string; wave: number; deeds: number; wavesServed: number; side: Team }
   gasAlarm: { incoming: boolean }
   barrageWarning: { x: number; z: number; seconds: number }
   tankSighted: Record<string, never>
   promoted: { unitId: number; vet: number }
   deed: { unitId: number; deed: string; cite: string }
-  reqChanged: { req: number }
+  reqChanged: { req: number; side?: Team }
   gameOver: { victory: boolean; draw?: boolean }
-  toast: { text: string; kind: 'info' | 'warn' | 'danger' | 'good' }
+  /**
+   * A line for the commander's despatch feed. `side` addresses it: both
+   * lockstep peers run the same sim and therefore raise the same events, so
+   * anything written from one commander's chair must say whose chair it is or
+   * the other player reads his opponent's mail. Omitted = for everyone.
+   */
+  toast: { text: string; kind: 'info' | 'warn' | 'danger' | 'good'; side?: Team }
 }
 
 type Handler<T> = (payload: T) => void

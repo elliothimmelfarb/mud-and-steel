@@ -1,5 +1,6 @@
 /**
- * Over the top — the Big Push assault machinery for PLAYER units.
+ * Over the top — the Big Push assault machinery for crewed units, EITHER
+ * side's.
  *
  * This is the enemy's attacking brain (enemies.ts) grafted onto unit crews,
  * recon option (b): no pool unification, just the same soldiering — advance
@@ -7,12 +8,15 @@
  * bound by elements, melee in the trench, occupy, and (with time and hands)
  * consolidate the captured fire step to face the other way.
  *
+ * Nothing here asks which army it is working for beyond `g.side`: the German
+ * commander's push is the British commander's push, mirrored.
+ *
  * All deterministic: randomness only via ctx.rand, applied from commands at
  * tick boundaries. Everything here is hashed sim state.
  */
 import type { AssaultGroup, Soldier, Team, TrenchSection, Unit } from '../core/types'
 import { ASSAULT, BIGPUSH, COMBAT, CREEP, TRENCH, UNIT_DEFS, WIRE_SEGMENT_LEN } from '../core/config'
-import { dist2, fx, snd, type Ctx } from './sim'
+import { dist2, fx, livingSoldiers, opposing, snd, type Ctx } from './sim'
 import { damageSoldier, fireSmallArms } from './combat'
 import { sectionById } from './trench'
 
@@ -55,9 +59,9 @@ export function updateAssaultGroups(ctx: Ctx, dt: number): void {
       if (lost >= ASSAULT.breakLossFraction || moraleSum / men < ASSAULT.breakMorale) {
         g.state = 'broken'
         ctx.events.emit('assaultBroke', { groupId: g.id, side: g.side, men })
-        if (g.side === 'brit') {
-          ctx.events.emit('toast', { text: 'The attack has broken — they are coming back!', kind: 'warn' })
-        }
+        ctx.events.emit('toast', {
+          text: 'The attack has broken — they are coming back!', kind: 'warn', side: g.side,
+        })
       }
     }
 
@@ -78,19 +82,20 @@ export function updateAssaultGroups(ctx: Ctx, dt: number): void {
     if (!sec.consolidating) continue
     const ownerSign: 1 | -1 = sec.owner === 'brit' ? 1 : -1
     if (sec.facing === ownerSign) { sec.consolidating = false; sec.consolidateT = 0; continue }
+    // Hands on the spot do the work — whoever's hands they are, and from
+    // whichever pool they are kept in.
     let hands = 0
     let engineer = false
-    if (sec.owner === 'brit') {
-      for (const u of s.units) {
-        if (u.disbanded || u.march) continue
-        for (const c of u.crew) {
-          if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 9 * 9) {
-            hands++
-            if (u.kind === 'engineer') engineer = true
-          }
+    for (const u of s.units) {
+      if (u.disbanded || u.march || u.side !== sec.owner) continue
+      for (const c of u.crew) {
+        if (c.hp > 0 && dist2(c.pos.x, c.pos.z, sec.mid.x, sec.mid.z) < 9 * 9) {
+          hands++
+          if (u.kind === 'engineer') engineer = true
         }
       }
-    } else {
+    }
+    if (sec.owner === 'german') {
       for (const e of s.enemies) {
         if (e.hp > 0 && e.behavior !== 'rout' && dist2(e.pos.x, e.pos.z, sec.mid.x, sec.mid.z) < 9 * 9) {
           hands++
@@ -107,8 +112,12 @@ export function updateAssaultGroups(ctx: Ctx, dt: number): void {
       sec.parapetHp = Math.max(sec.parapetHp, sec.parapetMax * 0.6)
       carveReversedBench(ctx, sec)
       ctx.events.emit('toast', {
-        text: sec.owner === 'brit' ? 'Section consolidated — the fire step faces THEIR way now.' : 'The enemy have consolidated a captured section.',
-        kind: sec.owner === 'brit' ? 'good' : 'warn',
+        text: 'Section consolidated — the fire step faces THEIR way now.',
+        kind: 'good', side: sec.owner,
+      })
+      ctx.events.emit('toast', {
+        text: 'The enemy have consolidated a captured section.',
+        kind: 'warn', side: opposing(sec.owner),
       })
     }
   }
@@ -138,14 +147,14 @@ function carveReversedBench(ctx: Ctx, sec: TrenchSection): void {
 // Command application helpers (called from commands.ts applyCmd)
 // ---------------------------------------------------------------------------
 
-/** Say why an order came to nothing — silence is the worst possible answer. */
+/** Say why an order came to nothing — silence is the worst possible answer.
+ *  Addressed to the commander who gave it, and to nobody else. */
 function refuse(ctx: Ctx, side: Team, text: string): void {
-  if (side === 'brit') ctx.events.emit('toast', { text, kind: 'warn' })
+  ctx.events.emit('toast', { text, kind: 'warn', side })
 }
 
 export function issueAssault(ctx: Ctx, side: Team, sectionIds: number[], targetSectionId: number): void {
   const s = ctx.s
-  if (side !== 'brit') return // german assaults arrive with the M4 commander
   const target = sectionById(s, targetSectionId)
   if (!target) return
   if (target.owner === side) {
@@ -161,7 +170,7 @@ export function issueAssault(ctx: Ctx, side: Team, sectionIds: number[], targetS
   const reach2 = (TRENCH.sectionLen * 0.75) ** 2
   let blocked = 0
   for (const u of s.units) {
-    if (u.disbanded || u.assaultGroupId !== null) continue
+    if (u.disbanded || u.side !== side || u.assaultGroupId !== null) continue
     let onOrder = false
     for (const id of sectionIds) {
       const sec = sectionById(s, id)
@@ -207,11 +216,10 @@ export function issueRecall(ctx: Ctx, side: Team, groupId: number): void {
 
 export function issueCovering(ctx: Ctx, side: Team, sectionIds: number[], targetSectionId: number): void {
   const s = ctx.s
-  if (side !== 'brit') return
   const target = sectionById(s, targetSectionId)
   if (!target) return
   for (const u of s.units) {
-    if (u.disbanded || u.march || u.assaultGroupId !== null) continue
+    if (u.disbanded || u.side !== side || u.march || u.assaultGroupId !== null) continue
     let best = -1, bestD = 10 * 10
     for (const sec of s.sections) {
       const d = dist2(u.pos.x, u.pos.z, sec.mid.x, sec.mid.z)
@@ -270,12 +278,11 @@ export function assaultTick(ctx: Ctx, u: Unit, dt: number): void {
     // belt with a pair of cutters is exactly the man who should be cutting.
     const wireSlow = wireBite(ctx, u, c, g, dt)
 
-    // Melee: an enemy at arm's reach in or near the objective trench.
-    if (g.side === 'brit' && d < 26) {
-      let foe: import('../core/types').Enemy | null = null
+    // Melee: a man from the other trench at arm's reach on the objective.
+    if (d < 26) {
+      let foe: Soldier | null = null
       let foeD = 10 * 10
-      for (const e of s.enemies) {
-        if (e.hp <= 0 || e.behavior === 'rout') continue
+      for (const e of livingSoldiers(s, opposing(g.side))) {
         const dd = dist2(e.pos.x, e.pos.z, c.pos.x, c.pos.z)
         if (dd < foeD) { foeD = dd; foe = e }
       }
@@ -286,7 +293,7 @@ export function assaultTick(ctx: Ctx, u: Unit, dt: number): void {
         if (fd > 2) {
           step(ctx, c, foe.pos.x, foe.pos.z, ASSAULT.crouchSpeed * wireSlow, dt, false)
         } else {
-          damageSoldier(ctx, foe, COMBAT.meleeDps * dt * 1.4, 'melee', 'brit', u.id)
+          damageSoldier(ctx, foe, COMBAT.meleeDps * dt * 1.4, 'melee', g.side, u.id)
           if (ctx.rand() < dt * 1.2) snd(s, { name: 'melee', x: c.pos.x, y: 1, z: c.pos.z, gain: 0.55 })
         }
         continue
@@ -315,8 +322,9 @@ export function assaultTick(ctx: Ctx, u: Unit, dt: number): void {
     // the way kills them instead. Holding station behind it is the order real
     // assaulting infantry were given, and it makes the barrage an escort the
     // player can rely on rather than a coin flip.
-    const curtain = g.side === 'brit' ? s.creeping : null
-    const leadingBarrage = curtain !== null && c.pos.z - curtain.z < CREEP.safeLag
+    const advanceSign = g.side === 'brit' ? 1 : -1
+    const curtain = s.creepings.find((b) => b.side === g.side) ?? null
+    const leadingBarrage = curtain !== null && (c.pos.z - curtain.z) * advanceSign < CREEP.safeLag
     if (curtain) {
       // The guns are with them. A barrage walking ahead is the one thing that
       // steadies men crossing the open, and mechanically it has to be: without
@@ -423,7 +431,7 @@ function wireBite(ctx: Ctx, u: Unit, c: Soldier, g: AssaultGroup, dt: number): n
     if (dist2(w.pos.x, w.pos.z, c.pos.x, c.pos.z) >= r2) continue
     if (w.side === g.side) { if (slow > ASSAULT.ownWireSlow) slow = ASSAULT.ownWireSlow; continue }
     slow = ASSAULT.wireSlow
-    damageSoldier(ctx, c, ASSAULT.wireBleedDps * dt, 'wire', g.side === 'brit' ? 'german' : 'brit', -1)
+    damageSoldier(ctx, c, ASSAULT.wireBleedDps * dt, 'wire', opposing(g.side), -1)
     c.morale = Math.max(0, c.morale - 0.015 * dt)
     w.hp -= (u.kind === 'engineer' ? ASSAULT.cutDpsEngineer : ASSAULT.cutDps) * dt
     if (w.hp <= 0) {
@@ -461,10 +469,9 @@ function assaultShoot(ctx: Ctx, u: Unit, ci: number): void {
   if (c.cooldown > 0) return
   const def = UNIT_DEFS[u.kind]
   if (def.damage <= 0) return
-  let tgt: import('../core/types').Enemy | null = null
+  let tgt: Soldier | null = null
   let bestD = def.range * def.range
-  for (const e of s.enemies) {
-    if (e.hp <= 0 || e.behavior === 'rout') continue
+  for (const e of livingSoldiers(s, opposing(u.side))) {
     const dd = dist2(e.pos.x, e.pos.z, c.pos.x, c.pos.z)
     if (dd < bestD) { bestD = dd; tgt = e }
   }
@@ -472,7 +479,7 @@ function assaultShoot(ctx: Ctx, u: Unit, ci: number): void {
   c.cooldown = 1 / Math.max(0.12, def.rof)
   c.facing = Math.atan2(tgt.pos.x - c.pos.x, -(tgt.pos.z - c.pos.z))
   fireSmallArms(ctx, {
-    shooter: c, team: 'brit',
+    shooter: c, team: u.side,
     target: { kind: 'soldier', ref: tgt },
     damage: def.damage, accuracy: def.accuracy * 0.8, range: def.range,
     suppress: def.suppress, category: 'rifle',

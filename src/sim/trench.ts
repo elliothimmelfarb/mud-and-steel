@@ -40,20 +40,24 @@ export function buildSections(terrain: Terrain, parapetMult: number): TrenchSect
 }
 
 /**
- * Project a cursor point onto the nearest fighting post: any point along an
- * uncaptured front/support section, pushed onto the fire step carved into the
+ * Project a cursor point onto the nearest fighting post: any point along a
+ * section `side` currently OWNS, pushed onto the fire step carved into the
  * enemy wall — the man plants his feet on that real bench instead of floating
  * over the deep floor. Placement is continuous along the line, not a handful
  * of pre-dug slots. Returns null when the cursor is farther than `maxDist`
  * from every candidate.
+ *
+ * Ownership, not home ground, is the test: a stretch you have taken and
+ * consolidated is a stretch you may garrison, and a stretch you have lost is
+ * one you may not reinforce. That reads identically from either trench.
  */
 export function projectToFireStep(
-  sections: TrenchSection[], x: number, z: number, maxDist: number,
+  sections: TrenchSection[], x: number, z: number, maxDist: number, side: Team = 'brit',
 ): { x: number; z: number; sectionId: number } | null {
   let best: { x: number; z: number; sectionId: number } | null = null
   let bestD = maxDist * maxDist
   for (const sec of sections) {
-    if (sec.captured) continue
+    if (sec.owner !== side) continue
     const abx = sec.b.x - sec.a.x, abz = sec.b.z - sec.a.z
     const len2 = abx * abx + abz * abz
     if (len2 <= 0) continue

@@ -6,6 +6,7 @@
  * All barrage state lives on SimState (s.barrages / s.creeping) — never at
  * module level — so saves, twin sims and lockstep replays all see it.
  */
+import type { Team } from '../core/types'
 import { CREEP, WORLD } from '../core/config'
 import { gauss } from '../core/rng'
 import { snd, type Ctx } from './sim'
@@ -41,20 +42,21 @@ export function updateBarrages(ctx: Ctx, dt: number, elapsed: number): void {
     }
   }
 
-  // Creeping barrage (player-owned).
-  const creeping = s.creeping
-  if (creeping) {
+  // Creeping barrages — one per commander, each walking toward the other.
+  for (let i = s.creepings.length - 1; i >= 0; i--) {
+    const creeping = s.creepings[i]
+    const sign = creeping.side === 'brit' ? 1 : -1
     creeping.t -= dt
-    if (creeping.t <= 0) {
-      creeping.t = CREEP.interval
-      creeping.volleys++
-      for (let i = 0; i < CREEP.shellsPerVolley; i++) {
-        const sx = creeping.x + gauss(ctx.rand, 0, CREEP.frontage / 2)
-        spawnBarrageShell(ctx, 'brit', sx, creeping.z + gauss(ctx.rand, 0, 4), 65, false)
-      }
-      creeping.z -= CREEP.stepMetres
-      if (creeping.z < CREEP.endZ) s.creeping = null
+    if (creeping.t > 0) continue
+    creeping.t = CREEP.interval
+    creeping.volleys++
+    for (let k = 0; k < CREEP.shellsPerVolley; k++) {
+      const sx = creeping.x + gauss(ctx.rand, 0, CREEP.frontage / 2)
+      spawnBarrageShell(ctx, creeping.side, sx, creeping.z + gauss(ctx.rand, 0, 4), 65, false)
     }
+    // "North" is whichever way is away from the firer's own parapet.
+    creeping.z -= CREEP.stepMetres * sign
+    if (creeping.z * sign < CREEP.endZ) s.creepings.splice(i, 1)
   }
 }
 
@@ -66,18 +68,24 @@ export function updateBarrages(ctx: Ctx, dt: number, elapsed: number): void {
  * It is also blind — it cuts your wire and theirs, and it will kill your own
  * men if they get ahead of it.
  */
-export function startCreepingBarrage(ctx: Ctx, centreX: number): void {
+export function startCreepingBarrage(ctx: Ctx, centreX: number, side: Team = 'brit'): void {
+  const s = ctx.s
+  // One curtain per commander; a second call while yours is walking is refused
+  // (the cooldown normally prevents it, but a replayed command must not stack).
+  if (s.creepings.some((c) => c.side === side)) return
+  const sign = side === 'brit' ? 1 : -1
   const x = Math.max(-WORLD.width / 2 + 20, Math.min(WORLD.width / 2 - 20, centreX))
-  ctx.s.creeping = { x, z: CREEP.startZ, t: 0.2, volleys: 0 }
+  s.creepings.push({ side, x, z: CREEP.startZ * sign, t: 0.2, volleys: 0 })
   ctx.events.emit('toast', {
-    text: 'Creeping barrage — walking north at a man\'s pace. Follow it in.', kind: 'info',
+    text: 'Creeping barrage — walking out at a man\'s pace. Follow it in.', kind: 'info', side,
   })
-  snd(ctx.s, { name: 'whistle_attack', x, y: 2, z: 100, gain: 0.8 })
+  snd(s, { name: 'whistle_attack', x, y: 2, z: 100 * sign, gain: 0.8 })
 }
 
-/** Where the curtain stands right now, for the HUD's follow-the-barrage read. */
-export function creepingLineZ(ctx: Ctx): number | null {
-  return ctx.s.creeping ? ctx.s.creeping.z : null
+/** Where a side's curtain stands right now, for the follow-the-barrage read. */
+export function creepingLineZ(ctx: Ctx, side: Team = 'brit'): number | null {
+  const c = ctx.s.creepings.find((b) => b.side === side)
+  return c ? c.z : null
 }
 
 export function barrageIncoming(ctx: Ctx): boolean {
@@ -85,5 +93,5 @@ export function barrageIncoming(ctx: Ctx): boolean {
 }
 
 export function anyBarrageActive(ctx: Ctx): boolean {
-  return ctx.s.barrages.length > 0 || ctx.s.creeping !== null
+  return ctx.s.barrages.length > 0 || ctx.s.creepings.length > 0
 }

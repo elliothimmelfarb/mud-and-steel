@@ -9,7 +9,7 @@
  */
 import type { Enemy, Soldier, Team, Unit, Vehicle } from '../core/types'
 import { BIGPUSH, COMBAT, ENEMY_DEFS, MARKSMAN_KILLS, RANKS, SQUAD, UNIT_DEFS, VET_ACC_BONUS, XP_PER_KILL } from '../core/config'
-import { dist2, fx, snd, type Ctx } from './sim'
+import { addReq, dist2, fx, modsOf, opposing, ordersOf, snd, type Ctx, type SimState } from './sim'
 import { damageParapet, parapetFactor, sectionAt } from './trench'
 import { fireBullet, muzzlePos, standSurface, G } from './ballistics'
 import { awardXp, leadCrew, rallyMult, recordDeed, suppressResistMult } from './veterancy'
@@ -227,55 +227,62 @@ export function killSoldier(ctx: Ctx, target: Soldier, sourceTeam: Team, shooter
     }
   }
 
-  if (target.team === 'german') {
-    // Only deaths the PLAYER caused pay out — Germans lost to their own
-    // barrages and gas are not your kills.
-    if (sourceTeam === 'brit') {
-      const e = target as Enemy
+  // The man who killed him is paid, whichever trench he fired from. Deaths a
+  // side inflicts on ITSELF — its own barrage, its own gas — never pay.
+  const killer = opposing(target.team)
+  if (sourceTeam === killer) {
+    const bounty = Math.round(bountyFor(s, target) * modsOf(ctx, killer).bounty)
+    addReq(ctx, killer, bounty)
+    if (killer === 'brit') {
       s.stats.kills++
-      const bounty = Math.round(e.bounty * ctx.mods.bounty)
-      s.req += bounty
       s.stats.reqEarned += bounty
-      ctx.events.emit('reqChanged', { req: s.req })
-      if (shooterUnitId >= 0) {
-        const u = s.units.find((u) => u.id === shooterUnitId)
-        if (u) creditKill(ctx, u)
-      }
     }
-  } else {
-    s.stats.losses++
+    if (shooterUnitId >= 0) {
+      const u = s.units.find((u) => u.id === shooterUnitId)
+      if (u) creditKill(ctx, u)
+    }
+  }
+
+  // His own side counts him among the fallen. Every crewed soldier has a name
+  // and a record; the loose enemy pool in classic wave-defence does not.
+  const hisUnit = s.units.find((u) => u.crew.includes(target))
+  if (hisUnit) {
+    if (target.team === 'brit') s.stats.losses++
     // Name the man for the memorial. His unit gives him his rank, his deeds,
     // and the tally of waves he saw through — a long-serving man is honoured
     // apart from the green drafts.
-    let rank = RANKS[0] as string
-    let kind = 'rifleman'
-    let deeds = 0
-    let wavesServed = 0
-    for (const u of s.units) {
-      if (u.crew.includes(target)) {
-        rank = RANKS[u.vet] ?? RANKS[0]
-        kind = u.kind
-        deeds = u.deeds
-        wavesServed = u.wavesServed
-        break
-      }
-    }
+    const rank = RANKS[hisUnit.vet] ?? RANKS[0]
+    const kind = hisUnit.kind
+    const deeds = hisUnit.deeds
+    const wavesServed = hisUnit.wavesServed
     // The casualty roster is SIM state (#41 item 3): headless runs, replays
     // and lockstep peers all record the same fallen, so the hospital-return
     // splice in endWave behaves identically everywhere. The epitaph is
     // presentation — the game layer decorates the record after the tick.
-    if (kind) {
-      s.casualties.push({
-        name: { first: target.name.first, last: target.name.last },
-        rank, kind: kind as import('../core/types').UnitKindId,
-        wave: s.wave, epitaph: '', deeds, wavesServed,
-      })
-    }
+    s.casualties.push({
+      name: { first: target.name.first, last: target.name.last },
+      rank, kind, side: target.team,
+      wave: s.wave, epitaph: '', deeds, wavesServed,
+    })
     ctx.events.emit('soldierDied', {
       name: `${target.name.first} ${target.name.last}`,
-      rank, kind, wave: s.wave, deeds, wavesServed,
+      rank, kind, wave: s.wave, deeds, wavesServed, side: target.team,
     })
   }
+}
+
+/**
+ * What a man is worth to the side that kills him. Loose enemy soldiers carry
+ * their own bounty; a crewed soldier is worth his share of what his position
+ * cost to raise, which keeps the two rosters paying out at the same rate.
+ */
+function bountyFor(s: SimState, target: Soldier): number {
+  const e = target as Partial<Enemy>
+  if (e.bounty !== undefined) return e.bounty
+  const u = s.units.find((x) => x.crew.includes(target))
+  if (!u) return 0
+  const def = UNIT_DEFS[u.kind]
+  return Math.round(def.cost * COMBAT.crewBountyFraction / Math.max(1, def.crew))
 }
 
 export function creditKill(ctx: Ctx, u: Unit): void {
@@ -283,7 +290,7 @@ export function creditKill(ctx: Ctx, u: Unit): void {
   if (lead) lead.kills++
   awardXp(ctx, u, XP_PER_KILL)
   // A kill made with cold steel while over the top is a gallantry citation.
-  if (ctx.s.orders.bayonetT > 0 &&
+  if (ordersOf(ctx.s, u.side).bayonetT > 0 &&
       (u.kind === 'rifleman' || u.kind === 'grenadier' || u.kind === 'officer')) {
     recordDeed(ctx, u, 'bayonet')
   }
@@ -307,13 +314,15 @@ export function damageVehicle(
     const y = ctx.terrain.heightAt(v.pos.x, v.pos.z)
     fx(ctx.s, { t: 'explosion', x: v.pos.x, y: y + 1.5, z: v.pos.z, radius: 5, big: true, dirt: false })
     snd(ctx.s, { name: 'explosion_big', x: v.pos.x, y, z: v.pos.z })
-    if (v.team === 'german') {
-      const def = v.kind === 'etank' ? 200 : 60
-      const bounty = Math.round(def * ctx.mods.bounty)
-      ctx.s.req += bounty
-      ctx.s.stats.reqEarned += bounty
-      ctx.s.stats.kills++
-      ctx.events.emit('reqChanged', { req: ctx.s.req })
+    const killer = opposing(v.team)
+    if (sourceTeam === killer) {
+      const def = v.kind === 'etank' ? 200 : v.kind === 'friendlytank' ? 200 : 60
+      const bounty = Math.round(def * modsOf(ctx, killer).bounty)
+      addReq(ctx, killer, bounty)
+      if (killer === 'brit') {
+        ctx.s.stats.reqEarned += bounty
+        ctx.s.stats.kills++
+      }
       if (shooterUnitId >= 0) {
         const u = ctx.s.units.find((u) => u.id === shooterUnitId)
         if (u) creditKill(ctx, u)
@@ -416,22 +425,17 @@ function blastDamage(damage: number, d: number, radius: number): number {
 /** Suppress the OPPOSING team near a point (team=null suppresses everyone). */
 export function suppressArea(ctx: Ctx, x: number, z: number, radius: number, amount: number, team: Team | null): void {
   const r2 = radius * radius
-  if (team !== 'german') {
-    for (const e of ctx.s.enemies) {
-      if (e.hp <= 0) continue
-      const d2 = dist2(e.pos.x, e.pos.z, x, z)
-      if (d2 < r2) e.suppression = Math.min(1, e.suppression + amount * (1 - d2 / r2))
-    }
+  const bump = (sol: Soldier) => {
+    if (sol.hp <= 0) return
+    const d2 = dist2(sol.pos.x, sol.pos.z, x, z)
+    if (d2 < r2) sol.suppression = Math.min(1, sol.suppression + amount * (1 - d2 / r2))
   }
-  if (team !== 'brit') {
-    for (const u of ctx.s.units) {
-      if (u.disbanded) continue
-      for (const c of u.crew) {
-        if (c.hp <= 0) continue
-        const d2 = dist2(c.pos.x, c.pos.z, x, z)
-        if (d2 < r2) c.suppression = Math.min(1, c.suppression + amount * (1 - d2 / r2))
-      }
-    }
+  if (team !== 'german') {
+    for (const e of ctx.s.enemies) bump(e)
+  }
+  for (const u of ctx.s.units) {
+    if (u.disbanded || u.side === team) continue
+    for (const c of u.crew) bump(c)
   }
 }
 
@@ -441,11 +445,10 @@ function* alliesNear(ctx: Ctx, team: Team, x: number, z: number, radius: number)
     for (const e of ctx.s.enemies) {
       if (e.hp > 0 && dist2(e.pos.x, e.pos.z, x, z) < r2) yield e
     }
-  } else {
-    for (const u of ctx.s.units) {
-      if (u.disbanded) continue
-      for (const c of u.crew) if (c.hp > 0 && dist2(c.pos.x, c.pos.z, x, z) < r2) yield c
-    }
+  }
+  for (const u of ctx.s.units) {
+    if (u.disbanded || u.side !== team) continue
+    for (const c of u.crew) if (c.hp > 0 && dist2(c.pos.x, c.pos.z, x, z) < r2) yield c
   }
 }
 

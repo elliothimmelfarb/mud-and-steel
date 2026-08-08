@@ -63,7 +63,7 @@ export function hashSim(s: SimState): number {
   h.f64(s.buildTimer)
   h.f64(s.req)
   h.f64(s.breach)
-  h.bool(s.masksOn)
+  h.bool(s.masksOn); h.bool(s.germanMasksOn)
   h.u32(s.possessedSoldierId >>> 0); h.u32(s.possessedUnitId >>> 0)
   h.f64(s.earlyCallBonus)
   h.f64(s.advance.brit); h.f64(s.advance.german)
@@ -78,22 +78,27 @@ export function hashSim(s: SimState): number {
   h.u32(s.planCursor); h.u32(s.planBarrageCursor)
   h.f64(s.waveStartTime)
 
-  // Orders.
-  const o = s.orders
-  h.f64(o.coverT); h.f64(o.rapidT); h.f64(o.bayonetT)
-  h.f64(o.cooldowns.takecover); h.f64(o.cooldowns.rapidfire); h.f64(o.cooldowns.bayonets)
-  h.f64(o.cooldowns.flare); h.f64(o.cooldowns.barrage); h.f64(o.cooldowns.marktank)
+  // Orders — both commanders'.
+  for (const o of [s.orders, s.germanOrders]) {
+    h.f64(o.coverT); h.f64(o.rapidT); h.f64(o.bayonetT)
+    h.f64(o.cooldowns.takecover); h.f64(o.cooldowns.rapidfire); h.f64(o.cooldowns.bayonets)
+    h.f64(o.cooldowns.flare); h.f64(o.cooldowns.barrage); h.f64(o.cooldowns.marktank)
+  }
 
   // Upgrades (sorted — Set iteration is insertion-ordered, which may differ
   // between a live run and a replay that bought in another order… it can't
   // actually differ under lockstep, but sorted costs nothing and is safe).
-  const ups = [...s.upgrades].sort()
-  for (const id of ups) h.str(id)
+  // Both stores, separated by a marker so ['a'] / ['a'] cannot hash the same
+  // as [] / ['a','a'].
+  for (const set of [s.upgrades, s.germanUpgrades]) {
+    h.u32(set.size)
+    for (const id of [...set].sort()) h.str(id)
+  }
 
   // Units & crews.
   h.u32(s.units.length)
   for (const u of s.units) {
-    h.u32(u.id); h.str(u.kind)
+    h.u32(u.id); h.str(u.kind); h.byte(u.side === 'brit' ? 0 : 1)
     h.f64(u.pos.x); h.f64(u.pos.z)
     h.f64(u.heat); h.bool(u.venting); h.f64(u.ammo)
     h.f64(u.xp); h.byte(u.vet); h.u32(u.deeds); h.u32(u.wavesServed)
@@ -201,7 +206,10 @@ export function hashSim(s: SimState): number {
   for (const b of s.barrages) {
     h.f64(b.x); h.f64(b.z); h.u32(b.shellsLeft); h.bool(b.gas); h.f64(b.t)
   }
-  if (s.creeping) { h.bool(true); h.f64(s.creeping.x); h.f64(s.creeping.z); h.f64(s.creeping.t); h.u32(s.creeping.volleys) } else h.bool(false)
+  h.u32(s.creepings.length)
+  for (const c of s.creepings) {
+    h.byte(c.side === 'brit' ? 0 : 1); h.f64(c.x); h.f64(c.z); h.f64(c.t); h.u32(c.volleys)
+  }
 
   // Stats & director memory (sorted keys — object insertion order is
   // deterministic under lockstep, but sorting is free insurance).

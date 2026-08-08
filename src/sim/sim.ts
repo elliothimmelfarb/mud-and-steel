@@ -50,6 +50,8 @@ export interface SimState {
   req: number
   breach: number            // 0..COMBAT.breachMax; 0 = the line is broken
   masksOn: boolean
+  /** The German commander's respirator order (Big Push). */
+  germanMasksOn: boolean
   /**
    * Soldier id the player is embodying in first person (-1 = none). The AI
    * must not move, pose or fire this man — the player does. SIM STATE (set
@@ -66,8 +68,16 @@ export interface SimState {
   possessedUnitId: number
   /** Requisition banked by calling the wave early; paid out at wave end. */
   earlyCallBonus: number
-  /** Big Push: the German commander's purse (the AI spends it from M4). */
+  /** Big Push: the German commander's purse — a human's or the AI's. */
   germanReq: number
+  /**
+   * The German commander's stores and standing orders. Symmetric with
+   * `upgrades`/`orders` above, which are the British commander's: in the Big
+   * Push each side buys its own doctrine and runs its own cooldowns, so
+   * neither can spend or trip the other's. Unused in classic mode.
+   */
+  germanUpgrades: Set<string>
+  germanOrders: ActiveOrders
   /** Big Push battalion strength per side — a loss condition AND the clock. */
   strength: { brit: number; german: number }
   /** Big Push match setup: length id and the whistle (sim seconds; 0 = untimed). */
@@ -113,10 +123,11 @@ export interface SimState {
   planBarrageCursor: number
   waveStartTime: number
 
-  /** Active enemy barrage shoots + the player's creeping barrage (was module
-   *  state in barrage.ts — moved here so saves/twin-sims see it). */
+  /** Active off-map barrage shoots + each commander's creeping barrage (was
+   *  module state in barrage.ts — moved here so saves/twin-sims see it).
+   *  At most one curtain per side is ever in `creepings`. */
   barrages: ActiveBarrage[]
-  creeping: CreepingBarrage | null
+  creepings: CreepingBarrage[]
   /** Gas-gong pacing (was module state in gas.ts). */
   gasAlarmCooldown: number
   /** Terrain-wetness push cadence (wetness changes mud → sim-affecting). */
@@ -135,7 +146,11 @@ export interface Ctx {
   flowVeh: FlowField
   events: EventBus
   rand: Rand
+  /** The British commander's upgrade-derived modifiers. Reach for it through
+   *  `modsOf(ctx, side)` in anything that can run for either side. */
   mods: Mods
+  /** The German commander's — his own stores, his own multipliers. */
+  modsGerman: Mods
   /** Set true by anything that invalidates pathing; game rebuilds flow on a cadence. */
   flowDirty: boolean
   /** Difficulty knobs resolved at run start. */
@@ -169,6 +184,7 @@ export function makeDirector(): DirectorMemory {
   return { dmgByCategory: {}, lossesLastWave: 0, playerLossesLastWave: 0, wireDensity: 0 }
 }
 
+/** A side's standing orders — a fresh, quiet set. */
 export function makeOrders(): ActiveOrders {
   return {
     coverT: 0, rapidT: 0, bayonetT: 0,
@@ -202,14 +218,66 @@ export function pushFpsFeedback(ctx: Ctx, e: FpsFeedbackEvent): void {
   if (ctx.fpsFeedback.length < 16) ctx.fpsFeedback.push(e)
 }
 
-/** All living soldiers of a team (units' crews or enemies). */
+/**
+ * All living soldiers of a team. Both pools are searched: a team's men are its
+ * units' crews AND (for the Germans in classic wave-defence) the loose enemy
+ * soldiers. In the Big Push the enemy pool is empty and both sides are units.
+ */
 export function* livingSoldiers(s: SimState, team: Team): Generator<import('../core/types').Soldier> {
-  if (team === 'brit') {
-    for (const u of s.units) {
-      if (u.disbanded) continue
-      for (const c of u.crew) if (c.hp > 0) yield c
-    }
-  } else {
+  for (const u of s.units) {
+    if (u.disbanded || u.side !== team) continue
+    for (const c of u.crew) if (c.hp > 0) yield c
+  }
+  if (team === 'german') {
     for (const e of s.enemies) if (e.hp > 0) yield e
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-side lookups. Both commanders keep their own purse, stores and standing
+// orders; every sim system that can run for either side reads through these
+// rather than reaching for the British field directly.
+// ---------------------------------------------------------------------------
+
+export function reqOf(s: SimState, side: Team): number {
+  return side === 'brit' ? s.req : s.germanReq
+}
+
+/** Move `delta` requisition into (or out of) a side's purse. */
+export function addReq(ctx: Ctx, side: Team, delta: number): void {
+  const s = ctx.s
+  if (side === 'brit') {
+    s.req += delta
+    ctx.events.emit('reqChanged', { req: s.req })
+  } else {
+    s.germanReq += delta
+    ctx.events.emit('reqChanged', { req: s.germanReq, side })
+  }
+}
+
+export function upgradesOf(s: SimState, side: Team): Set<string> {
+  return side === 'brit' ? s.upgrades : s.germanUpgrades
+}
+
+export function ordersOf(s: SimState, side: Team): ActiveOrders {
+  return side === 'brit' ? s.orders : s.germanOrders
+}
+
+export function modsOf(ctx: Ctx, side: Team): Mods {
+  return side === 'brit' ? ctx.mods : ctx.modsGerman
+}
+
+/** The side a soldier is fighting against. */
+export function opposing(side: Team): Team {
+  return side === 'brit' ? 'german' : 'brit'
+}
+
+/**
+ * Every living soldier hostile to `side`, wherever he is kept — the opposing
+ * commander's unit crews, plus the loose enemy pool when the Germans are the
+ * hostiles. This is THE faction question in targeting, melee and flame, and
+ * having one answer is what keeps both sides fighting the same war.
+ */
+export function* hostileSoldiers(s: SimState, side: Team): Generator<import('../core/types').Soldier> {
+  yield* livingSoldiers(s, opposing(side))
 }
