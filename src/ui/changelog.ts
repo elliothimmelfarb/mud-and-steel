@@ -25,6 +25,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.0',
+    date: '2026-08-08',
+    title: 'Two trenches, one game',
+    items: [
+      'Fixed: in multiplayer the second player was very nearly a spectator. No build bar, no orders, no stores, no way to send anyone anywhere — four hotkeys that despatched a garrison squad, and nothing else. Both commanders now play the same game.',
+      'The German commander posts men from the same roster on his own fire step, marches them up his own communication trenches, wires his own approaches, emplaces his own guns, buys his own doctrine and sends his own sections over the top.',
+      'Two of everything that used to be one: each side has its own requisition, its own divisional stores, its own standing orders and cooldowns, its own respirators and its own creeping barrage. Take Cover no longer puts BOTH armies\' heads down.',
+      'His men have German names, are mourned on his own roll of honour, and wear feldgrau under a stahlhelm. The roster is the same roster — no statistic differs — but the cards carry his own words and his own money.',
+      'Despatches are addressed: promotions, citations, gas alarms, barrage warnings and stores announcements go to the commander they concern instead of both.',
+      'The AI commander plays the game you are playing — same roster, same purse, same orders, every command through the same door a human uses. Singleplayer can now take either chair.',
+      'A commander who drops mid-match is replaced by his staff whichever side he was on. Losing the British player used to end the battle in an instant walkover.',
+    ],
+  },
+  {
     version: '1.3.0',
     date: '2026-07-27',
     title: 'Over the top — an assault that arrives',

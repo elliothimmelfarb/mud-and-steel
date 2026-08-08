@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Despatch — Two Trenches, One Game &middot; 8 Aug (2026)</title>
+<style>
+  :root{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+    --bad:#8c2f1e; --good:#4a6b33;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+      --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+      --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+      --bad:#d06a4f; --good:#8fb36a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#1c1913; --paper-2:#242018; --ink:#e8dfc8; --ink-soft:#c4b696;
+    --khaki:#a99f77; --brass:#c9a45a; --blood:#d06a4f; --steel:#9fb0bf;
+    --stamp:#d05a3e; --card:#26221a; --rule:#544a33; --wire:#5fa8a2;
+    --bad:#d06a4f; --good:#8fb36a;
+  }
+  :root[data-theme="light"]{
+    --paper:#efe6d0; --paper-2:#e6dabf; --ink:#2a2418; --ink-soft:#4a3f2c;
+    --khaki:#6b6446; --brass:#8a6d2f; --blood:#7a2e1f; --steel:#3d4650;
+    --stamp:#8c2f1e; --card:#f4ecd9; --rule:#b7a87f; --wire:#2f6e6a;
+    --bad:#8c2f1e; --good:#4a6b33;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper);
+    background-image:radial-gradient(ellipse at 50% 0%, var(--paper-2), var(--paper) 70%);
+    color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;
+    line-height:1.55; padding:2.5rem 1.25rem 4rem;
+  }
+  .sheet{max-width:940px;margin:0 auto}
+  header{text-align:center;border-bottom:3px double var(--rule);padding-bottom:1.5rem;margin-bottom:2rem;position:relative}
+  .crest{font-size:.72rem;letter-spacing:.5em;text-transform:uppercase;color:var(--khaki)}
+  h1{font-size:2.2rem;letter-spacing:.05em;margin:.35rem 0 .2rem;font-variant:small-caps}
+  .sub{font-style:italic;color:var(--ink-soft)}
+  .stamp{
+    position:absolute;right:0;top:.2rem;transform:rotate(7deg);
+    border:3px solid var(--stamp);color:var(--stamp);border-radius:6px;
+    padding:.15rem .6rem;font-size:.7rem;letter-spacing:.35em;text-transform:uppercase;font-weight:bold;opacity:.85;
+  }
+  .lede{max-width:68ch;margin:0 auto 2.2rem;text-align:center;color:var(--ink-soft);font-size:1.02rem}
+  .lede strong{color:var(--ink)}
+  .tally{display:flex;flex-wrap:wrap;gap:.75rem;justify-content:center;margin:0 0 2.4rem}
+  .tally div{background:var(--card);border:1px solid var(--rule);border-radius:4px;padding:.55rem 1rem;text-align:center;min-width:8.5rem}
+  .tally b{display:block;font-size:1.45rem;color:var(--brass)}
+  .tally span{font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--khaki)}
+  section.item{
+    background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--brass);
+    border-radius:4px;padding:1.35rem 1.6rem;margin-bottom:1.4rem;
+    box-shadow:0 1px 0 rgba(0,0,0,.12);
+  }
+  section.item.enemy{border-left-color:var(--blood)}
+  section.item.works{border-left-color:var(--steel)}
+  section.item.live{border-left-color:var(--wire)}
+  .kicker{font-size:.66rem;letter-spacing:.32em;text-transform:uppercase;color:var(--khaki);margin-bottom:.25rem}
+  h2{font-size:1.26rem;font-variant:small-caps;letter-spacing:.04em;margin-bottom:.55rem}
+  h3{font-size:1rem;font-variant:small-caps;letter-spacing:.05em;margin:1.1rem 0 .4rem;color:var(--ink)}
+  .item p{margin:.5rem 0;color:var(--ink-soft)}
+  .item p strong{color:var(--ink)}
+  ul{margin:.55rem 0 .3rem 1.2rem}
+  li{margin-bottom:.34rem;color:var(--ink-soft)}
+  li strong{color:var(--ink)}
+  li::marker{color:var(--brass)}
+  code{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:.85em;background:rgba(138,109,47,.13);padding:.08em .35em;border-radius:3px;color:var(--ink)}
+  pre{background:rgba(0,0,0,.06);border:1px solid var(--rule);border-radius:4px;padding:.8rem 1rem;overflow-x:auto;margin:.7rem 0}
+  pre code{background:none;padding:0;font-size:.82rem;line-height:1.5}
+  .scroll{overflow-x:auto;margin:.8rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.86rem;min-width:30rem}
+  th,td{padding:.42rem .7rem;text-align:left;border-bottom:1px solid var(--rule)}
+  th{font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--khaki);font-weight:normal}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.frozen td{color:var(--bad)}
+  tr.frozen td:first-child{font-weight:bold}
+  .win{color:var(--good);font-weight:bold}
+  .lose{color:var(--bad);font-weight:bold}
+  /* the crossing chart */
+  .chart{margin:1rem 0 .4rem}
+  .chart svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.72rem;color:var(--khaki);letter-spacing:.08em;text-transform:uppercase;margin-top:.5rem}
+  .legend i{display:inline-block;width:1.6rem;height:.2rem;vertical-align:middle;margin-right:.35rem;border-radius:2px}
+  .pull{border-left:3px solid var(--brass);padding:.2rem 0 .2rem 1rem;margin:.9rem 0;font-style:italic;color:var(--ink)}
+  footer{text-align:center;margin-top:2.5rem;padding-top:1.4rem;border-top:1px solid var(--rule);font-size:.72rem;letter-spacing:.2em;text-transform:uppercase;color:var(--khaki)}
+  footer a{color:var(--brass)}
+
+  .sides{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1rem 0}
+  @media (max-width:640px){.sides{grid-template-columns:1fr}}
+  .sides > div{background:rgba(0,0,0,.05);border:1px solid var(--rule);border-radius:4px;padding:.85rem 1rem}
+  .sides h4{font-size:.66rem;letter-spacing:.28em;text-transform:uppercase;color:var(--khaki);margin-bottom:.5rem;font-weight:normal}
+  .sides ul{margin:0 0 0 1.1rem}
+  .sides li{font-size:.88rem}
+  .before{color:var(--bad)}
+  .after{color:var(--good)}
+</style>
+
+</head>
+<body>
+<div class="sheet">
+<header>
+  <div class="stamp">Closed</div>
+  <div class="crest">General Staff &middot; Operations Branch</div>
+  <h1>Two Trenches, One Game</h1>
+  <div class="sub">Player two was a spectator. What it took to give him the same war &middot; 8 August (2026)</div>
+</header>
+
+<p class="lede">
+  The first live two-player match found the Big Push was only half a game. The host played
+  <em>Mud &amp; Steel</em>; the joiner watched it. He had <strong>no build bar, no orders, no stores,
+  and no way to send a man anywhere</strong> &mdash; four hotkeys that despatched a garrison squad, and
+  nothing else. This is why, and what symmetry actually cost.
+</p>
+
+<div class="tally">
+  <div><b>1</b><span>Verb player two had</span></div>
+  <div><b>18</b><span>He has now</span></div>
+  <div><b>0</b><span>Hash divergences</span></div>
+  <div><b>~1,400</b><span>Lines touched</span></div>
+</div>
+
+<section class="item enemy">
+  <div class="kicker">The report</div>
+  <h2>&ldquo;It was almost like they were just a spectator&rdquo;</h2>
+  <p>
+    Exactly right, and the code said so out loud. Every act of command in the game layer began
+    with the same line:
+  </p>
+  <pre><code>confirmPlace()  { if (this.mySide !== 'brit') return false }
+sellSelected()  { if (this.mySide !== 'brit') return }
+issueOrder(id)  { if (this.mySide !== 'brit') return }
+buyUpgrade(id)  { if (this.mySide !== 'brit') return }</code></pre>
+  <p>The HUD then hid what was left, and the sim refused what got through anyway:</p>
+  <pre><code>if (this.bottomEl) this.bottomEl.style.display = g.mySide === 'german' ? 'none' : ''
+issueAssault(ctx, side, ...) { if (side !== 'brit') return }</code></pre>
+  <p class="pull">
+    None of this was an oversight to be patched. It was the honest surface of a much deeper
+    assumption, and patching the surface would only have hidden it.
+  </p>
+</section>
+
+<section class="item enemy">
+  <div class="kicker">The cause</div>
+  <h2>The German side was never a player. It was the wave.</h2>
+  <p>
+    <em>Mud &amp; Steel</em> began as a wave-defence game, and its type system still described one.
+    There were two entirely different kinds of soldier in it:
+  </p>
+  <div class="sides">
+    <div>
+      <h4>Unit &mdash; implicitly British</h4>
+      <ul>
+        <li>A named, crewed position with a post</li>
+        <li>Veterancy, deeds, letters home, a grave</li>
+        <li>Placeable, sellable, embodiable in first person</li>
+        <li>Goes over the top, consolidates, is recalled</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Enemy &mdash; implicitly German</h4>
+      <ul>
+        <li>A loose soldier in an AI squad</li>
+        <li>A bounty and a behaviour state</li>
+        <li>Spawned in bulk by a director</li>
+        <li>No post, no name to speak of, no player</li>
+      </ul>
+    </div>
+  </div>
+  <p>
+    <code>Unit</code> had <strong>no side field at all</strong> &mdash; it did not need one, because there had
+    only ever been one commander. And with one commander came one of everything else:
+    one purse (<code>s.req</code>), one set of stores (<code>s.upgrades</code>), one set of standing
+    orders (<code>s.orders</code>), one <code>ctx.mods</code>, one creeping barrage.
+  </p>
+  <p>
+    So player two's German seat could only speak the <em>director's</em> vocabulary &mdash;
+    <code>spawnsquad</code> and <code>gbarrage</code> &mdash; because that was the only language the German
+    half of the sim understood. The Big Push spec had called for
+    <strong>&ldquo;symmetric rosters in v1&rdquo;</strong>. That was never actually built.
+  </p>
+</section>
+
+<section class="item works">
+  <div class="kicker">The reframe</div>
+  <h2>There is only one kind of soldier on this battlefield</h2>
+  <p>
+    The tempting fix was to build the German commander a parallel interface over the enemy pool:
+    a German build bar that spawns squads, German orders that map onto director calls. It would
+    have been faster. It would also have been two implementations of one idea, drifting apart
+    from the first commit, and player two would still not have had named men, veterans,
+    consolidation or a rifle he could pick up himself.
+  </p>
+  <p class="pull">
+    <code>Unit</code>-with-crew and <code>Enemy</code>-in-squad are two encodings of the same thing.
+    In the Big Push, both sides should be the first one. <code>Enemy</code> stays exactly as it is
+    for classic wave-defence, where a faceless tide is the whole fantasy.
+  </p>
+  <p>
+    So <code>Unit</code> got a <code>side</code>, its crew got tagged to it, and every faction question in
+    the sim was rewritten to <em>ask</em> rather than assume. In the Big Push, <code>s.enemies</code> is
+    now empty: both armies are crewed units, fighting each other through one code path.
+  </p>
+</section>
+
+<section class="item">
+  <div class="kicker">What moved</div>
+  <h2>The seams that had to be cut</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Was</th><th>Is</th><th>Why it mattered</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>s.enemies</code> loops</td>
+        <td><code>hostiles(ctx, side)</code></td>
+        <td>Targeting, melee, flame, searchlights and flare posts all hunted &ldquo;the enemy array&rdquo;. A German Vickers had nothing to shoot at.</td>
+      </tr>
+      <tr>
+        <td><code>s.req</code>, <code>s.upgrades</code>, <code>s.orders</code>, <code>ctx.mods</code></td>
+        <td><code>reqOf / upgradesOf / ordersOf / modsOf(side)</code></td>
+        <td>Player two was reading player one's bank balance, and Take Cover put <em>both</em> armies' heads down.</td>
+      </tr>
+      <tr>
+        <td><code>projectToFireStep(...)</code></td>
+        <td><code>projectToFireStep(..., side)</code></td>
+        <td>Placement snapped to any un-captured bay. Ownership, not home ground, is the rule &mdash; so a stretch you take is a stretch you can garrison.</td>
+      </tr>
+      <tr>
+        <td><code>z &gt; zMin &amp;&amp; z &lt; zMax</code></td>
+        <td><code>z * sign</code>, everywhere</td>
+        <td>Every depth test &mdash; gun pads, wire, flares, the rally line a broken crew runs for &mdash; was written from the south. Read in the placing side's own frame, the German rules <em>are</em> the British rules.</td>
+      </tr>
+      <tr>
+        <td><code>s.creeping</code></td>
+        <td><code>s.creepings[]</code>, one per side</td>
+        <td>One barrage slot for two artilleries, walking one direction only.</td>
+      </tr>
+      <tr>
+        <td><code>emit('toast', {...})</code></td>
+        <td><code>emit('toast', {..., side})</code></td>
+        <td>Both peers run the same sim and raise the same events. Unaddressed, each commander read the other's mail &mdash; and his opponent's stores announcements.</td>
+      </tr>
+      <tr>
+        <td><code>runner.submit('brit', cmds)</code></td>
+        <td><code>runner.submit(this.mySide, cmds)</code></td>
+        <td>The last one found, and the sharpest: even with everything above fixed, player two's orders were stamped with player one's name and dropped on arrival.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="item live">
+  <div class="kicker">The other beneficiary</div>
+  <h2>The AI commander now plays the game you are playing</h2>
+  <p>
+    The German AI could not stay on the old vocabulary once the German seat left it &mdash; and that
+    turned out to be the point rather than the cost. It buys from the same roster, posts men along
+    its own fire step, wires its own approaches, buys its own doctrine, and sends its own sections
+    over the top. <strong>Every command it issues goes through the same <code>applyCmd</code> a human's
+    does</strong>, so anything it can do you can do, and anything refused to you is refused to it.
+  </p>
+  <ul>
+    <li><strong>Either chair is playable.</strong> <code>?play=bigpush&amp;side=german</code> seats you in the
+      north trench and the AI in the south. It is the same brain; it never knew which side it was on.</li>
+    <li><strong>A disconnect no longer ends the match.</strong> Losing the British player used to be an
+      instant walkover, because no AI could hold that seat. Now either side gets picked up.</li>
+    <li>The three personas survive intact &mdash; Methodical fortifies and bites, Stosstrupp hoards for
+      a big push behind a creeping barrage, Opportunist hits the thinnest stretch.</li>
+  </ul>
+</section>
+
+<section class="item">
+  <div class="kicker">Dressing</div>
+  <h2>The same roster, in the other army's words</h2>
+  <p>
+    Symmetric rosters were a deliberate v1 decision and they stay that way: not one statistic
+    differs between the sides. But a commander should not be buying Lewis guns for the Kaiser, so
+    the German seat's cards carry his own labels and his own money.
+  </p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Card</th><th>British seat</th><th>German seat</th></tr></thead>
+    <tbody>
+      <tr><td>MG</td><td>Vickers MG &mdash; &pound;130</td><td>Maxim MG 08 &mdash; 130 Rm</td></tr>
+      <tr><td>18</td><td>18-Pounder &mdash; &pound;220</td><td>7.7 cm Feldkanone &mdash; 220 Rm</td></tr>
+      <tr><td>SP</td><td>Sapper &mdash; &pound;65</td><td>Pionier &mdash; 65 Rm</td></tr>
+      <tr><td>F1</td><td>Barbed Wire &mdash; &pound;15</td><td>Drahtverhau &mdash; 15 Rm</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    His men are named from a German name pool, buried on his own roll of honour, and rendered in
+    feldgrau under a stahlhelm &mdash; the instanced renderer was already driven by
+    <code>pose.team</code>, so dressing them correctly was one line once the crews knew who they were.
+  </p>
+</section>
+
+<section class="item works">
+  <div class="kicker">Proof</div>
+  <h2>Determinism first, because lockstep forgives nothing</h2>
+  <p>
+    Both peers run the full sim and compare 32-bit state hashes every 30 ticks. A side-aware unit,
+    two purses, two upgrade sets, two order sets and two barrages are all new hashed state; any one
+    of them read from the wrong side on one machine and not the other is an instant desync.
+  </p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Probe</th><th>What it exercises</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Twin sim &mdash; Big Push</td>
+        <td>Two headless sims, one seed, symmetric AI commander; then the full envelope log replayed into a third</td>
+        <td><span class="win">Clean</span> &mdash; 90 hash checks, replay exact</td>
+      </tr>
+      <tr>
+        <td>Twin sim &mdash; classic</td>
+        <td>Regression: the wave-defence campaign, untouched by any of this</td>
+        <td><span class="win">Clean</span> &mdash; 54,549 ticks, 1,818 checks, wave 9</td>
+      </tr>
+      <tr>
+        <td>Lockstep, jittery loopback</td>
+        <td>Two real sessions, T+6 scheduling, a German human issuing <code>buy</code> and <code>assault</code>; client killed mid-match, AI adopts, fresh client rejoins from the log</td>
+        <td><span class="win">Clean</span> &mdash; identical hashes at tick 6,003, 0 desyncs</td>
+      </tr>
+      <tr>
+        <td>Nine twin runs, Big Push</td>
+        <td>All three personas &times; three seeds, 420 s each, twin + replay on every one</td>
+        <td><span class="win">Clean</span> &mdash; 0 divergences, 0 stalls</td>
+      </tr>
+      <tr>
+        <td>Balance lab, 30 matches</td>
+        <td>Raid / Battle / Grand &times; all three personas, every match run to its verdict</td>
+        <td><span class="win">0 stalls</span> &mdash; all 30 terminate correctly</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <h3>And in two real browser tabs</h3>
+  <p>
+    The joiner &mdash; German, player two, the seat that started this &mdash; placed a rifleman on his own
+    fire step, issued Take Cover, and bought Deep Revetting. All three crossed the wire and applied
+    on the host: his purse fell 450&nbsp;&rarr;&nbsp;320&nbsp;Rm on <em>both</em> machines, his upgrade
+    landed in <code>germanUpgrades</code> and nowhere else, his Take Cover ran <em>his</em> clock while
+    the British one stayed at zero, and the man who marched up was called Ulrich Oswald.
+  </p>
+</section>
+
+<section class="item">
+  <div class="kicker">Left open</div>
+  <h2>Two things, honestly</h2>
+  <ul>
+    <li><strong>Balance is now a live question, and the lab says so.</strong> Across those 30 matches
+      the scripted British probe commander lost 28, drew 1, won 1 &mdash; on near-level strength
+      (91&ndash;94 against 95&ndash;99), so it is losing <em>ground</em>, not men. That is very
+      probably the probe rather than the sim: it is a caretaker written for the old surface, capping
+      at ten riflemen, banking the requisition it never spends, buying no doctrine, emplacing no
+      machine guns and attacking once every ninety seconds. The German seat has stopped being a
+      spawn table and become an opponent, and the old stand-in cannot answer it. Still: the economy
+      is symmetric by construction and has never been played at genuinely even odds by two people.
+      That is the next thing to find out, and it needs humans, not probes.</li>
+    <li><strong>Embodiment in multiplayer is still off</strong>, for both sides equally. The command spine
+      carries first-person now, so it is a playtest of the six-tick delay away rather than an
+      architectural gap &mdash; and when it opens, it opens for player two on the same day.</li>
+  </ul>
+</section>
+
+<footer>
+  Issue #67 &middot; Merged
+</footer>
+
+</div>
+</body>
+</html>
