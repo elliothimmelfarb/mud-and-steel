@@ -8,6 +8,8 @@ A fully procedural WWI trench wave-defence game that runs in the browser — com
 
 **Every pixel and every sound is generated in code. No image, model, or audio file ships with the game.**
 
+### ▶ [Play it now](https://mud-and-steel-kappa.vercel.app) — in the browser, no install
+
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
 ![three.js](https://img.shields.io/badge/three.js-r172-000000?logo=three.js&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)
