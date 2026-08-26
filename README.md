@@ -17,6 +17,8 @@ A fully procedural WWI trench wave-defence game that runs in the browser — com
 ![Zero assets](https://img.shields.io/badge/assets-0_files-6b6446)
 ![Bundle](https://img.shields.io/badge/bundle-~255_KB_gzip-2a2418)
 
+<img src="docs/media/screenshot-fps.jpg" alt="First person as a Lewis gunner: the drum-fed gun over the wire, enemy infantry crossing no-man's-land" width="49%"> <img src="docs/media/screenshot-commander.jpg" alt="Commander view: the zigzag front and support trenches, the company roster and field works along the bottom" width="49%">
+
 </div>
 
 ---
