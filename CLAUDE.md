@@ -1,5 +1,7 @@
 # MUD & STEEL — project instructions
 
+See [AGENTS.md](AGENTS.md) for the project map, commands, and rules of the road. This file adds house rules specific to Claude Code sessions.
+
 ## Dev servers: always clean up after yourself
 
 We run many sessions in parallel in this repo, each spinning up its own Vite dev server. Orphaned servers pile up, hold ports, and burn CPU.
